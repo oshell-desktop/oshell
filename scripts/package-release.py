@@ -39,6 +39,14 @@ def run(args, *, log=None, env=None, cwd=ROOT):
 def output(args):
     return subprocess.check_output(list(map(str,args)),text=True).strip()
 
+def core_check_command(binaries, native):
+    if native in binaries:
+        return [binaries[native]/'OShellCoreChecks']
+    if native == 'arm64' and 'x86_64' in binaries:
+        # Validate Intel-only targets on Apple Silicon without skipping their checks.
+        return ['/usr/bin/arch', '-x86_64', binaries['x86_64']/'OShellCoreChecks']
+    raise RuntimeError('Core checks require a native target or x86_64 via Rosetta on Apple Silicon')
+
 def build_swift(flavor, arch, minimum):
     base = ROOT / ('work/build-legacy' if flavor == 'legacy' else f'work/build-compat-{arch}' if flavor == 'compat' else f'work/build-modern-{arch}')
     if INCLUDE_TESTS: base = ROOT / f'work/build-test-{flavor}-{arch}'
@@ -206,9 +214,7 @@ def main():
         else:
             binaries={a:build_swift(flavor,a,minimum) for a in arches}
             if args.test_core:
-                native=platform.machine()
-                if native not in binaries: raise SystemExit('Core checks require a runner matching one of the target architectures')
-                run([binaries[native]/'OShellCoreChecks'],log=f'package-{flavor}-core.log')
+                run(core_check_command(binaries, platform.machine()),log=f'package-{flavor}-core.log')
             helpers={a:build_lrzsz(a,minimum) for a in arches}
             app=assemble(flavor,arches,minimum,binaries,helpers)
         print('Built application:',app,flush=True)

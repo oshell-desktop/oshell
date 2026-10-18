@@ -53,6 +53,7 @@ jobs:
           python3 scripts/test-ci-release.py
           python3 scripts/test-development-tools.py
           python3 scripts/test-code-signing.py
+          python3 scripts/test-macbook-release.py
       - name: Resolve version and prepare immutable release tag
         id: meta
         env:
@@ -74,23 +75,20 @@ jobs:
   build:
     needs: metadata
     name: DMG / ${{ matrix.flavor }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    runs-on: [self-hosted, macOS, ARM64, self-macbook]
+    timeout-minutes: 90
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - flavor: legacy
-            runner: macos-15-intel
           - flavor: compat
-            runner: macos-15-intel
           - flavor: arm64
-            runner: macos-15
           - flavor: intel
-            runner: macos-15-intel
     env:
-      # Swift 6 / macOS SDK 15.5; keeps the legacy Swift runtime available.
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      # Optional per-runner override; otherwise use the selected local toolchain.
+      OSHELL_DEVELOPER_DIR: ${{ vars.OSHELL_DEVELOPER_DIR }}
       RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
       RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
       FLAVOR: ${{ matrix.flavor }}
@@ -104,10 +102,7 @@ jobs:
           persist-credentials: false
       - name: Check toolchain
         run: |
-          test -d "$DEVELOPER_DIR"
-          xcodebuild -version
-          swift --version
-          uname -m
+          python3 scripts/check-macbook-toolchain.py --flavor "$FLAVOR" --github-env "$GITHUB_ENV"
       - name: Validate fixed code signing identity
         env:
           OSHELL_CODESIGN_P12: ${{ secrets.OSHELL_CODESIGN_P12 }}
