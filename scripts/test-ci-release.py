@@ -43,11 +43,27 @@ class ReleaseTests(unittest.TestCase):
                 self.assertIn('runs-on: ubuntu-24.04', job)
                 self.assertNotIn('container:', job)
                 self.assertIn('persist-credentials: false', job)
-                for secret in ['OSHELL_CODESIGN_P12', 'OSHELL_CODESIGN_PASSWORD', 'OSHELL_UPDATE_SIGNING_KEY']:
+                for secret in ['OSHELL_CODESIGN_P12', 'OSHELL_CODESIGN_PASSWORD']:
                     self.assertNotIn(secret, job)
+                if name != 'release': self.assertNotIn('OSHELL_UPDATE_SIGNING_KEY', job)
         for workflow in [release, pages]:
             self.assertNotIn('self-hosted', workflow)
             self.assertIn('defaults:\n  run:\n    shell: bash', workflow)
+
+    def test_compatibility_secrets_are_scoped_before_publication(self):
+        _, jobs = self.workflow_jobs('release.yml')
+        release = jobs['release']
+        before, signing = release.split('      - name: Prepare Intel filename alias and signed compatibility metadata', 1)
+        self.assertNotIn('scripts/ci-release.py publish', before)
+        self.assertIn('scripts/ci-release.py publish', signing)
+        self.assertIn('--release-output dist/github-release', signing)
+        self.assertNotIn('OSHELL_UPDATE_SIGNING_KEY', before)
+        self.assertIn("if: github.repository == 'oshell-desktop/oshell'", signing)
+        signing, deploy = signing.split("      - name: Update the original repository's Pages entry", 1)
+        self.assertIn('OSHELL_UPDATE_SIGNING_KEY:', signing)
+        self.assertNotIn('OSHELL_LEGACY_PAGES_DEPLOY_KEY', signing)
+        self.assertIn('OSHELL_LEGACY_PAGES_DEPLOY_KEY:', deploy)
+        self.assertNotIn('OSHELL_UPDATE_SIGNING_KEY', deploy)
 
     def test_hosted_macos_builds_are_parallel_and_cached(self):
         _, jobs = self.workflow_jobs('release.yml')
@@ -407,6 +423,30 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(CI, 'gh', self.fake_gh(calls, incomplete=True)), self.assertRaises(ValueError):
             CI.publish(META, 'owner/repo', self.output)
         self.assertFalse(any('--draft=false' in call for call in calls))
+
+    def add_compatibility_alias(self):
+        source = CI.artifact_name(META['version'], 'legacy')
+        name = f"OShell-{META['version']}-macOS13-x86_64.dmg"
+        (self.output/name).write_bytes((self.output/source).read_bytes())
+        path = self.output/'release-manifest.json'; manifest = json.loads(path.read_text())
+        manifest['compatibilityAliases'] = [dict(file=name,source=source,sha256=CI.sha256(self.output/source),size=(self.output/source).stat().st_size)]
+        path.write_text(json.dumps(manifest))
+        files = sorted(p for p in self.output.iterdir() if p.name not in ('SHA256SUMS.txt','RELEASE_NOTES.md'))
+        (self.output/'SHA256SUMS.txt').write_text(''.join(CI.sha256(p)+'  '+p.name+'\n' for p in files))
+        return self.output/name
+
+    def test_compatibility_alias_uploaded_before_publication(self):
+        self.collect(); alias = self.add_compatibility_alias(); calls = []
+        with patch.object(CI, 'gh', self.fake_gh(calls)): CI.publish(META,'owner/repo',self.output)
+        upload = next(call for call in calls if call[:2] == ('release','upload'))
+        self.assertIn(str(alias),upload)
+        self.assertIn('--draft=false',calls[-1])
+
+    def test_compatibility_alias_cannot_substitute_other_bytes(self):
+        self.collect(); alias = self.add_compatibility_alias(); alias.write_bytes(b'different installer')
+        with patch.object(CI,'gh') as network, self.assertRaises(ValueError):
+            CI.publish(META,'owner/repo',self.output)
+        network.assert_not_called()
 
     def test_published_release_is_immutable(self):
         self.collect(); calls = []

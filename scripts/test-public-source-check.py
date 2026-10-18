@@ -3,6 +3,7 @@
 # Copyright (c) 2026 OShell contributors
 """Exercise index/history privacy checks using synthetic, disposable Git content."""
 import argparse,importlib.util,pathlib,subprocess,tempfile
+from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parent.parent
 spec=importlib.util.spec_from_file_location('audit',ROOT/'scripts/check-public-source.py');audit=importlib.util.module_from_spec(spec);spec.loader.exec_module(audit)
 with tempfile.TemporaryDirectory(prefix='oshell-public-check-') as folder:
@@ -35,3 +36,15 @@ with tempfile.TemporaryDirectory(prefix='oshell-public-check-') as folder:
  (root/'safe.txt').write_text('FIXTURE-PERSON');git('add','safe.txt');assert not audit.inspect(args)['passed'];git('rm','-f','safe.txt')
  (root/'fixture-person.txt').write_text('public fixture');git('add','fixture-person.txt');assert not audit.inspect(args)['passed'];git('rm','-f','fixture-person.txt')
 print('PASS: clean index, excluded file, personal path, historical leak, token, unsafe/safe symlinks, binary build path, external exports, Windows/UTF-16 paths, commit messages and private identifiers')
+
+# Allow only the public update identifiers; never a bare username, home path,
+# unrelated repository, personal filename or caller-supplied private pattern.
+owner=audit.PUBLIC_UPDATE_REPOSITORIES[0].split(b'/')[0]
+with patch.object(audit.pathlib.Path,'home',return_value=pathlib.Path('/Users')/owner.decode()):
+ for data in [b'`'+audit.PUBLIC_UPDATE_REPOSITORIES[0]+b'`',b"'"+audit.PUBLIC_UPDATE_REPOSITORIES[1]+b"'",audit.PUBLIC_UPDATE_URLS[-1]+b'/updates/latest.json']:
+  assert not audit.audit('public.md',data,[])
+ for data in [owner,b'/Users/'+owner+b'/oshell/config',b'https://example.test/'+owner,b"'"+owner+b"/private-repository'"]:
+  assert audit.audit('private.md',data,[])
+ assert audit.audit(owner.decode()+'.txt',b'public',[])
+ assert 'private-pattern' in audit.audit('public.md',audit.PUBLIC_UPDATE_URLS[-1],[owner.decode()])
+print('PASS: exact public update addresses allowed; other workstation identities remain rejected')

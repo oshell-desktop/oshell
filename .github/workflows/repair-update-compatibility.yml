@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (c) 2026 OShell contributors
+name: Repair legacy update entry (no builds)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: oshell-legacy-update-repair
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  compatibility:
+    if: github.repository == 'oshell-desktop/oshell'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate compatibility tools
+        run: |
+          python3 -m venv work/compat-tools
+          work/compat-tools/bin/python -m pip install -r scripts/requirements-release.txt
+          work/compat-tools/bin/python scripts/test-update-pages.py
+          work/compat-tools/bin/python scripts/test-legacy-updates.py
+      - name: Repair signed update metadata for the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OSHELL_UPDATE_SIGNING_KEY: ${{ secrets.OSHELL_UPDATE_SIGNING_KEY }}
+        run: |
+          release_tag=$(gh api repos/oshell-desktop/oshell/releases/latest --jq .tag_name)
+          work/compat-tools/bin/python scripts/publish-legacy-updates.py --tag "$release_tag" --output work/compat-sites
+      - name: Deploy original update entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OSHELL_LEGACY_PAGES_DEPLOY_KEY: ${{ secrets.OSHELL_LEGACY_PAGES_DEPLOY_KEY }}
+        run: python3 scripts/deploy-legacy-pages.py --site work/compat-sites/legacy
+  update-pages:
+    needs: compatibility
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/update-pages.yml

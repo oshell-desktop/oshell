@@ -11,7 +11,7 @@ from release_targets import TARGETS, RELEASE_FLAVORS
 ROOT = Path(__file__).resolve().parent.parent
 NS = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 
-def document(release, repository, public_key):
+def document(release, repository, public_key, flavors=None):
     if not re.fullmatch(r'[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[A-Za-z0-9_.-]+', repository) or repository.split('/')[-1] in ('.', '..'):
         raise ValueError('Invalid repository')
     tag = release.get('tag_name', '')
@@ -19,7 +19,12 @@ def document(release, repository, public_key):
         raise ValueError('A published stable Release is required')
     key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key, validate=True))
     platforms, builds = {}, set()
-    for flavor in RELEASE_FLAVORS:
+    if flavors is None:
+        flavors = list(RELEASE_FLAVORS)
+        # This is an alias of the Intel installer, not another build target.
+        if '<!-- oshell-update-v1:macOS13-x86_64:' in release.get('body', ''):
+            flavors.append('intel')
+    for flavor in flavors:
         target = TARGETS[flavor]
         matches = re.findall(r'<!-- oshell-update-v1:' + re.escape(target.suffix) + r':([A-Za-z0-9+/=]+) -->', release.get('body', ''))
         if len(matches) != 1: raise ValueError('Exactly one signed feed per platform is required')

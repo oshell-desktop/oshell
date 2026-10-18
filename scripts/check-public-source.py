@@ -11,6 +11,16 @@ RULES={
  'private-key-material':re.compile(rb'-----BEGIN (?:ENCRYPTED |OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----'),
  'github-token':re.compile(rb'(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})'),
  'cloud-access-key':re.compile(rb'AKIA[A-Z0-9]{16}')}
+# Explicit public update coordinates requested by the repository owner. Only
+# quoted coordinates and these HTTPS endpoints are exempt from the workstation
+# name check; personal paths, tokens and explicit private patterns still apply.
+PUBLIC_UPDATE_REPOSITORIES = (b"arnolixi/oshell", b"arnolixi/arnolixi.github.io")
+PUBLIC_UPDATE_URLS = tuple(b"https://github.com/" + repo for repo in PUBLIC_UPDATE_REPOSITORIES) + (b"https://arnolixi.github.io/oshell",)
+PUBLIC_COORDINATE = re.compile(rb"(['\"`])(?:" + b"|".join(map(re.escape, PUBLIC_UPDATE_REPOSITORIES)) + rb")\1")
+PUBLIC_URL = re.compile(rb"(?:" + b"|".join(map(re.escape, PUBLIC_UPDATE_URLS)) + rb")(?=$|[/ ?#'\"`<>\r\n])")
+def without_public_update_coordinates(data):
+ return PUBLIC_URL.sub(b'<public-update-url>', PUBLIC_COORDINATE.sub(b'<public-update-repository>', data))
+
 def git(*args):return subprocess.check_output(['git','-C',str(ROOT),*args])
 def forbidden(path):
  p=pathlib.PurePosixPath(path)
@@ -43,7 +53,7 @@ def audit(path,data,private_patterns,app=False):
  local_user=pathlib.Path.home().name
  if local_user.lower() not in ['root','runner','user','admin','administrator','build','builder','nobody']:
   identity=re.compile(rb'(?i)(?<![a-z0-9])'+re.escape(local_user.encode())+rb'(?![a-z0-9])')
-  if any(identity.search(view) for view in views+[path.encode()]):findings.append('current-workstation-identity')
+  if any(identity.search(view) for view in [without_public_update_coordinates(v) for v in views]+[path.encode()]):findings.append('current-workstation-identity')
  for pattern in private_patterns:
   value=pattern.casefold().encode()
   if not value:continue

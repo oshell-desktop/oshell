@@ -215,6 +215,14 @@ def publish(meta, repository, output):
     files = sorted(path for path in output.iterdir() if path.name not in internal)
     expected = {artifact_name(meta['version'], flavor) for flavor in RELEASE_FLAVORS} | {f"OShell-{meta['version']}-source.tar.gz"}
     manifest = json.loads((output/'release-manifest.json').read_text())
+    aliases = manifest.get('compatibilityAliases', [])
+    if aliases:
+        name = f"OShell-{meta['version']}-macOS13-x86_64.dmg"
+        source = artifact_name(meta['version'], 'legacy')
+        expected_alias = dict(file=name, source=source, sha256=sha256(output/source), size=(output/source).stat().st_size)
+        if aliases != [expected_alias] or (output/name).is_symlink() or sha256(output/name) != expected_alias['sha256']:
+            raise ValueError('Compatibility alias must be identical to the verified Intel installer')
+        expected.add(name)
     if {path.name for path in files} != expected:
         raise ValueError('Release asset set is incomplete')
     expected_checksums = expected | {'release-manifest.json'}

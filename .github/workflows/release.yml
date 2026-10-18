@@ -219,10 +219,28 @@ jobs:
           python3 scripts/ci-release.py collect --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" \
             --artifacts work/release-input --updates-artifacts work/update-input --repository "$GITHUB_REPOSITORY" \
             --source "dist/source/OShell-${RELEASE_VERSION}-source.tar.gz" --output dist/github-release
+      - name: Prepare compatibility update tools
+        if: github.repository == 'oshell-desktop/oshell'
+        run: |
+          python3 -m venv work/compat-tools
+          work/compat-tools/bin/python -m pip install -r scripts/requirements-release.txt
+          work/compat-tools/bin/python scripts/test-legacy-updates.py
+      - name: Prepare Intel filename alias and signed compatibility metadata
+        if: github.repository == 'oshell-desktop/oshell'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OSHELL_UPDATE_SIGNING_KEY: ${{ secrets.OSHELL_UPDATE_SIGNING_KEY }}
+        run: work/compat-tools/bin/python scripts/publish-legacy-updates.py --tag "$RELEASE_TAG" --release-output dist/github-release --output work/compat-sites
       - name: Upload as draft, verify all assets, then publish Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci-release.py publish --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --output dist/github-release
+      - name: Update the original repository's Pages entry
+        if: github.repository == 'oshell-desktop/oshell'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OSHELL_LEGACY_PAGES_DEPLOY_KEY: ${{ secrets.OSHELL_LEGACY_PAGES_DEPLOY_KEY }}
+        run: python3 scripts/deploy-legacy-pages.py --site work/compat-sites/legacy
 
   update-pages:
     needs: [metadata, release]
