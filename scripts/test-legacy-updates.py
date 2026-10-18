@@ -7,6 +7,7 @@ import importlib.util
 import json
 import tempfile
 import hashlib
+import subprocess
 from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
@@ -102,6 +103,18 @@ class CompatibilityTests(unittest.TestCase):
         raw=base64.b64decode(head).replace(b'version>83',b'version>84')
         self.release['body']=self.release['body'].replace(head,base64.b64encode(raw).decode())
         with self.assertRaises(Exception): self.prepare()
+
+    def test_deploy_key_survives_secret_newline_trimming(self):
+        spec=importlib.util.spec_from_file_location('deploy',Path(__file__).with_name('deploy-legacy-pages.py'))
+        deploy=importlib.util.module_from_spec(spec);spec.loader.exec_module(deploy)
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'key'
+            subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(path)],check=True)
+            original=path.read_bytes()
+            for value in [original.rstrip(),original.replace(b'\n',b'\r\n').rstrip()]:
+                path.write_bytes(deploy.normalized_private_key(value))
+                subprocess.run(['ssh-keygen','-y','-P','','-f',str(path)],check=True,stdout=subprocess.DEVNULL)
+                self.assertEqual(path.read_bytes(),original)
 
     def test_no_extra_compilation_job(self):
         from release_targets import RELEASE_FLAVORS

@@ -15,6 +15,12 @@ REPOSITORY = 'arnolixi/arnolixi.github.io'
 BRANCH = 'master'
 
 
+def normalized_private_key(secret):
+    # Secret input may trim the final newline. OpenSSH requires it when
+    # loading a multi-line private key, otherwise libcrypto rejects the file.
+    return secret.replace(b'\r\n', b'\n').strip() + b'\n'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--site', type=Path, required=True)
@@ -33,7 +39,8 @@ def main():
     if not secret: raise ValueError('Missing dedicated legacy Pages deploy key')
     with tempfile.TemporaryDirectory(prefix='oshell-legacy-pages-') as folder:
         root = Path(folder); checkout = root/'site'; checkout.mkdir()
-        key = root/'deploy.key'; key.touch(mode=0o600); key.write_bytes(secret)
+        key = root/'deploy.key'; key.touch(mode=0o600); key.write_bytes(normalized_private_key(secret))
+        subprocess.run(['ssh-keygen','-y','-P','','-f',str(key)],check=True,stdout=subprocess.DEVNULL)
         # Fetch GitHub's published host keys over authenticated HTTPS; do not
         # accept arbitrary SSH keys or disable host identity verification.
         meta = json.loads(subprocess.check_output(['gh','api','meta'],text=True))
