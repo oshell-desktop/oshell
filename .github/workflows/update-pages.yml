@@ -15,6 +15,10 @@ concurrency:
   group: oshell-update-pages
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   deploy:
     runs-on: ubuntu-24.04

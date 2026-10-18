@@ -53,8 +53,9 @@ jobs:
           python3 scripts/test-ci-release.py
           python3 scripts/test-development-tools.py
           python3 scripts/test-code-signing.py
-          python3 scripts/test-macbook-release.py
+          python3 scripts/test-release-build.py
           python3 scripts/test-compilation-cache.py
+          python3 scripts/test-incremental-cache.py
       - name: Resolve version and prepare immutable release tag
         id: meta
         env:
@@ -76,20 +77,24 @@ jobs:
   build:
     needs: metadata
     name: DMG / ${{ matrix.flavor }}
-    runs-on: [self-hosted, macOS, ARM64, self-macbook]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 4
       matrix:
         include:
           - flavor: legacy
+            runner: macos-15-intel
           - flavor: compat
+            runner: macos-15-intel
           - flavor: arm64
+            runner: macos-15
           - flavor: intel
+            runner: macos-15-intel
     env:
-      # Optional per-runner override; otherwise use the selected local toolchain.
-      OSHELL_DEVELOPER_DIR: ${{ vars.OSHELL_DEVELOPER_DIR }}
+      # Pin a toolchain that includes the macOS 10.13 Swift runtime.
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
       RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
       RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
       FLAVOR: ${{ matrix.flavor }}
@@ -101,11 +106,22 @@ jobs:
           ref: ${{ needs.metadata.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Check toolchain
+      - name: Check toolchain and identify build cache
+        id: toolchain
         run: |
-          python3 scripts/check-macbook-toolchain.py --flavor "$FLAVOR" --github-env "$GITHUB_ENV"
-          # Keep compilation products outside checkout cleanup and runner temp.
-          echo "OSHELL_COMPILATION_CACHE_DIR=${RUNNER_TOOL_CACHE:?}/oshell-compile-cache/$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
+          python3 scripts/check-release-toolchain.py --flavor "$FLAVOR" --github-output "$GITHUB_OUTPUT"
+          echo "OSHELL_COMPILATION_CACHE_DIR=$RUNNER_TEMP/oshell-build-cache" >> "$GITHUB_ENV"
+      - name: Restore compilation and incremental state
+        id: build-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/oshell-build-cache
+          key: ${{ steps.toolchain.outputs.cache-key }}
+          restore-keys: ${{ steps.toolchain.outputs.cache-prefix }}-
+      - name: Validate incremental dependency rebuilds
+        if: matrix.flavor == 'arm64'
+        run: python3 scripts/test-incremental-cache.py --swift-integration
       - name: Validate fixed code signing identity
         env:
           OSHELL_CODESIGN_P12: ${{ secrets.OSHELL_CODESIGN_P12 }}
@@ -154,6 +170,13 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+      - name: Save verified compilation cache
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/oshell-build-cache
+          key: ${{ steps.toolchain.outputs.cache-key }}
       - name: Preserve build diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

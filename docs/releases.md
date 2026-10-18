@@ -13,6 +13,8 @@
 
 现代版本以 macOS 13 为最低运行目标，可以用于更新系统；并非限制只能在 macOS 13 使用。四种包共用源码，最低系统和名称统一定义在 `scripts/release_targets.py`。macOS 11 的目标同时设置在项目和 SwiftTerm 的编译配置中，并非只改 Info.plist。
 
+所有任务均使用 GitHub 托管 Runner：元数据检查、Release 发布和更新站点使用 `ubuntu-24.04`；ARM64 DMG 使用 `macos-15`，Intel 与 Universal DMG 使用 `macos-15-intel`。四个目标最多并行执行四个 job，不依赖本机或组织的自托管节点。
+
 仅需编译时，在 **Run workflow** 中关闭 **publish**。流程不创建版本标签、不发布 Release，也不读取更新签名私钥；安装包仍使用固定代码签名身份。四种 DMG 保存在本次运行的 `dmg-*` Artifacts，可分别下载。
 
 发布步骤：
@@ -28,26 +30,22 @@ GitHub API 只使用自动提供的 `GITHUB_TOKEN`，无需额外 PAT。发布�
 
 失败不会发布残缺 Release；日志保留为各构建任务的 `diagnostics-*` Artifact。同一 tag 的运行会串行排队。上传中断后可以重跑：只续传带有同一提交标记的自有草稿；已公开的 Release 和其他草稿不会被覆盖。发布成功后应递增版本并使用新标签，而不是覆盖旧附件。
 
-四种 DMG 的编译、签名及挂载校验统一使用 `[self-hosted, macOS, ARM64, self-macbook]`，通过 `max-parallel: 1` 串行构建。Intel-only 目标的核心检查通过 Rosetta 执行；Universal 目标在本机 ARM64 上执行核心检查。元数据、发布和更新站点任务的 Runner 不受此次 macOS 切换影响。
-
-默认使用 Runner 当前选择的工具链；仓库变量 `OSHELL_DEVELOPER_DIR` 可指定完整 Xcode 或 Command Line Tools 的开发目录，仅对当前 job 生效。预检检查 SDK、Rosetta 及 macOS 10.13 所需的旧 Swift 运行库。更换工具链后仍须通过所有 DMG 的固定签名、全部 Mach-O 架构与最低系统版本校验；构建通过不等于真实旧系统的运行验收。原托管构建使用 Xcode 16.4，可通过该变量继续固定到兼容的安装路径。
-
-组织 Runner 组须授权当前仓库及具体工作流引用。手动从 main 运行需要允许 `release.yml@refs/heads/main`；版本标签触发还需授权对应 tag，分支授权不会自动覆盖标签。仅验证时关闭 `publish`，不创建版本标签、不发布 Release、不部署更新站点；固定代码签名和安装包验证仍会执行。第三方 Actions 继续固定到官方版本提交。
+macOS 构建固定使用 `/Applications/Xcode_16.4.app/Contents/Developer`，保留 macOS 10.13 所需的旧 Swift 运行库；预检确认本机架构能运行对应目标的核心检查。Runner 镜像更新导致工具链缺失时会明确失败，不静默切换工具链或降低安装包校验要求。第三方 Actions 固定到官方版本提交。
 
 正式构建使用固定自签名代码签名证书，**没有 Developer ID 签名和 Apple 公证**，Release 说明会明确标注。部署目标校验不等于真实 macOS 10.13/11 的运行验收。流水线发布的 DMG 同时用于手动安装和内置更新；也可按下方步骤在本机签名。不会自动创建或更换发布密钥。
 
 参考：[GitHub 托管 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)、[macOS 15 工具链清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)、[GitHub CLI Release 命令](https://cli.github.com/manual/gh_release_create)。
 
 
-## MacBook 编译缓存
+## GitHub Actions 编译缓存
 
-`release.yml` 在 Runner 工具缓存目录下的 `oshell-compile-cache/<owner>/<repository>` 保存本机编译产物，位于源码检出目录和临时目录之外，checkout 清理不会删除它。不上传网络缓存。
+每个目标通过官方 `actions/cache/restore` 和 `actions/cache/save` 单独恢复、保存编译产物及 SwiftPM 增量状态，缓存目录位于 job 临时目录。只有完整安装包验证成功后才保存缓存；不缓存签名证书、密码、钥匙串、用户配置、已签名 App 或 DMG。SwiftPM 配置与凭据目录不进入快照。
 
-Swift 缓存按源码与测试代码、Package 定义、依赖内容、编译脚本、工具链与 SDK、检出路径、架构、最低系统版本和测试模式区分；匹配后复用编译结果。只改版本号或文档可以命中；相关源码变更会重新编译 Swift。rz/sz 辅助程序单独缓存，应用源码变化不影响其复用。
+缓存按架构、最低系统版本、工具链/SDK、Package 定义、二进制依赖及编译脚本隔离。源码完全相同直接命中编译产物；源码变化时，从相同构建配置的旧缓存恢复 SwiftPM 数据库和中间文件，按源码内容校验恢复未变文件的时间戳，再由 SwiftPM 决定重编译和重新链接的模块。新增、删除源码及归档造成的时间戳精度变化均有真实编译回归覆盖。缓存损坏或配置不匹配时退回完整编译。
 
-缓存只保存所需的编译程序、资源 bundle 和辅助程序许可，不保存主密码、用户配置、签名私钥、已签名 App 或 DMG。每次构建仍重新执行核心检查、应用组装、固定签名、DMG 打包及完整安装包验证。缓存清单记录文件 SHA-256 和权限；损坏、缺失或格式不匹配时按未命中处理并重新构建。
+Release 保持整模块优化，因此一个文件的变化可能重编其所属模块以及必要的依赖者，不能保证只编译单个文件；未受影响的模块和独立的 rz/sz 辅助程序可继续复用。核心检查、固定签名、DMG 挂载、全部 Mach-O 架构与最低系统版本校验每次仍完整执行。参考 [Swift 整模块优化说明](https://www.swift.org/blog/whole-module-optimizations/)。
 
-每个架构/目标缓存保留最近两代，命中情况写入 Actions 日志与任务摘要。删除对应仓库的缓存目录即可恢复冷构建；普通本地打包默认不启用缓存，只有设置 `OSHELL_COMPILATION_CACHE_DIR` 才启用。首次建立缓存的耗时不代表后续命中性能，评估时需使用同一提交分别比较冷、热两轮，并排除人工等待 Runner 授权的时间。
+缓存命中状态写入任务摘要。产物缓存保留最近两代，每个目标的增量快照保留最近一次成功编译状态；GitHub 归档按仓库缓存策略保留。缓存服务不可用时可以冷构建，验证流程不依赖缓存才具备正确性。首次运行用于建立缓存；比较性能时应区分冷构建、相同源码命中和源码变化后的增量构建，并单独统计 Runner 排队时间。
 
 ## 本地构建与 CI 安装包
 

@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import plistlib
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -27,6 +28,57 @@ PACK = module('package_release', 'package-release.py')
 META = dict(tag='v1.2.3', version='1.2.3', build='45', commit='a' * 40)
 
 class ReleaseTests(unittest.TestCase):
+    @staticmethod
+    def workflow_jobs(filename):
+        text = (SCRIPTS.parent/'.github/workflows'/filename).read_text()
+        jobs = text.split('\njobs:\n', 1)[1]
+        sections = re.split(r'^  ([a-z][a-z0-9-]*):\n', jobs, flags=re.MULTILINE)
+        return text, dict(zip(sections[1::2], sections[2::2]))
+
+    def test_linux_jobs_use_hosted_ubuntu(self):
+        release, jobs = self.workflow_jobs('release.yml')
+        pages, site = self.workflow_jobs('update-pages.yml')
+        for name, job in [('metadata', jobs['metadata']), ('release', jobs['release']), ('pages', site['deploy'])]:
+            with self.subTest(job=name):
+                self.assertIn('runs-on: ubuntu-24.04', job)
+                self.assertNotIn('container:', job)
+                self.assertIn('persist-credentials: false', job)
+                for secret in ['OSHELL_CODESIGN_P12', 'OSHELL_CODESIGN_PASSWORD', 'OSHELL_UPDATE_SIGNING_KEY']:
+                    self.assertNotIn(secret, job)
+        for workflow in [release, pages]:
+            self.assertNotIn('self-hosted', workflow)
+            self.assertIn('defaults:\n  run:\n    shell: bash', workflow)
+
+    def test_hosted_macos_builds_are_parallel_and_cached(self):
+        _, jobs = self.workflow_jobs('release.yml')
+        build = jobs['build']
+        self.assertIn('runs-on: ${{ matrix.runner }}', build)
+        self.assertIn('max-parallel: 4', build)
+        self.assertNotIn('container:', build)
+        entries = re.findall(r'- flavor: (\w+)\n\s+runner: ([\w-]+)', build)
+        self.assertEqual(entries, [('legacy','macos-15-intel'),('compat','macos-15-intel'),('arm64','macos-15'),('intel','macos-15-intel')])
+        self.assertIn('/Applications/Xcode_16.4.app/Contents/Developer', build)
+        self.assertIn('actions/cache/restore@', build)
+        self.assertIn('actions/cache/save@', build)
+        self.assertLess(build.index('Verify DMG payload'), build.index('Save verified compilation cache'))
+        self.assertIn('scripts/package-release.py --flavor "$FLAVOR" --format dmg --test-core', build)
+        self.assertIn('scripts/verify-installers.py --flavor "$FLAVOR" --format dmg', build)
+
+    def test_runner_migration_keeps_release_order_and_permissions(self):
+        release, jobs = self.workflow_jobs('release.yml')
+        pages, site = self.workflow_jobs('update-pages.yml')
+        self.assertIn('needs: metadata', jobs['build'])
+        self.assertIn('needs: [metadata, build]', jobs['release'])
+        self.assertIn('needs: [metadata, release]', jobs['update-pages'])
+        self.assertIn('uses: ./.github/workflows/update-pages.yml', jobs['update-pages'])
+        self.assertIn('contents: write', jobs['metadata']); self.assertIn('contents: write', jobs['release'])
+        self.assertIn('pages: write', pages); self.assertIn('id-token: write', pages)
+        self.assertIn('workflow_dispatch:', release); self.assertIn('workflow_call:', pages)
+        for workflow in [release, pages]:
+            self.assertNotIn('pull_request:', workflow)
+            self.assertNotIn('pull_request_target:', workflow)
+            self.assertNotIn('--privileged', workflow)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='oshell-ci-test-')
         self.addCleanup(self.temporary.cleanup)

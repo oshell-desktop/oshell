@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 OShell contributors
-"""Runner-local, checksummed compilation products; never cache signed app bundles."""
+"""Checksummed compilation products; never cache signed app bundles or credentials."""
 import functools
 import hashlib
 import json
@@ -15,6 +15,11 @@ import subprocess
 import tempfile
 
 SCHEMA = 1
+BUILD_RECIPE_INPUTS = ['scripts/package-release.py', 'scripts/compilation_cache.py', 'scripts/incremental_cache.py']
+SWIFT_SOURCE_INPUTS = ['Package.swift', 'Package.resolved', 'Sources', 'Tests/OShellCoreTests',
+                       'Vendor/SwiftTerm', 'Vendor/CryptoSwift', 'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS]
+SWIFT_CONFIGURATION_INPUTS = ['Package.swift', 'Package.resolved', 'Vendor/SwiftTerm/Package.swift',
+                              'Vendor/CryptoSwift/Package.swift', 'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS]
 
 
 def digest(path):
