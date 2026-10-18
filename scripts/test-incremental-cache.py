@@ -124,7 +124,8 @@ class RealSwiftTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='oshell-swift-incremental-') as folder:
             root = Path(folder)/'source'; root.mkdir()
             (root/'Sources/Base').mkdir(parents=True); (root/'Sources/Probe').mkdir()
-            (root/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "Probe", targets: [.target(name:"Base"), .executableTarget(name:"Probe", dependencies:["Base"])])\n')
+            (root/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "Probe", targets: [.target(name:"Base", resources:[.copy("fixture.txt")]), .executableTarget(name:"Probe", dependencies:["Base"])])\n')
+            (root/'Sources/Base/fixture.txt').write_text('unchanged resource')
             library = root/'Sources/Base/Base.swift'; library.write_text('public func value() -> String { "base" }\n')
             client = root/'Sources/Probe/main.swift'; client.write_text('import Base\nprint(value())\nprint("one")\n')
             base = root/'work/build'

@@ -7,7 +7,7 @@ import OShellCore
 
 signal(SIGPIPE, SIG_IGN)
 if CommandLine.arguments.dropFirst().contains("--help") {
-    print("OShell-ZOC: /DEV:SSH /CONNECT:user:password@host:port /EMU:Xterm /TITLE:title\n支持 /SSH、/SSHUSER、/SSHPASSWORD、/SSHKEY 及 -参数 值。只兼容连接启动，不执行 ZOC 脚本。")
+    print("OShell-ZOC: /DEV:SSH /CONNECT:user:password@host:port /EMU:Xterm /TITLE:title\n支持 /SSH、/SSHUSER、/SSHPASSWORD、/SSHKEY 及 -参数 值。只兼容连接启动，不执行 ZOC 脚本。 Incremental source-change verification.")
     exit(0)
 }
 do {
