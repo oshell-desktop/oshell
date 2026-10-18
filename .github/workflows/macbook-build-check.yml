@@ -59,7 +59,7 @@ jobs:
         working-directory: macbook-check
         run: |
           codesign --verify --deep --strict work/release/arm64/OShell.app
-          lipo -verify_arch arm64 work/release/arm64/OShell.app/Contents/MacOS/OShell
+          lipo work/release/arm64/OShell.app/Contents/MacOS/OShell -verify_arch arm64
           python3 scripts/check-public-source.py --app work/release/arm64/OShell.app
           echo 'Native arm64 application compilation and core checks passed.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload build diagnostics
