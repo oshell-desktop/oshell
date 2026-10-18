@@ -151,7 +151,7 @@ jobs:
               targets = set(re.findall(r'^\[\d+/\d+\] Compiling (\w+) ', log, re.MULTILINE))
               assert targets == {'OShellZOC'}, (flavor, architecture, sorted(targets))
               output = subprocess.check_output(['/usr/bin/arch', '-'+architecture, str(helper), '--help'], text=True)
-              assert 'Incremental source-change verification.' in output, (flavor, architecture, 'stale executable')
+              assert 'Incremental source-change verification v2.' in output, (flavor, architecture, 'stale executable')
               print(f'{flavor} {architecture}: only OShellZOC recompiled; changed executable verified')
           PYCODE
       - name: Verify DMG payload, architectures and deployment targets
