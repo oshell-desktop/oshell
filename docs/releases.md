@@ -13,7 +13,7 @@
 
 现代版本以 macOS 13 为最低运行目标，可以用于更新系统；并非限制只能在 macOS 13 使用。四种包共用源码，最低系统和名称统一定义在 `scripts/release_targets.py`。macOS 11 的目标同时设置在项目和 SwiftTerm 的编译配置中，并非只改 Info.plist。
 
-仅需编译时，在 **Run workflow** 中关闭 **publish**。流程不创建版本标签、不发布 Release，也不读取签名私钥；四种 DMG 保存在本次运行的 `dmg-*` Artifacts，可分别下载。
+仅需编译时，在 **Run workflow** 中关闭 **publish**。流程不创建版本标签、不发布 Release，也不读取更新签名私钥；安装包仍使用固定代码签名身份。四种 DMG 保存在本次运行的 `dmg-*` Artifacts，可分别下载。
 
 发布步骤：
 
@@ -28,7 +28,11 @@ GitHub API 只使用自动提供的 `GITHUB_TOKEN`，无需额外 PAT。发布�
 
 失败不会发布残缺 Release；日志保留为各构建任务的 `diagnostics-*` Artifact。同一 tag 的运行会串行排队。上传中断后可以重跑：只续传带有同一提交标记的自有草稿；已公开的 Release 和其他草稿不会被覆盖。发布成功后应递增版本并使用新标签，而不是覆盖旧附件。
 
-构建机使用 GitHub 托管的 `macos-15`（arm64）与 `macos-15-intel`，固定选择 Xcode 16.4，避免 `macos-latest` 标签更换架构或默认工具链变动影响旧系统构建。第三方 Actions 已固定到官方版本提交。若 GitHub 将来移除该 Xcode，需要更新固定工具链并重新验证旧目标；构建机版本不等于安装包的最低运行版本。
+四种 DMG 的编译、签名及挂载校验统一使用 `[self-hosted, macOS, ARM64, self-macbook]`，通过 `max-parallel: 1` 串行构建。Intel-only 目标的核心检查通过 Rosetta 执行；Universal 目标在本机 ARM64 上执行核心检查。元数据、发布和更新站点任务的 Runner 不受此次 macOS 切换影响。
+
+默认使用 Runner 当前选择的工具链；仓库变量 `OSHELL_DEVELOPER_DIR` 可指定完整 Xcode 或 Command Line Tools 的开发目录，仅对当前 job 生效。预检检查 SDK、Rosetta 及 macOS 10.13 所需的旧 Swift 运行库。更换工具链后仍须通过所有 DMG 的固定签名、全部 Mach-O 架构与最低系统版本校验；构建通过不等于真实旧系统的运行验收。原托管构建使用 Xcode 16.4，可通过该变量继续固定到兼容的安装路径。
+
+组织 Runner 组须授权当前仓库及具体工作流引用。手动从 main 运行需要允许 `release.yml@refs/heads/main`；版本标签触发还需授权对应 tag，分支授权不会自动覆盖标签。仅验证时关闭 `publish`，不创建版本标签、不发布 Release、不部署更新站点；固定代码签名和安装包验证仍会执行。第三方 Actions 继续固定到官方版本提交。
 
 正式构建使用固定自签名代码签名证书，**没有 Developer ID 签名和 Apple 公证**，Release 说明会明确标注。部署目标校验不等于真实 macOS 10.13/11 的运行验收。流水线发布的 DMG 同时用于手动安装和内置更新；也可按下方步骤在本机签名。不会自动创建或更换发布密钥。
 
