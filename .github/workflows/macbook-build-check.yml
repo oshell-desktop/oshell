@@ -36,7 +36,19 @@ jobs:
         run: |
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
-          xcodebuild -version
+          # Use an installed Xcode for this job without changing xcode-select globally.
+          if ! xcodebuild -version 2>/dev/null; then
+            for candidate in /Applications/Xcode_16.4.app /Applications/Xcode.app; do
+              if [ -d "$candidate/Contents/Developer" ]; then
+                export DEVELOPER_DIR="$candidate/Contents/Developer"
+                echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+                break
+              fi
+            done
+            if ! xcodebuild -version 2>/dev/null; then
+              echo '::warning::Using Command Line Tools for native compilation only; release toolchain compatibility is not verified.'
+            fi
+          fi
           xcrun swift --version
           xcrun --sdk macosx --show-sdk-version
           python3 --version
