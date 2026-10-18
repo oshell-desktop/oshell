@@ -19,7 +19,7 @@ from release_targets import TARGETS, RELEASE_FLAVORS
 import installer_metadata
 import code_signing
 from compilation_cache import CompilationCache, SWIFT_SOURCE_INPUTS, SWIFT_CONFIGURATION_INPUTS
-from incremental_cache import IncrementalCache
+from incremental_cache import IncrementalCache, affected_products
 
 ROOT = Path(__file__).resolve().parent.parent
 WORK = ROOT / 'work/release'
@@ -69,7 +69,28 @@ def build_swift(flavor, arch, minimum):
     incremental = IncrementalCache(ROOT, f'{flavor}-{arch}-{minimum}',
         SWIFT_CONFIGURATION_INPUTS, SWIFT_SOURCE_INPUTS, variant)
     with incremental.workspace(base):
-        run(args,env=env,log=f'package-{flavor}-{arch}-build.log')
+        selected = None
+        if incremental.restored:
+            describe = ['swift', 'package', '--package-path', ROOT, '--scratch-path', base/'swift',
+                        '--cache-path', base/'cache', '--config-path', base/'config',
+                        '--security-path', base/'security', '--disable-sandbox', 'describe', '--type', 'json']
+            try:
+                graph = json.loads(subprocess.check_output(list(map(str, describe)), env=env, text=True))
+                selected = affected_products(ROOT, incremental.changed_inputs, graph, set(products))
+            except (ValueError, OSError, subprocess.CalledProcessError):
+                # Rebuilding the full graph is safe when product selection is unavailable.
+                pass
+        log = f'package-{flavor}-{arch}-build.log'
+        if selected is None:
+            run(args,env=env,log=log)
+        else:
+            print('SwiftPM affected products:', ', '.join(selected) or 'none', flush=True)
+            with (LOG/log).open('wb') as stream:
+                if not selected:
+                    stream.write(b'No compiled inputs changed; restored products are current.\n')
+                for product in selected:
+                    subprocess.run(list(map(str, [*args, '--product', product])), cwd=ROOT, env=env,
+                                   stdout=stream, stderr=subprocess.STDOUT, check=True)
     binaries = base/'swift'/f'{arch}-apple-macosx'/'release'
     cache.store(binaries, products + [p.name for p in binaries.glob('*.bundle')])
     return binaries

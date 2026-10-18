@@ -3,6 +3,7 @@
 # Copyright (c) 2026 OShell contributors
 """Synthetic state tests plus an opt-in real SwiftPM dependency rebuild test."""
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,7 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import compilation_cache
-from incremental_cache import IncrementalCache
+from incremental_cache import IncrementalCache, affected_products
 
 REAL_SWIFT = '--swift-integration' in sys.argv
 if REAL_SWIFT:
@@ -118,13 +119,59 @@ class StateTests(unittest.TestCase):
             self.fake_build()
 
 
+class ProductSelectionTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(prefix='oshell-product-selection-')
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.graph = {'targets': [
+            {'name': 'Core', 'path': 'Sources/Core', 'sources': ['Core.swift'], 'product_memberships': ['App', 'Helper']},
+            {'name': 'App', 'path': 'Sources/App', 'sources': ['main.swift'], 'product_memberships': ['App']},
+            {'name': 'Helper', 'path': 'Sources/Helper', 'sources': ['main.swift'], 'product_memberships': ['Helper']}]}
+        for target in self.graph['targets']:
+            path = self.root/target['path']; path.mkdir(parents=True)
+            for source in target['sources']: (path/source).write_text('fixture')
+
+    def select(self, *paths):
+        return affected_products(self.root, set(paths), self.graph, {'App', 'Helper'})
+
+    def test_leaf_change_does_not_select_unrelated_app(self):
+        self.assertEqual(self.select('Sources/Helper/main.swift'), ['Helper'])
+
+    def test_library_change_selects_all_consumers(self):
+        self.assertEqual(self.select('Sources/Core/Core.swift'), ['App', 'Helper'])
+
+    def test_removed_source_still_selects_its_product(self):
+        (self.root/'Sources/Helper/main.swift').unlink()
+        self.graph['targets'][2]['sources'] = []
+        self.assertEqual(self.select('Sources/Helper/main.swift'), ['Helper'])
+
+    def test_new_source_is_discovered_in_current_graph(self):
+        (self.root/'Sources/Helper/New.swift').write_text('new')
+        self.graph['targets'][2]['sources'].append('New.swift')
+        self.assertEqual(self.select('Sources/Helper/New.swift'), ['Helper'])
+
+    def test_unrecognized_inputs_fall_back_to_full_graph(self):
+        self.assertIsNone(self.select('Vendor/Dependency/Code.swift'))
+        (self.root/'Sources/Helper/bridge.h').write_text('header')
+        self.assertIsNone(self.select('Sources/Helper/bridge.h'))
+
+    def test_invalid_memberships_fall_back_to_full_graph(self):
+        self.graph['targets'][2]['product_memberships'] = [{'invalid': 'record'}]
+        self.assertIsNone(self.select('Sources/Helper/main.swift'))
+
+    def test_no_changes_require_no_products(self):
+        self.assertEqual(self.select(), [])
+
+
 @unittest.skipUnless(REAL_SWIFT, 'use --swift-integration on macOS to run real compiler checks')
 class RealSwiftTests(unittest.TestCase):
     def test_fresh_checkout_rebuilds_only_affected_targets_and_updates_binary(self):
         with tempfile.TemporaryDirectory(prefix='oshell-swift-incremental-') as folder:
             root = Path(folder)/'source'; root.mkdir()
             (root/'Sources/Base').mkdir(parents=True); (root/'Sources/Probe').mkdir()
-            (root/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "Probe", targets: [.target(name:"Base"), .executableTarget(name:"Probe", dependencies:["Base"])])\n')
+            (root/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "Probe", targets: [.target(name:"Base", resources:[.copy("fixture.txt")]), .executableTarget(name:"Probe", dependencies:["Base"])])\n')
+            (root/'Sources/Base/fixture.txt').write_text('unchanged resource')
             library = root/'Sources/Base/Base.swift'; library.write_text('public func value() -> String { "base" }\n')
             client = root/'Sources/Probe/main.swift'; client.write_text('import Base\nprint(value())\nprint("one")\n')
             base = root/'work/build'
@@ -143,9 +190,15 @@ class RealSwiftTests(unittest.TestCase):
                                 rounded = path.stat().st_mtime_ns // 1_000_000_000 * 1_000_000_000
                                 os.utime(path, ns=(rounded, rounded))
                     with cache.workspace(base):
-                        args = ['swift','build','--package-path',str(root),'--scratch-path',str(base/'swift'),
+                        options = ['--package-path',str(root),'--scratch-path',str(base/'swift'),
                                 '--cache-path',str(base/'cache'),'--config-path',str(base/'config'),
-                                '--security-path',str(base/'security'),'--disable-sandbox','-c','release']
+                                '--security-path',str(base/'security'),'--disable-sandbox']
+                        args = ['swift', 'build', *options, '-c', 'release']
+                        if cache.restored:
+                            graph = json.loads(subprocess.check_output(['swift', 'package', *options, 'describe', '--type', 'json'], env=env, text=True))
+                            selected = affected_products(root, cache.changed_inputs, graph, {'Probe'})
+                            self.assertEqual(selected, ['Probe'])
+                            args += ['--product', 'Probe']
                         result = subprocess.run(args, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
                     print(result.stdout, flush=True)
                     executable = next((base/'swift').glob('*-apple-macosx/release/Probe'))

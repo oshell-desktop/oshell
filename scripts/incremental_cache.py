@@ -74,6 +74,8 @@ class IncrementalCache(CompilationCache):
                          dict(variant=variant, stateSchema=STATE_SCHEMA))
         self.root = root
         self.source_inputs = source_inputs
+        self.restored = False
+        self.changed_inputs = set()
 
     def clear_build_state(self, base):
         # Only the caller's disposable build directories, never source/config/keys.
@@ -87,6 +89,8 @@ class IncrementalCache(CompilationCache):
                 shutil.rmtree(path)
 
     def restore_state(self, base):
+        self.restored = False
+        self.changed_inputs = set()
         try:
             if not self.entry.exists():
                 self.clear_build_state(base)
@@ -129,6 +133,7 @@ class IncrementalCache(CompilationCache):
                     os.utime(path, ns=(path.stat().st_atime_ns, timestamp))
                     unchanged += 1
                 else:
+                    self.changed_inputs.add(relative)
                     # Content changes must remain dirty even if a checkout/tool
                     # happened to reuse the old timestamp and file size.
                     old = previous.get('mtime_ns', 0) if isinstance(previous, dict) else 0
@@ -137,8 +142,11 @@ class IncrementalCache(CompilationCache):
                     timestamp = max(time.time_ns(), old + 1_000_000_000)
                     os.utime(path, ns=(path.stat().st_atime_ns, timestamp))
                     changed += 1
-            removed = len(set(state['sources']) - set(current))
+            removed_paths = set(state['sources']) - set(current)
+            self.changed_inputs.update(removed_paths)
+            removed = len(removed_paths)
             self.report('RESTORED', f'{unchanged} unchanged, {changed} changed/new, {removed} removed')
+            self.restored = True
             return True
         except (ValueError, OSError, OverflowError) as error:
             self.clear_build_state(base)
@@ -187,3 +195,56 @@ class IncrementalCache(CompilationCache):
             self.restore_state(base)
             yield
             self.save_state(base)
+
+
+def affected_products(root, changed, graph, allowed):
+    """Use SwiftPM's transitive product memberships; unknown inputs build all.
+
+    Selecting a leaf product avoids unrelated binary-framework copy commands,
+    which otherwise invalidate their consumers even with unchanged source.
+    """
+    if not isinstance(graph, dict) or not isinstance(graph.get('targets'), list):
+        return None
+    root = root.resolve()
+    selected = set()
+    for relative in changed:
+        if Path(relative).is_absolute() or '..' in Path(relative).parts:
+            return None
+        path = (root/relative).resolve()
+        matches = []
+        for target in graph['targets']:
+            if not isinstance(target, dict) or not isinstance(target.get('path'), str):
+                return None
+            target_path = Path(target['path'])
+            target_path = (target_path if target_path.is_absolute() else root/target_path).resolve()
+            if not target_path.is_relative_to(root):
+                return None
+            if path.is_relative_to(target_path):
+                sources = target.get('sources', [])
+                if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
+                    return None
+                declared = {target_path/s for s in sources}
+                resources = target.get('resources', [])
+                if not isinstance(resources, list):
+                    return None
+                resource_match = False
+                for resource in resources:
+                    if not isinstance(resource, dict) or not isinstance(resource.get('path'), str):
+                        return None
+                    resource_path = Path(resource['path'])
+                    if not resource_path.is_absolute(): resource_path = root/resource_path
+                    resource_path = resource_path.resolve()
+                    resource_match |= path.is_relative_to(resource_path)
+                if path in declared or resource_match or not path.exists() or target.get('type') == 'binary':
+                    memberships = target.get('product_memberships')
+                    if (not isinstance(memberships, list) or not memberships
+                            or not all(isinstance(p, str) for p in memberships)
+                            or not set(memberships).issubset(allowed)):
+                        return None
+                    matches.extend(memberships)
+        if not matches:
+            # Includes dependency sources outside the root package and inputs
+            # not represented by describe (for example custom bridging headers).
+            return None
+        selected.update(matches)
+    return sorted(selected)
