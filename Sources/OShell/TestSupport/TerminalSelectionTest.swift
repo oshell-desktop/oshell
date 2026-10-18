@@ -27,10 +27,12 @@ enum TerminalSelectionTest {
         workspace.newBlankTab(); let pane = workspace.selectedTab!.activePane, terminal = pane.terminal, model = terminal.getTerminal()
         workspace.window?.contentView?.layoutSubtreeIfNeeded()
         func feed(_ text: String) { terminal.feed(text: "\u{1b}c" + text); terminal.selection.selectNone() }
-        func click(shift: Bool = false) {
-            let point = terminal.convert(NSPoint(x: 12, y: terminal.bounds.height - 8), to: nil)
+        var timestamp = ProcessInfo.processInfo.systemUptime
+        func click(shift: Bool = false, count: Int = 2, x: CGFloat = 12, advance: TimeInterval = 0.05) {
+            timestamp += advance
+            let point = terminal.convert(NSPoint(x: x, y: terminal.bounds.height - 8), to: nil)
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: shift ? [.shift] : [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: workspace.window!.windowNumber, context: nil, eventNumber: 1, clickCount: 2, pressure: 1)!
+                let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: shift ? [.shift] : [], timestamp: timestamp, windowNumber: workspace.window!.windowNumber, context: nil, eventNumber: 1, clickCount: count, pressure: 1)!
                 if type == .leftMouseDown { terminal.mouseDown(with: event) } else { terminal.mouseUp(with: event) }
             }
         }
@@ -44,6 +46,33 @@ enum TerminalSelectionTest {
         click(shift: true); checks["shiftCanSelectWhitespaceToken"] = terminal.selection.getSelectedText() == "alpha:beta"
         TerminalSelectionSettings(delimiters: ":", shiftUsesDelimiters: true).save()
         click(shift: true); checks["shiftDelimiterToggleIsLive"] = terminal.selection.getSelectedText() == "alpha"
+        feed("alpha:beta gamma:delta"); click(count: 1); click()
+        checks["firstDoubleSelectsDelimiterWord"] = terminal.selection.getSelectedText() == "alpha"
+        click(count: 3)
+        checks["tripleClickStillSelectsLine"] = terminal.selection.getSelectedText().contains("alpha:beta gamma:delta")
+        click(count: 4)
+        checks["fourFastClicksSelectWhitespaceToken"] = terminal.selection.getSelectedText() == "alpha:beta"
+        checks["expandedSelectionAutoCopied"] = clipboard.string(forType: .string) == "alpha:beta"
+        terminal.selection.dragExtend(bufferPosition: Position(col: 15, row: 0))
+        checks["expandedDragUsesWhitespaceBoundaries"] = terminal.selection.getSelectedText() == "alpha:beta gamma:delta"
+        feed("alpha:beta gamma:delta"); click(count: 1); click(); click(count: 1); click()
+        checks["twoSeparateDoubleClicksExpand"] = terminal.selection.getSelectedText() == "alpha:beta"
+        click(count: 1); click()
+        checks["newGestureReturnsToDelimiterWord"] = terminal.selection.getSelectedText() == "alpha"
+        click(count: 1, advance: max(1, NSEvent.doubleClickInterval * 3) + 1); click()
+        checks["expiredGestureDoesNotExpand"] = terminal.selection.getSelectedText() == "alpha"
+        let secondWordX = terminal.bounds.width / CGFloat(model.cols) * 12
+        click(count: 1, x: secondWordX); click(x: secondWordX)
+        checks["differentPositionStartsDelimiterWord"] = terminal.selection.getSelectedText() == "gamma"
+        feed("alpha:beta gamma"); click(count: 1); click()
+        feed("omega:beta gamma"); click()
+        checks["changedTextDoesNotReuseWordAnchor"] = terminal.selection.getSelectedText() == "omega"
+        feed("alpha:beta gamma"); click(count: 1); click(); click(shift: true)
+        checks["shiftDoubleDoesNotUseProgressiveExpansion"] = terminal.selection.getSelectedText() == "alpha"
+        feed("alpha:beta gamma"); click(count: 1); click()
+        let drag = NSEvent.mouseEvent(with: .leftMouseDragged, location: terminal.convert(NSPoint(x: secondWordX, y: terminal.bounds.height - 8), to: nil), modifierFlags: [], timestamp: timestamp + 0.01, windowNumber: workspace.window!.windowNumber, context: nil, eventNumber: 1, clickCount: 2, pressure: 1)!
+        terminal.mouseDragged(with: drag); click()
+        checks["dragResetsProgressiveExpansion"] = terminal.selection.getSelectedText() == "alpha"
         TerminalSelectionSettings(delimiters: "", shiftUsesDelimiters: true).save()
         click(); checks["emptyDelimitersUseWhitespace"] = terminal.selection.getSelectedText() == "alpha:beta"
         TerminalSelectionSettings().save()

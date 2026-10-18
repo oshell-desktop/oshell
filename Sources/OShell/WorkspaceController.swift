@@ -415,13 +415,14 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     @objc func importSessions() { showSessionManager(); sessionManager?.importSessions() }
     @objc func exportSessions() { showSessionManager(); sessionManager?.exportAll() }
     @objc func newSession() { createSession(kind: .ssh) }
-    func createSession(kind: SessionKind) {
-        guard let profile = Dialogs.session(profiles: credentialProfiles, directories: SessionDirectory.all(configuration), initialDirectory: sessionManager?.currentDirectory ?? "服务器", kind: kind, defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor) else { return }
+    func createSession(kind: SessionKind, directory: String? = nil, showManager: Bool = true) {
+        guard let profile = Dialogs.session(profiles: credentialProfiles, directories: SessionDirectory.all(configuration), initialDirectory: directory ?? sessionManager?.currentDirectory ?? "服务器", kind: kind, defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor) else { return }
         var value = configuration; value.profiles.append(profile)
-        if saveConfiguration(value) { if sessionManager == nil { showSessionManager() }; sessionManager?.reveal(profile); sessionManager?.showPreservingMode() }
+        if saveConfiguration(value), showManager { if sessionManager == nil { showSessionManager() }; sessionManager?.reveal(profile); sessionManager?.showPreservingMode() }
     }
-    @objc func editSession() {
-        guard let selected = selectedProfile, selected.kind != .local,
+    @objc func editSession() { if let profile = selectedProfile { editSavedSession(profileID: profile.id) } }
+    func editSavedSession(profileID: UUID) {
+        guard isSecurityUnlocked, let selected = configuration.profiles.first(where: { $0.id == profileID }), selected.kind != .local,
               let profile = Dialogs.session(selected, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor),
               let index = configuration.profiles.firstIndex(where: { $0.id == profile.id }) else { return }
         var value = configuration; value.profiles[index] = profile
@@ -430,8 +431,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             if let linkID { sessionManager?.revealLink(linkID) } else { sessionManager?.reveal(profile) }
         }
     }
-    @objc func deleteSession() {
-        guard let profile = selectedProfile, Dialogs.confirm("删除“\(profile.name)”？", text: "已打开的连接继续保留。", action: "删除") else { return }
+    @objc func deleteSession() { if let profile = selectedProfile { deleteSavedSession(profileID: profile.id) } }
+    func deleteSavedSession(profileID: UUID) {
+        guard isSecurityUnlocked, let profile = configuration.profiles.first(where: { $0.id == profileID }), Dialogs.confirm("删除“\(profile.name)”？", text: "已打开的连接继续保留。", action: "删除") else { return }
         var value = configuration; value.profiles.removeAll { $0.id == profile.id }; _ = saveConfiguration(value)
     }
     @objc func connectSelected() { if let profile = selectedProfile { open(profile) } else { showSessionManager() } }

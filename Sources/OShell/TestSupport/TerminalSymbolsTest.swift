@@ -18,6 +18,18 @@ enum TerminalSymbolsTest {
                 checks[name] = NSFontManager.shared.convert(base, toHaveTrait: traits).fontName == name
             }
         } else { checks["dejavuBundledRegular"] = false }
+        if let base = NSFont(name: "CascadiaCode-Regular", size: 13) {
+            checks["cascadiaRegularIsMonospaced"] = TerminalFontCatalog.isMonospaced(base)
+            for (traits, name) in [(NSFontTraitMask.boldFontMask, "CascadiaCode-Bold"),
+                                   (NSFontTraitMask.italicFontMask, "CascadiaCode-Italic"),
+                                   ([NSFontTraitMask.boldFontMask, .italicFontMask], "CascadiaCode-BoldItalic")] {
+                checks[name] = NSFontManager.shared.convert(base, toHaveTrait: traits).fontName == name
+            }
+            let picker = NSPopUpButton(); TerminalFontCatalog.populate(picker, selected: base.fontName)
+            checks["cascadiaSelectedAndPreviewed"] = picker.selectedItem?.title == "Cascadia Code（内置）" && TerminalFontCatalog.previewFont(picker).fontName == base.fontName
+            checks["cascadiaListedOnce"] = picker.itemArray.filter { ($0.representedObject as? String) == base.fontName }.count == 1
+            checks["cascadiaLoadedFromApp"] = (CTFontCopyAttribute(base as CTFont, kCTFontURLAttribute) as? URL)?.path.hasPrefix(Bundle.main.bundlePath) == true
+        } else { checks["cascadiaRegularIsMonospaced"] = false }
         let output = ProcessInfo.processInfo.environment["OSHELL_SYMBOLS_OUTPUT"].map { URL(fileURLWithPath: $0) }
         let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 960, height: 320))
         let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -33,7 +45,7 @@ enum TerminalSymbolsTest {
         }
         let symbols = "\u{e0a0} \u{e0a1} \u{e0a2} \u{f07b} \u{f015} \u{f120} \u{f02a2}"
         for size in [13.0, 22.0] {
-            let fonts = [NSFont.oshellMonospacedSystemFont(ofSize: size, weight: .regular), NSFont(name: "Menlo-Regular", size: size)!, NSFont(name: "Monaco", size: size)!] + [NSFont(name: "DejaVuSansMono", size: size)].compactMap { $0 }
+            let fonts = [NSFont.oshellMonospacedSystemFont(ofSize: size, weight: .regular), NSFont(name: "Menlo-Regular", size: size)!, NSFont(name: "Monaco", size: size)!] + [NSFont(name: "DejaVuSansMono", size: size), NSFont(name: "CascadiaCode-Regular", size: size)].compactMap { $0 }
             for base in fonts {
                 view.font = base
                 let key = "\(base.fontName)-\(size)"

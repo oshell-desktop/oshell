@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 OShell contributors
-"""Validate tag builds, collect four verified DMGs, and publish a complete Release."""
+"""Validate tag builds, collect two verified DMGs, and publish a complete Release."""
 import argparse
 import base64
 import hashlib
@@ -92,7 +92,7 @@ def stage(meta, flavor, output):
 
 def collect_updates(meta, artifacts, repository, installers):
     if {path.name for path in artifacts.iterdir()} != {'updates-' + flavor for flavor in RELEASE_FLAVORS}:
-        raise ValueError('Signed DMG metadata for all four targets is required')
+        raise ValueError('Signed DMG metadata for both release targets is required')
     notes = []
     sparkle = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
     for flavor in RELEASE_FLAVORS:
@@ -127,7 +127,7 @@ def release_changes(version):
 def collect(meta, artifacts, source, output, updates_artifacts=None, repository=""):
     expected_dirs = {'dmg-' + flavor for flavor in RELEASE_FLAVORS}
     if {path.name for path in artifacts.iterdir()} != expected_dirs:
-        raise ValueError('Exactly four build artifacts are required; missing or unexpected artifacts found')
+        raise ValueError('Exactly two build artifacts are required; missing or unexpected artifacts found')
     records = []
     for flavor in RELEASE_FLAVORS:
         folder = artifacts/('dmg-' + flavor)
@@ -184,10 +184,10 @@ OShell {meta['version']}（build {meta['build']}）
 | --- | --- | --- |
 {rows}
 
-现代版以 macOS 13 为最低目标，也适用于更新系统；Universal 同时包含 Intel 与 Apple Silicon。
+Apple Silicon 包支持 macOS 13 及更新系统；Intel（x86_64 / amd64）包统一支持 macOS 10.13 及更新系统。
 下载适合本机的一种 DMG，将 OShell.app 拖入 Applications。包内附带 SHA256SUMS.txt（包内文件校验）和 release-manifest.json（构建信息）；对应源码包单独提供。
 
-这些安装包使用{signing_label}，未进行 Developer ID 签名或 Apple 公证。流水线校验架构、部署目标、载荷和签名完整性，并运行构建机原生架构的核心测试；不代表已在 macOS 10.13/11 的真实系统上完成验证。
+这些安装包使用{signing_label}，未进行 Developer ID 签名或 Apple 公证。流水线校验架构、部署目标、载荷和签名完整性，并运行构建机原生架构的核心测试；不代表已在 macOS 10.13 的真实系统上完成验证。
 {'内置更新直接使用上述 DMG，签名更新信息包含在本页中，无需额外 XML 或更新 ZIP。旧客户端请手动安装本版本一次。' if updates else '本次仅发布手动安装包，不包含内置更新信息。'}
 
 对应提交：`{meta['commit']}`
@@ -248,7 +248,7 @@ def publish(meta, repository, output):
         raise ValueError('Incomplete remote assets; Release remains a draft')
     verify_remote_tag(repository, meta['tag'], meta['commit'])
     gh('release', 'edit', meta['tag'], '--repo', repository, '--draft=false', '--latest')
-    print('Published', meta['tag'], 'with four verified DMGs and corresponding source')
+    print('Published', meta['tag'], 'with two verified DMGs and corresponding source')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

@@ -8,10 +8,25 @@ import OShellCore
 final class OShellTerminal: LocalProcessTerminalView {
     weak var owner: TerminalPane?
     private var userInputDepth = 0
+    private struct WordClickSeed {
+        let point: NSPoint, size: NSSize
+        let time: TimeInterval, buffer: ObjectIdentifier, scrollRow: Int
+        let start: Position, end: Position, text: String
+        let settings: TerminalSelectionSettings
+    }
+    private var wordClickSeed: WordClickSeed?
+    private func continuesWordClick(_ event: NSEvent) -> Bool {
+        guard let seed = wordClickSeed else { return false }
+        let point = convert(event.locationInWindow, from: nil), buffer = getTerminal().displayBuffer
+        let elapsed = event.timestamp - seed.time
+        return elapsed >= 0 && elapsed <= max(1, NSEvent.doubleClickInterval * 3)
+            && abs(point.x - seed.point.x) <= 4 && abs(point.y - seed.point.y) <= 4
+            && bounds.size == seed.size && ObjectIdentifier(buffer) == seed.buffer && buffer.yDisp == seed.scrollRow
+    }
     override func layout() { super.layout(); owner?.resizeLocalTool() }
-    override func keyDown(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyDown(with: event) }
+    override func keyDown(with event: NSEvent) { wordClickSeed = nil; userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyDown(with: event) }
     override func keyUp(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyUp(with: event) }
-    override func insertText(_ string: Any, replacementRange: NSRange) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.insertText(string, replacementRange: replacementRange) }
+    override func insertText(_ string: Any, replacementRange: NSRange) { wordClickSeed = nil; userInputDepth += 1; defer { userInputDepth -= 1 }; super.insertText(string, replacementRange: replacementRange) }
     override func copy(_ sender: Any) { copySelectionToPasteboard() }
     private func copySelectionToPasteboard() {
         let selected = selection.getSelectedText()
@@ -22,6 +37,7 @@ final class OShellTerminal: LocalProcessTerminalView {
     override func paste(_ sender: Any) { if let text = NSPasteboard.general.string(forType: .string), let owner { owner.onPaste?(owner, text) } }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func scrollWheel(with event: NSEvent) {
+        wordClickSeed = nil
         if let arrangement = enclosingScrollView as? TabArrangementView {
             let model = getTerminal()
             let horizontalGesture = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
@@ -40,13 +56,51 @@ final class OShellTerminal: LocalProcessTerminalView {
     }
     override func mouseDown(with event: NSEvent) {
         guard owner?.isShutdown == false, let window else { return }
-        if window.firstResponder !== self { _ = window.makeFirstResponder(self) }
-        if event.clickCount == 2 {
+        if window.firstResponder !== self { wordClickSeed = nil; _ = window.makeFirstResponder(self) }
+        let model = getTerminal()
+        let remoteMouse = allowMouseReporting && model.mouseMode != .off
+            && (!event.modifierFlags.contains(.shift) || model.mouseShiftCapture)
+        if remoteMouse { wordClickSeed = nil; super.mouseDown(with: event); return }
+        let continuing = continuesWordClick(event)
+        let plain = event.modifierFlags.intersection([.shift, .command, .control, .option]).isEmpty
+        if event.clickCount == 2 || (event.clickCount == 4 && continuing && plain) {
             let settings = TerminalSelectionSettings.load()
+            let previous = continuing && plain ? wordClickSeed : nil
+            wordClickSeed = nil
             selection.wordDelimiters = Set(event.modifierFlags.contains(.shift) && !settings.shiftUsesDelimiters ? "" : settings.delimiters)
+            // AppKit reports four fast clicks as clickCount=4 rather than two
+            // double clicks. Normalize only our continuation; retain native
+            // three-click line selection and SwiftTerm's word-drag anchor.
+            let forwarded: NSEvent
+            if event.clickCount == 4 {
+                guard let double = NSEvent.mouseEvent(with: event.type, location: event.locationInWindow,
+                    modifierFlags: event.modifierFlags, timestamp: event.timestamp, windowNumber: event.windowNumber,
+                    context: nil, eventNumber: event.eventNumber, clickCount: 2, pressure: event.pressure) else {
+                    super.mouseDown(with: event); return
+                }
+                forwarded = double
+            } else { forwarded = event }
+            super.mouseDown(with: forwarded)
+            guard plain, selection.active, selection.selectionMode == .word else { return }
+            let text = selection.getSelectedText()
+            if let previous, previous.settings == settings, previous.start == selection.start,
+               previous.end == selection.end, previous.text == text {
+                selection.wordDelimiters = []
+                selection.selectWordOrExpression(at: selection.start, in: model.displayBuffer)
+                needsDisplay = true
+            } else if !text.isEmpty, text.utf8.count <= 65_536 {
+                wordClickSeed = WordClickSeed(point: convert(event.locationInWindow, from: nil), size: bounds.size,
+                    time: event.timestamp, buffer: ObjectIdentifier(model.displayBuffer), scrollRow: model.displayBuffer.yDisp,
+                    start: selection.start, end: selection.end, text: text, settings: settings)
+            }
+            return
         }
-        // Keep SwiftTerm's selection, links and remote mouse reporting intact.
+        if !continuing || !selection.active || ![1, 3].contains(event.clickCount) { wordClickSeed = nil }
         super.mouseDown(with: event)
+    }
+    override func mouseDragged(with event: NSEvent) {
+        wordClickSeed = nil
+        super.mouseDragged(with: event)
     }
     override func mouseUp(with event: NSEvent) {
         super.mouseUp(with: event)
@@ -61,6 +115,7 @@ final class OShellTerminal: LocalProcessTerminalView {
         }
     }
     override func rightMouseDown(with event: NSEvent) {
+        wordClickSeed = nil
         if owner?.rightClickPaste == true && !event.modifierFlags.contains(.shift) { window?.makeFirstResponder(self); paste(self) }
         else { super.rightMouseDown(with: event) }
     }
@@ -106,6 +161,7 @@ final class OShellTerminal: LocalProcessTerminalView {
         super.send(source: source, data: data)
     }
     override func becomeFirstResponder() -> Bool {
+        wordClickSeed = nil
         let success = super.becomeFirstResponder()
         if success, let owner { owner.onFocus?(owner) }
         return success
@@ -439,7 +495,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         if !prefs.metal || terminal.window != nil { try? terminal.setUseMetal(prefs.metal) }
     }
     private static func font(_ prefs: Preferences) -> NSFont {
-        if prefs.fontName.hasPrefix("DejaVuSansMono") { BundledTerminalFonts.register() }
+        BundledTerminalFonts.register()
         if !prefs.fontName.isEmpty, let font = NSFont(name: prefs.fontName, size: prefs.fontSize) { return font }
         return .oshellMonospacedSystemFont(ofSize: prefs.fontSize, weight: .regular)
     }

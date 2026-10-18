@@ -93,21 +93,26 @@ enum QuickSendFocusTest {
         workspace.configuration.preferences.metal = false
         workspace.newLocal(); let first = workspace.selectedTab!.activePane
         workspace.newBlankTab(); let blank = workspace.selectedTab!.activePane
-        workspace.newLocal(); let last = workspace.selectedTab!.activePane
+        // Preserve the blank target instead of exercising idle-tab reuse here.
+        workspace.open(.local, reusingIdlePane: false); let last = workspace.selectedTab!.activePane
         workspace.chooseQuickSendScope(.all)
-        checks["mixedAllScopeHasThreeTargets"] = workspace.quickSendTargets.count == 3
-        submit("exit")
-        checks["blankClosedImmediately"] = blank.isShutdown && workspace.tabs.count == 2
-        checks["mixedExitImmediatelyKeepsBarFocus"] = editingBar()
-        wait("localShellsExited", { first.ended && last.ended }) {
-            checks["asyncProcessExitKeepsBarFocus"] = editingBar()
-            if let responder = window.firstResponder as? NSTextView {
-                responder.insertText("next-command", replacementRange: NSRange(location: NSNotFound, length: 0))
-            }
-            checks["continuedTypingGoesToQuickSend"] = bar.field.currentEditor()?.string == "next-command"
+        // Local terminals start when their views are displayed. Wait for the
+        // PTYs instead of asserting synchronously before the first run-loop turn.
+        wait("mixedTargetsReady", { workspace.quickSendTargets.count == 3 }) {
+            checks["mixedAllScopeHasThreeTargets"] = workspace.quickSendTargets.count == 3
             submit("exit")
-            checks["finalExitKeepsEmptyWindowBarFocus"] = workspace.tabs.isEmpty && editingBar()
-            layoutCases()
+            checks["blankClosedImmediately"] = blank.isShutdown && workspace.tabs.count == 2
+            checks["mixedExitImmediatelyKeepsBarFocus"] = editingBar()
+            wait("localShellsExited", { first.ended && last.ended }) {
+                checks["asyncProcessExitKeepsBarFocus"] = editingBar()
+                if let responder = window.firstResponder as? NSTextView {
+                    responder.insertText("next-command", replacementRange: NSRange(location: NSNotFound, length: 0))
+                }
+                checks["continuedTypingGoesToQuickSend"] = bar.field.currentEditor()?.string == "next-command"
+                submit("exit")
+                checks["finalExitKeepsEmptyWindowBarFocus"] = workspace.tabs.isEmpty && editingBar()
+                layoutCases()
+            }
         }
     }
 }

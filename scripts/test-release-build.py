@@ -92,11 +92,13 @@ class ReleaseBuildTests(unittest.TestCase):
         workflow = (ROOT/'.github/workflows/release.yml').read_text()
         build = workflow.split('\n  build:\n')[1].split('\n  release:\n')[0]
         self.assertIn('runs-on: ${{ matrix.runner }}', build)
-        self.assertIn('max-parallel: 4', build)
+        self.assertIn('max-parallel: 2', build)
         self.assertNotIn('container:', build)
         self.assertNotIn('OSHELL_ALLOW_ADHOC', build)
-        for flavor in ['legacy', 'compat', 'arm64', 'intel']:
+        for flavor in ['legacy', 'arm64']:
             self.assertIn(f'- flavor: {flavor}\n', build)
+        for flavor in ['compat', 'intel']:
+            self.assertNotIn(f'- flavor: {flavor}\n', build)
         for expected in ['--format dmg --test-core', 'scripts/verify-installers.py', 'OSHELL_REQUIRE_FIXED_SIGNING: "1"']:
             self.assertIn(expected, build)
         self.assertIn("if: needs.metadata.outputs.publish == 'true'", workflow.split('\n  release:\n')[1])

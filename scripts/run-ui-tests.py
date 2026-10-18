@@ -5,7 +5,8 @@
 import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
-CASES = {'file-resume':'OSHELL_FILE_RESUME_OUTPUT',
+CASES = {'update-startup-state':'OSHELL_UPDATE_STARTUP_STATE_OUTPUT',
+ 'file-resume':'OSHELL_FILE_RESUME_OUTPUT',
  'file-transfer-history':'OSHELL_FILE_HISTORY_OUTPUT',
  'session-sidebar':'OSHELL_SIDEBAR_OUTPUT',
  'terminal-selection':'OSHELL_SELECTION_OUTPUT',

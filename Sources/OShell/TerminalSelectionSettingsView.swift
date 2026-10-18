@@ -39,10 +39,10 @@ final class TerminalSelectionSettingsView: NSView, NSTextFieldDelegate {
         let reset = NSButton(title: "重置", target: self, action: #selector(resetDelimiters))
         reset.bezelStyle = .rounded; reset.identifier = .init("settings.selection.reset")
         let title = NSTextField(labelWithString: "终端文本选择"); title.font = .systemFont(ofSize: 16, weight: .semibold)
-        let intro = NSTextField(wrappingLabelWithString: "普通双击按以下分隔符选词，便于复制主机名、IP 地址、路径和日志字段。")
+        let intro = NSTextField(wrappingLabelWithString: "第一次双击按以下分隔符选词；在同一位置连续第二次双击，扩展选择空格或制表符之间的整段文本。")
         let row = NSStackView(views: [NSTextField(labelWithString: "分隔符"), delimiters, reset]); row.spacing = 12; row.alignment = .centerY
         let hint = NSTextField(wrappingLabelWithString: "每个字符都按字面生效，不使用正则或转义写法；空格和制表符始终分隔。留空时只按空白选词。默认保留路径中的 /、主机名中的 . 和 -。")
-        let shiftHint = NSTextField(wrappingLabelWithString: "取消勾选后，Shift + 双击可选中空白之间的整段文本。鼠标上报模式下仍由远端程序处理鼠标事件，Shift 是否绕过上报遵循终端规则。")
+        let shiftHint = NSTextField(wrappingLabelWithString: "Shift + 双击始终按本项设置选择，不参与连续双击扩展。取消勾选后，Shift + 双击可直接选中空白之间的整段文本。鼠标上报模式下仍由远端程序处理鼠标事件，Shift 是否绕过上报遵循终端规则。")
         let separator = NSBox(); separator.boxType = .separator
         let copyTitle = NSTextField(labelWithString: "复制选项"); copyTitle.font = .systemFont(ofSize: 13, weight: .semibold)
         let localHint = NSTextField(wrappingLabelWithString: "分隔符与 Shift 选词方式仅保存在本机；点击“应用”后，所有已打开和新建的终端立即生效。")

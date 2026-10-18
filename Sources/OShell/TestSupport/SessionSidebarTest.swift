@@ -18,6 +18,8 @@ enum SessionSidebarTest {
         workspace.receiveConfiguration(config)
         workspace.sessionSidebarVisible = true; workspace.refreshSessionSidebar()
         workspace.window?.setContentSize(NSSize(width: 1000, height: 700)); workspace.window?.contentView?.layoutSubtreeIfNeeded()
+        checks.merge(contextChecks(workspace)) { _, new in new }
+        workspace.receiveConfiguration(config)
         let sidebar = workspace.sessionSidebar, outline = sidebar.outline
         func items() -> [SessionSidebar.Node] { (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? SessionSidebar.Node } }
         func filter(_ value: String) { sidebar.search.stringValue = value; sidebar.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification)) }
@@ -98,4 +100,70 @@ enum SessionSidebarTest {
         if let path = ProcessInfo.processInfo.environment["OSHELL_SIDEBAR_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted,.sortedKeys]).write(to: URL(fileURLWithPath: path)) }
         workspace.shutdown(); NSApp.terminate(nil)
     }
+    private static func contextChecks(_ workspace: WorkspaceController) -> [String: Bool] {
+        var checks = [String: Bool]()
+        let sidebar = workspace.sessionSidebar, tree = sidebar.outline
+        let initial = workspace.configuration
+        let source = initial.profiles.first { $0.name == "Production API" }!
+        let link = initial.sessionLinks.entries[0]
+        func menu(_ match: (SessionSidebar.Node) -> Bool) -> NSMenu {
+            sidebar.search.stringValue = ""; sidebar.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+            tree.expandItem(nil, expandChildren: true); tree.deselectAll(nil)
+            let row = (0..<tree.numberOfRows).first { (tree.item(atRow: $0) as? SessionSidebar.Node).map(match) == true }!
+            return sidebar.contextMenu(for: row)!
+        }
+        func invoke(_ menu: NSMenu, _ title: String) {
+            guard let item = menu.items.first(where: { $0.title == title }), item.isEnabled, let action = item.action else {
+                checks["actionAvailable:"+title] = false; return
+            }
+            checks["actionHandled:"+title] = NSApp.sendAction(action, to: item.target, from: item)
+        }
+        func views(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(views) }
+        func answer(_ text: String?, button: String) {
+            let timer = Timer(timeInterval: 0.15, repeats: false) { _ in
+                guard let root = NSApp.modalWindow?.contentView else { checks["modalExists"] = false; return }
+                if let text, let input = views(root).compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }) {
+                    input.stringValue = text; (input.currentEditor() as? NSTextView)?.string = text
+                }
+                views(root).compactMap { $0 as? NSButton }.first { $0.title == button }?.performClick(nil)
+            }
+            RunLoop.main.add(timer, forMode: .common); RunLoop.main.add(timer, forMode: .modalPanel)
+        }
+        let session = menu { $0.profileID == source.id && !$0.isLink }
+        checks["sessionContextActions"] = Set(session.items.map(\.title)).isSuperset(of: ["连接", "打开 SFTP 文件", "属性…", "复制会话", "重命名", "移动到…", "删除…", "导出此会话…", "复制会话配置"])
+        invoke(session, "复制会话配置")
+        let folder = menu { $0.directory == "empty/sub" }
+        invoke(folder, "粘贴会话配置")
+        checks["pasteUsesClickedDirectory"] = workspace.configuration.profiles.contains { $0.id != source.id && $0.host == source.host && $0.group == "empty/sub" }
+        checks["pasteDoesNotShowManager"] = !NSApp.windows.contains { $0.title == "会话管理" && $0.isVisible }
+        let rename = menu { $0.directory == "empty/sub" }; answer("renamed", button: "保存"); invoke(rename, "重命名")
+        checks["directoryRenameUpdatesDescendants"] = workspace.configuration.profiles.contains { $0.host == source.host && $0.group == "empty/renamed" }
+        let sessionRename = menu { $0.profileID == source.id && !$0.isLink }; answer("Sidebar renamed", button: "保存"); invoke(sessionRename, "重命名")
+        checks["sessionRenameUsesClickedIdentity"] = workspace.configuration.profiles.first { $0.id == source.id }?.name == "Sidebar renamed"
+        let reference = menu { $0.linkID == link.id }
+        checks["linkHasSeparateSourceProperties"] = reference.items.contains { $0.title == "源会话属性…" } && !reference.items.contains { $0.title == "删除…" }
+        invoke(reference, "删除快捷引用")
+        checks["deletingReferencePreservesSource"] = workspace.configuration.profiles.contains { $0.id == source.id } && !workspace.configuration.sessionLinks.entries.contains { $0.id == link.id }
+        let reserved = menu { $0.directory == "Links" }
+        checks["linksRootProtected"] = reserved.items.filter { ["重命名", "移动到…", "删除…"].contains($0.title) }.allSatisfy { !$0.isEnabled }
+        let blank = sidebar.contextMenu(for: -1)!
+        checks["blankContextClearsOldTarget"] = tree.selectedRow == -1 && !blank.items.contains { $0.title == "删除…" || $0.title == "属性…" }
+        checks["blankContextCreationAndImport"] = Set(blank.items.map(\.title)).isSuperset(of: ["新建 SSH 会话…", "新建 SFTP 会话…", "新建 FTP 会话…", "新建目录…", "导入会话到当前目录…", "导出全部会话…", "会话默认属性…"])
+        tree.expandItem(nil, expandChildren: true)
+        let rows = (0..<tree.numberOfRows).filter { (tree.item(atRow: $0) as? SessionSidebar.Node)?.profileID != nil }
+        if rows.count >= 2 {
+            tree.selectRowIndexes(IndexSet(rows.prefix(2)), byExtendingSelection: false)
+            let multiple = sidebar.contextMenu(for: rows[0])!
+            checks["rightClickPreservesMultiSelection"] = tree.selectedRowIndexes.count == 2 && multiple.items.contains { $0.title == "删除所选（2）…" }
+        }
+        let nonempty = menu { $0.directory == "empty/renamed" }
+        answer(nil, button: "取消"); invoke(nonempty, "删除…")
+        checks["recursiveDeleteCancellationPreservesData"] = workspace.configuration.profiles.contains { $0.group == "empty/renamed" }
+        let deleting = menu { $0.directory == "empty/renamed" }
+        answer(nil, button: "递归删除"); invoke(deleting, "删除…")
+        checks["recursiveDeleteConfirmed"] = !workspace.configuration.profiles.contains { $0.group == "empty/renamed" } && !SessionDirectory.all(workspace.configuration).contains("empty/renamed")
+        checks["sidebarOperationsDoNotOpenManager"] = !NSApp.windows.contains { $0.title == "会话管理" && $0.isVisible }
+        return checks
+    }
+
 }

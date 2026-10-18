@@ -116,6 +116,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     }
     static let movePasteboardType = NSPasteboard.PasteboardType("app.oshell.session-directory-move")
     private weak var workspace: WorkspaceController?
+    private weak var sidebar: SessionSidebar?
     private let table = ContextTable(), search = NSSearchField(), path = NSTextField(labelWithString: "所有会话")
     private var rows = [Row]()
     private var renameState: (row: Row, text: String, styled: NSAttributedString, status: String, color: NSColor?, tooltip: String?)?
@@ -155,8 +156,15 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         guard table.selectedRowIndexes.count == 1, rows.indices.contains(table.selectedRow), case .link(let link, _) = rows[table.selectedRow] else { return nil }
         return link
     }
-    init(workspace: WorkspaceController) {
-        self.workspace = workspace
+    init(workspace: WorkspaceController, sidebar: SessionSidebar? = nil) {
+        self.workspace = workspace; self.sidebar = sidebar
+        if sidebar != nil {
+            // Reuse the manager actions without creating or presenting a second window.
+            super.init(window: nil)
+            table.dataSource = self; table.delegate = self; table.allowsMultipleSelection = true
+            kindFilter.addItems(withTitles: ["全部协议", "SSH", "SFTP", "FTP", "本地"])
+            reload(); return
+        }
         let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 550), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "会话管理"; window.minSize = NSSize(width: 720, height: 400); window.isReleasedWhenClosed = false
         super.init(window: window); window.delegate = self; window.onFind = { [weak self] in self?.focusSearch() }; window.center(); build(); reload()
@@ -243,6 +251,37 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             scroll.topAnchor.constraint(equalTo: filters.bottomAnchor, constant: 10), scroll.leadingAnchor.constraint(equalTo: navigation.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: navigation.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -12),
             emptyLabel.centerYAnchor.constraint(equalTo: scroll.centerYAnchor), emptyLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: 20), emptyLabel.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -20),
             bottom.leadingAnchor.constraint(equalTo: navigation.leadingAnchor), bottom.trailingAnchor.constraint(equalTo: navigation.trailingAnchor), bottom.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14)])
+    }
+
+    func sidebarContextMenu(_ nodes: [SessionSidebar.Node], clicked: SessionSidebar.Node?) -> NSMenu? {
+        guard sidebar != nil, let workspace, workspace.isSecurityUnlocked else { return nil }
+        let configuration = workspace.configuration
+        func target(_ node: SessionSidebar.Node) -> Row? {
+            if let directory = node.directory {
+                return SessionDirectory.all(configuration).contains(directory) ? .directory(directory) : nil
+            }
+            if let id = node.linkID {
+                guard let link = configuration.sessionLinks.entries.first(where: { $0.id == id }),
+                      let profile = configuration.profiles.first(where: { $0.id == link.profileID }) else { return nil }
+                return .link(link, profile)
+            }
+            if let id = node.profileID, let profile = configuration.profiles.first(where: { $0.id == id }) { return .session(profile) }
+            return nil
+        }
+        let targets = nodes.compactMap(target)
+        guard targets.count == nodes.count else { return nil }
+        if let clicked, let row = target(clicked) {
+            switch row {
+            case .directory(let path): currentDirectory = path
+            case .session(let profile): currentDirectory = profile.group
+            case .link(let link, _): currentDirectory = SessionLinks.directory(for: link.folder)
+            case .parent: return nil
+            }
+        } else { currentDirectory = "" }
+        search.stringValue = ""; kindFilter.selectItem(at: 0); reload()
+        // Use stable identities, never row numbers from the separately filtered sidebar.
+        rows = targets; table.reloadData(); table.selectRowIndexes(IndexSet(rows.indices), byExtendingSelection: false)
+        return contextMenu(for: rows.isEmpty ? -1 : 0)
     }
 
     func contextMenu(for row: Int) -> NSMenu {
@@ -560,7 +599,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     }
     @objc private func openDirectory() {
         guard rows.indices.contains(table.selectedRow), case .directory(let directory) = rows[table.selectedRow] else { return }
-        navigate(to: directory)
+        if let sidebar { sidebar.revealDirectory(directory) } else { navigate(to: directory) }
     }
     @objc private func connect() {
         let profiles = selectedProfiles
@@ -585,13 +624,13 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         profile.kind = .ssh; clearFileSelection(); window?.orderOut(nil); workspace?.open(profile); workspace?.show()
     }
     @objc private func hide() { cancelInlineRename(); clearFileSelection(); window?.orderOut(nil) }
-    @objc private func newSession() { workspace?.createSession(kind: .ssh) }
-    @objc private func newSFTP() { workspace?.createSession(kind: .sftp) }
-    @objc private func newFTP() { workspace?.createSession(kind: .ftp) }
+    @objc private func newSession() { workspace?.createSession(kind: .ssh, directory: currentDirectory, showManager: sidebar == nil) }
+    @objc private func newSFTP() { workspace?.createSession(kind: .sftp, directory: currentDirectory, showManager: sidebar == nil) }
+    @objc private func newFTP() { workspace?.createSession(kind: .ftp, directory: currentDirectory, showManager: sidebar == nil) }
     @objc private func addSavedLink() {
         workspace?.addSavedSessionLink(profile: selectedLink == nil ? selectedProfile : nil, folder: SessionLinks.folder(for: currentDirectory) ?? "")
     }
-    @objc private func editLinkSource() { workspace?.editSession() }
+    @objc private func editLinkSource() { if let profile = selectedProfile { workspace?.editSavedSession(profileID: profile.id) } }
     @objc private func showSessionDefaults() { workspace?.showSessionDefaults() }
     @objc private func duplicateSession() {
         guard let profile = selectedProfile, let copy = workspace?.duplicateSavedSession(profile.id) else { return }
@@ -650,7 +689,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         guard rows.indices.contains(table.selectedRow) else { return }
         switch rows[table.selectedRow] {
         case .parent: return
-        case .session: workspace?.editSession()
+        case .session(let profile): workspace?.editSavedSession(profileID: profile.id)
         case .link(let link, _): workspace?.editSavedSessionLink(link.id)
         case .directory: beginInlineRename()
         }
@@ -674,6 +713,24 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         case .parent: return
         case .directory(let path) where path == SessionLinks.rootDirectory: return
         default: break
+        }
+        if sidebar != nil {
+            let name: String
+            switch row {
+            case .session(let profile): name = profile.name
+            case .link(let link, _): name = link.name
+            case .directory(let path): name = String(path.split(separator: "/").last ?? "")
+            case .parent: return
+            }
+            let alert = PopupAlert(); alert.messageText = "重命名"
+            alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消")
+            let input = NSTextField(string: name); input.frame = NSRect(x: 0, y: 0, width: 360, height: 26)
+            input.identifier = .init("sidebar.session.rename"); alert.accessoryView = input; alert.window.initialFirstResponder = input
+            while alert.runModal() == .alertFirstButtonReturn {
+                do { _ = try rename(row, input: input.stringValue); return }
+                catch { Dialogs.message(error.localizedDescription) }
+            }
+            return
         }
         cancelInlineRename()
         table.scrollRowToVisible(table.selectedRow)
@@ -708,43 +765,48 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         if notification.object as? NSTextField === renameField { cancelInlineRename() }
     }
     @discardableResult func commitInlineRename() -> Bool {
-        guard let workspace, workspace.isSecurityUnlocked, let state = renameState, let field = renameField else { return false }
+        guard workspace?.isSecurityUnlocked == true, let state = renameState, let field = renameField else { return false }
         let input = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
-        do {
-            let name = input.trimmingCharacters(in:.whitespacesAndNewlines)
-            guard !name.isEmpty, name.utf8.count <= 1024, !input.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains) else { throw ModelError.invalid("名称不能为空，不能包含控制字符，且不得超过 1024 字节。") }
-            if name == state.text { cancelInlineRename(); return true }
-            var config = workspace.configuration, nextKey = key(state.row), nextDirectory = currentDirectory
-            switch state.row {
-            case .parent: return false
-            case .session(let original):
-                guard let index = config.profiles.firstIndex(where:{ $0.id == original.id }), config.profiles[index].name == original.name else { throw ModelError.invalid("会话已被其他操作修改，请刷新后重试。") }
-                config.profiles[index].name = name
-            case .link(let original, _):
-                guard let index = config.sessionLinks.entries.firstIndex(where:{ $0.id == original.id }), config.sessionLinks.entries[index].name == original.name else { throw ModelError.invalid("快捷引用已被修改，请刷新后重试。") }
-                config.sessionLinks.entries[index].name = name
-            case .directory(let old):
-                guard old != SessionLinks.rootDirectory, SessionDirectory.all(config).contains(old) else { throw ModelError.invalid("此目录不能重命名，或已经不存在。") }
-                let next = try SessionDirectory.childPath(named:name,in:SessionDirectory.parent(old))
-                guard !SessionDirectory.all(config).contains(next) else { throw ModelError.invalid("同级目录已存在，请使用其他名称。") }
-                func remap(_ path:String)->String { SessionDirectory.contains(path,in:old) ? next+String(path.dropFirst(old.count)) : path }
-                if let from = SessionLinks.folder(for:old), let to = SessionLinks.folder(for:next) { try config.sessionLinks.renameFolder(from,to:to) }
-                config.directories = config.directories.map(remap)
-                for index in config.profiles.indices { config.profiles[index].group = remap(config.profiles[index].group) }
-                nextDirectory = remap(currentDirectory); nextKey = "directory:"+next
-            }
-            // End the shared field editor before saving can reload/reuse table cells.
-            let previousDirectory = currentDirectory
-            cancelInlineRename(); currentDirectory = nextDirectory
-            guard workspace.saveConfiguration(config) else { currentDirectory = previousDirectory; reload(); return false }
-            reload(); table.deselectAll(nil)
-            if let index = rows.firstIndex(where:{ key($0) == nextKey }) { table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false); table.scrollRowToVisible(index) }
-            return true
-        } catch {
+        do { return try rename(state.row, input: input) }
+        catch {
             resultStatus.stringValue = error.localizedDescription; resultStatus.textColor = .systemRed
             resultStatus.toolTip = error.localizedDescription
             return false
         }
+    }
+    private func rename(_ row: Row, input: String) throws -> Bool {
+        guard let workspace, workspace.isSecurityUnlocked else { return false }
+        let name = input.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !name.isEmpty, name.utf8.count <= 1024, !input.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains) else { throw ModelError.invalid("名称不能为空，不能包含控制字符，且不得超过 1024 字节。") }
+        var config = workspace.configuration, nextKey = key(row), nextDirectory = currentDirectory
+        switch row {
+        case .parent: return false
+        case .session(let original):
+            guard let index = config.profiles.firstIndex(where:{ $0.id == original.id }), config.profiles[index].name == original.name else { throw ModelError.invalid("会话已被其他操作修改，请刷新后重试。") }
+            if config.profiles[index].name == name { cancelInlineRename(); return true }
+            config.profiles[index].name = name
+        case .link(let original, _):
+            guard let index = config.sessionLinks.entries.firstIndex(where:{ $0.id == original.id }), config.sessionLinks.entries[index].name == original.name else { throw ModelError.invalid("快捷引用已被修改，请刷新后重试。") }
+            if config.sessionLinks.entries[index].name == name { cancelInlineRename(); return true }
+            config.sessionLinks.entries[index].name = name
+        case .directory(let old):
+            guard old != SessionLinks.rootDirectory, SessionDirectory.all(config).contains(old) else { throw ModelError.invalid("此目录不能重命名，或已经不存在。") }
+            let next = try SessionDirectory.childPath(named:name,in:SessionDirectory.parent(old))
+            if next == old { cancelInlineRename(); return true }
+            guard !SessionDirectory.all(config).contains(next) else { throw ModelError.invalid("同级目录已存在，请使用其他名称。") }
+            func remap(_ path:String)->String { SessionDirectory.contains(path,in:old) ? next+String(path.dropFirst(old.count)) : path }
+            if let from = SessionLinks.folder(for:old), let to = SessionLinks.folder(for:next) { try config.sessionLinks.renameFolder(from,to:to) }
+            config.directories = config.directories.map(remap)
+            for index in config.profiles.indices { config.profiles[index].group = remap(config.profiles[index].group) }
+            nextDirectory = remap(currentDirectory); nextKey = "directory:"+next
+        }
+        // End the shared field editor before saving can reload/reuse table cells.
+        let previousDirectory = currentDirectory
+        cancelInlineRename(); currentDirectory = nextDirectory
+        guard workspace.saveConfiguration(config) else { currentDirectory = previousDirectory; reload(); return false }
+        reload(); table.deselectAll(nil)
+        if let index = rows.firstIndex(where:{ key($0) == nextKey }) { table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false); table.scrollRowToVisible(index) }
+        return true
     }
     @objc private func move() { moveSelection(createReferences: true) }
     @objc private func moveActual() {
@@ -811,7 +873,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         guard let workspace, rows.indices.contains(table.selectedRow) else { return }
         switch rows[table.selectedRow] {
         case .parent: return
-        case .session: workspace.deleteSession()
+        case .session(let profile): workspace.deleteSavedSession(profileID: profile.id)
         case .link(let link, _):
             var config = workspace.configuration; config.sessionLinks.entries.removeAll { $0.id == link.id }; _ = workspace.saveConfiguration(config); reload()
         case .directory(let directory):

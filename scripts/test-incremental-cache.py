@@ -170,7 +170,11 @@ class RealSwiftTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='oshell-swift-incremental-') as folder:
             root = Path(folder)/'source'; root.mkdir()
             (root/'Sources/Base').mkdir(parents=True); (root/'Sources/Probe').mkdir()
-            (root/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "Probe", targets: [.target(name:"Base", resources:[.copy("fixture.txt")]), .executableTarget(name:"Probe", dependencies:["Base"])])\n')
+            (root/'Sources/BinaryConsumer').mkdir()
+            vendor = Path(__file__).resolve().parent.parent/'Vendor/Sparkle/Sparkle.xcframework'
+            shutil.copytree(vendor, root/'Artifacts/Sparkle.xcframework', symlinks=True)
+            (root/'Sources/BinaryConsumer/main.swift').write_text('import Sparkle\nprint("unrelated binary-framework consumer")\n')
+            (root/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "Probe", platforms: [.macOS(.v11)], targets: [.binaryTarget(name:"Sparkle", path:"Artifacts/Sparkle.xcframework"), .target(name:"Base", resources:[.copy("fixture.txt")]), .executableTarget(name:"Probe", dependencies:["Base"]), .executableTarget(name:"BinaryConsumer", dependencies:["Sparkle"])])\n')
             (root/'Sources/Base/fixture.txt').write_text('unchanged resource')
             library = root/'Sources/Base/Base.swift'; library.write_text('public func value() -> String { "base" }\n')
             client = root/'Sources/Probe/main.swift'; client.write_text('import Base\nprint(value())\nprint("one")\n')
@@ -182,7 +186,10 @@ class RealSwiftTests(unittest.TestCase):
                     # clean checkout may do. Cache must identify content equality.
                     for path in [root/'Package.swift', *root.glob('Sources/**/*.swift')]:
                         content = path.read_bytes(); path.unlink(); path.write_bytes(content)
-                    cache = IncrementalCache(root, 'real-swift', ['Package.swift'], ['Package.swift', 'Sources'], {'mode':'release'})
+                    for path in (root/'Artifacts').rglob('*'):
+                        if path.is_dir() or path.is_symlink():
+                            os.utime(path, follow_symlinks=False)
+                    cache = IncrementalCache(root, 'real-swift', ['Package.swift', 'Artifacts'], ['Package.swift', 'Sources', 'Artifacts'], {'mode':'release'})
                     if cache.entry.exists():
                         # Exercise a transport that rounds output file timestamps.
                         for path in (cache.entry/'payload').rglob('*'):
@@ -196,7 +203,7 @@ class RealSwiftTests(unittest.TestCase):
                         args = ['swift', 'build', *options, '-c', 'release']
                         if cache.restored:
                             graph = json.loads(subprocess.check_output(['swift', 'package', *options, 'describe', '--type', 'json'], env=env, text=True))
-                            selected = affected_products(root, cache.changed_inputs, graph, {'Probe'})
+                            selected = affected_products(root, cache.changed_inputs, graph, {'Probe', 'BinaryConsumer'})
                             self.assertEqual(selected, ['Probe'])
                             args += ['--product', 'Probe']
                         result = subprocess.run(args, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
@@ -210,13 +217,16 @@ class RealSwiftTests(unittest.TestCase):
                 second, output = build()
                 self.assertIn('Compiling Probe', second)
                 self.assertNotIn('Compiling Base', second)
+                self.assertNotIn('Compiling BinaryConsumer', second)
                 self.assertEqual(output, 'base\ntwo\n')
                 added = root/'Sources/Base/Added.swift'; added.write_text('func extra() -> String { "added" }\n')
                 library.write_text('public func value() -> String { extra() }\n')
                 third, output = build(); self.assertIn('Compiling Base', third)
+                self.assertNotIn('Compiling BinaryConsumer', third)
                 self.assertEqual(output, 'added\ntwo\n')
                 added.unlink(); library.write_text('public func value() -> String { "removed" }\n')
                 fourth, output = build(); self.assertIn('Compiling Base', fourth)
+                self.assertNotIn('Compiling BinaryConsumer', fourth)
                 self.assertEqual(output, 'removed\ntwo\n')
 
 

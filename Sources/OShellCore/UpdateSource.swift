@@ -8,7 +8,8 @@ public enum UpdateFlavor: String {
     case intel = "macOS10.13-Intel", arm64 = "macOS13-arm64", intelModern = "macOS13-x86_64", universal = "macOS11-Universal"
     public static func select(appleSilicon: Bool, majorOS: Int) -> UpdateFlavor {
         if appleSilicon { return majorOS >= 13 ? .arm64 : .universal }
-        return majorOS >= 13 ? .intelModern : .intel
+        // One Intel package supports macOS 10.13 and later.
+        return .intel
     }
     public static var current: UpdateFlavor {
         var value: Int32 = 0, size = MemoryLayout<Int32>.size

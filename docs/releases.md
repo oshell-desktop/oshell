@@ -7,22 +7,20 @@
 | 构建目标 | 最低系统 | 架构 | DMG 文件后缀 |
 | --- | --- | --- | --- |
 | `legacy` | macOS 10.13 | Intel x86_64 | `macOS10.13-Intel` |
-| `compat` | macOS 11 | Universal：arm64 + x86_64 | `macOS11-Universal` |
 | `arm64` | macOS 13 | Apple Silicon arm64 | `macOS13-arm64` |
-| `intel` | macOS 13 | Intel x86_64 | `macOS13-x86_64` |
 
-现代版本以 macOS 13 为最低运行目标，可以用于更新系统；并非限制只能在 macOS 13 使用。四种包共用源码，最低系统和名称统一定义在 `scripts/release_targets.py`。macOS 11 的目标同时设置在项目和 SwiftTerm 的编译配置中，并非只改 Info.plist。
+现代版本以 macOS 13 为最低运行目标，可以用于更新系统；并非限制只能在 macOS 13 使用。两种包共用源码，最低系统和名称统一定义在 `scripts/release_targets.py`。Intel 包统一以 macOS 10.13 为最低目标；不再单独发布 Universal 和现代 Intel 包。
 
-所有任务均使用 GitHub 托管 Runner：元数据检查、Release 发布和更新站点使用 `ubuntu-24.04`；ARM64 DMG 使用 `macos-15`，Intel 与 Universal DMG 使用 `macos-15-intel`。四个目标最多并行执行四个 job，不依赖本机或组织的自托管节点。
+所有任务均使用 GitHub 托管 Runner：元数据检查、Release 发布和更新站点使用 `ubuntu-24.04`；ARM64 DMG 使用 `macos-15`，Intel DMG 使用 `macos-15-intel`。两个目标最多并行执行两个 job，不依赖本机或组织的自托管节点。
 
-仅需编译时，在 **Run workflow** 中关闭 **publish**。流程不创建版本标签、不发布 Release，也不读取更新签名私钥；安装包仍使用固定代码签名身份。四种 DMG 保存在本次运行的 `dmg-*` Artifacts，可分别下载。
+仅需编译时，在 **Run workflow** 中关闭 **publish**。流程不创建版本标签、不发布 Release，也不读取更新签名私钥；安装包仍使用固定代码签名身份。两种 DMG 保存在本次运行的 `dmg-*` Artifacts，可分别下载。
 
 发布步骤：
 
 1. 更新 `scripts/Info.plist` 的 `CFBundleShortVersionString`，递增 `CFBundleVersion`，在 `CHANGELOG.md` 中添加对应版本的变更内容，再提交所有源码和流水线文件。Release 说明会自动提取该版本章节，放在“本次变更”中；缺失、空白或重复的版本章节会阻止发布。
 2. 将提交推送到 GitHub。手动发布时进入 **Actions → Build and publish macOS DMGs → Run workflow**，选择要发布的分支（通常为 `main`），**tag 留空**。流程读取该提交的 Info.plist，例如版本 `0.2.61` 会创建 `v0.2.61`；也可明确填写匹配版本。已有同名标签必须指向所选提交，流程不会移动或覆盖它。若需重试旧版本，请选择原标签作为运行来源。标签与源码版本不匹配时，会在创建标签和编译前报错。也可以自行创建并推送匹配的 `vX.Y.Z` 标签来触发发布。
-3. 标签确定后，Actions 会运行四个独立构建任务。四个任务全部完成核心测试、DMG 挂载检查、全部 Mach-O 的架构/最低系统检查和签名完整性检查后，才进入发布阶段。
-4. Release 先以草稿创建，上传四个 DMG 和对应源码包，并在 Release 说明中嵌入四种目标的签名更新信息。`SHA256SUMS.txt` 和 `release-manifest.json` 放在每个 DMG 内，不再单独上传为 Release 附件。确认远端附件完整后才公开发布并设为 Latest。
+3. 标签确定后，Actions 会运行两个独立构建任务。两个任务全部完成核心测试、DMG 挂载检查、全部 Mach-O 的架构/最低系统检查和签名完整性检查后，才进入发布阶段。
+4. Release 先以草稿创建，上传两个 DMG 和对应源码包，并在 Release 说明中嵌入两种目标的签名更新信息。`SHA256SUMS.txt` 和 `release-manifest.json` 放在每个 DMG 内，不再单独上传为 Release 附件。确认远端附件完整后才公开发布并设为 Latest。
 
 GitHub API 只使用自动提供的 `GITHUB_TOKEN`，无需额外 PAT。发布前还需在仓库 **Settings → Secrets and variables → Actions** 配置 `OSHELL_UPDATE_SIGNING_KEY`，内容为现有 Sparkle Ed25519 私钥文件中的 Base64 种子。该密钥必须与应用的 `SUPublicEDKey` 匹配，不能重新生成替代。密钥仅在签名步骤写入临时 0600 文件，完成后清理；不写入源码、日志或发布附件。缺少密钥时停止发布，避免生成会导致检查更新失败的不完整 Release。仓库需允许 Actions 运行；构建阶段仅有 `contents: read`，准备标签和发布 job 申请 `contents: write`。如果组织策略禁止写权限，需要仓库管理员允许该工作流发布 Release。工作流不读取开发者本机 `.release-private`，由维护者配置加密 Secret，也不设置默认更新仓库。
 
@@ -49,13 +47,13 @@ Release 保持整模块优化，因此一个文件的变化可能重编其所属
 
 ## 本地构建与 CI 安装包
 
-日常开发仅运行 `bash scripts/build.sh`，保留本机架构的 `dist/OShell.app`。四种兼容安装包通过上方 Actions 流程生成；需要构建但暂不发布时关闭 `publish`。
+日常开发仅运行 `bash scripts/build.sh`，保留本机架构的 `dist/OShell.app`。两种兼容安装包通过上方 Actions 流程生成；需要构建但暂不发布时关闭 `publish`。
 
 流水线使用 `package-release.py --flavor <目标> --format dmg --test-core`，并用 `verify-installers.py` 校验。高级手动打包命令仍可用于排查 CI，但不会由本地默认构建触发。带 UI 测试标记的应用不能打包或通过发布验证。
 
 ## 固定代码签名身份
 
-本地正式构建与 Actions 共用同一张证书，以 `scripts/code-signing.json` 中的公开指纹固定身份。签名要求同时绑定证书和应用标识，升级后不随可执行文件哈希变化；四种安装包必须使用同一身份。缺少私钥或证书指纹不匹配时构建失败，不自动生成新证书或回退 ad-hoc 签名。
+本地正式构建与 Actions 共用同一张证书，以 `scripts/code-signing.json` 中的公开指纹固定身份。签名要求同时绑定证书和应用标识，升级后不随可执行文件哈希变化；两种安装包必须使用同一身份。缺少私钥或证书指纹不匹配时构建失败，不自动生成新证书或回退 ad-hoc 签名。
 
 维护者的加密 PKCS#12 文件和密码保存在 `.release-private/code-signing/`，目录权限 0700、文件权限 0600，须另外安全备份。首次创建使用带 cryptography 的 Python 运行 `scripts/init-code-signing.py`；该命令拒绝覆盖已有身份，日常构建和 CI 不会调用它。私钥及其密码不得进入源码、日志、构建产物或 Release。
 
@@ -69,13 +67,17 @@ GitHub Actions 使用仓库 Secret `OSHELL_CODESIGN_P12`（加密 PKCS#12 的 Ba
 
 ## 内置更新
 
+默认更新仓库为 `oshell-desktop/oshell`（`https://github.com/oshell-desktop/oshell.git`），对应更新站点为 `https://oshell-desktop.github.io/oshell/`。已有用户手动填写的仓库仍优先生效。
+
 当前客户端通过 `https://<owner>.github.io/<repository>/updates/latest.json` 获取已签名的更新信息，不调用匿名 GitHub Releases REST API，也不要求用户配置 Token。标准 Pages 地址由“更新仓库”的 `owner/repository` 推导；Pages 部署步骤见下方。
 
-安装包仍存放在 GitHub Releases。CI 将四种目标的签名元数据嵌入 Release 说明的 `oshell-update-v1` 隐藏注释，再生成 Pages 静态索引；修改发布说明时必须保留这些注释。不会生成独立 XML 或 `*-update.zip` 附件。
+安装包仍存放在 GitHub Releases。CI 将两种目标的签名元数据嵌入 Release 说明的 `oshell-update-v1` 隐藏注释，再生成 Pages 静态索引；修改发布说明时必须保留这些注释。不会生成独立 XML 或 `*-update.zip` 附件。
 
 Sparkle 2.9.6 负责校验签名、下载、安装及重启。客户端通过随机路径的本机回环适配通道交给 Sparkle 处理，保留 `SURequireSignedFeed`、`SUVerifyUpdateBeforeExtraction` 及原有公钥。校验失败不降级。更新签名不等同于 Apple Developer ID 签名或公证。
 
-Apple Silicon 的 macOS 13+ 使用 arm64 包，macOS 11/12 使用 Universal 包；Intel 的 macOS 13+ 使用 x86_64 包，更早系统使用 macOS 10.13 Intel 包。客户端只下载匹配目标的 DMG。
+Apple Silicon 的 macOS 13+ 使用 arm64 包；所有受支持的 Intel 系统统一使用 macOS 10.13 Intel 包。Apple Silicon 的 macOS 11/12 不再提供新版安装包。客户端只下载匹配目标的 DMG。
+
+已安装的旧版现代 Intel 客户端仍查找 `macOS13-x86_64` 更新，切换为两种包后需要手动安装一次 Intel 兼容包；此后使用统一的 Intel 更新通道。历史目标定义仅保留用于手动排查，不参与默认构建或发布。
 
 CI 使用 `OSHELL_UPDATE_SIGNING_KEY` Secret。维护者本地的 `.release-private/` 不属于构建缓存，清理脚本不会删除其中的私钥。现有发行线不能随意替换公钥或生成新密钥；独立 fork 应使用自己的更新密钥。
 
@@ -112,9 +114,9 @@ python3 scripts/export-public-source.py --ref HEAD --output dist/source/OShell-s
 
 管理员首次在仓库 Settings → Pages 将发布来源设为 GitHub Actions。`.github/workflows/update-pages.yml` 可以手动执行，用最新已公开的正式 Release 初始化或修复更新站点，无需重建安装包或重新签名。正式发布流水线在 Release 上传校验并公开成功后调用它；只编译模式不部署 Pages。
 
-部署任务使用 Actions 的短期 `GITHUB_TOKEN` 读取最新 Release，验证四份更新元数据的 Ed25519 签名、版本一致性、DMG 名称和大小，然后生成站点。它不读取发布私钥，也不向 Pages 上传源码、配置或安装包。权限为 `contents: read`、`pages: write`、`id-token: write`；站点环境为 `github-pages`。部署串行执行，每次读取最新正式版本，避免旧构建任务拿自己的旧版本覆盖更新源。仓库如限制部署分支，需要允许主分支及发布标签。
+部署任务使用 Actions 的短期 `GITHUB_TOKEN` 读取最新 Release，验证两份更新元数据的 Ed25519 签名、版本一致性、DMG 名称和大小，然后生成站点。它不读取发布私钥，也不向 Pages 上传源码、配置或安装包。权限为 `contents: read`、`pages: write`、`id-token: write`；站点环境为 `github-pages`。部署串行执行，每次读取最新正式版本，避免旧构建任务拿自己的旧版本覆盖更新源。仓库如限制部署分支，需要允许主分支及发布标签。
 
-Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按四种平台包装原有签名数据，不改变签名覆盖的字节；客户端仍由 Sparkle 验证更新信息与 DMG。Releases 保留原有签名注释供 0.2.61–0.2.63 客户端升级一次使用，不增加 XML、update ZIP 或额外 JSON 附件。
+Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按两种平台包装原有签名数据，不改变签名覆盖的字节；客户端仍由 Sparkle 验证更新信息与 DMG。Releases 保留原有签名注释供 0.2.61–0.2.63 客户端升级一次使用，不增加 XML、update ZIP 或额外 JSON 附件。
 
 客户端缓存成功检查结果五分钟；请求失败至少等待一分钟，服务端提供 Retry-After 时遵循其等待时间。过期缓存不会伪装成新的成功检查。Pages 暂不可用时明确报错，不回退到匿名 API。仍使用旧通道的客户端需要升级一次；被 API 限流时可等额度恢复或手动安装新版。
 

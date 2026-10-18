@@ -53,11 +53,10 @@
 
 | 构建 | 运行系统 | 架构 |
 | --- | --- | --- |
-| 现代版 | macOS 13 或更新版本 | Apple Silicon arm64 / Intel x86_64 |
-| 通用兼容版 | macOS 11 或更新版本 | Universal（arm64 + x86_64） |
-| Intel 兼容版 | macOS 10.13 或更新版本 | Intel x86_64 |
+| Apple Silicon 版 | macOS 13 或更新版本 | arm64 |
+| Intel 兼容版 | macOS 10.13 或更新版本 | x86_64（amd64） |
 
-macOS 10.13 / 11 是兼容构建目标，仍需真实旧系统上的进一步验证。具体安装包、签名和公证状态以对应 Release 说明为准。
+macOS 10.13 是兼容构建目标，仍需真实旧系统上的进一步验证。具体安装包、签名和公证状态以对应 Release 说明为准。
 
 从项目的 Releases 页面选择适合系统和架构的 DMG，将应用拖入 Applications。升级前退出应用，再覆盖安装。没有已发布安装包时，可以从源码构建。
 

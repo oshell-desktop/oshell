@@ -87,6 +87,8 @@ and both cursor renderers; the selected font takes precedence when supported.
 
 OShell arrangement scrolling: the macOS terminal wheel handler is overridable so the host can forward unused scrolling to arranged panes while preserving terminal scrollback and TUI mouse handling.
 
+SwiftTerm display buffer: expose the read-only displayBuffer accessor so host-side repeated word selection uses the same buffer as SwiftTerm's native mouse handlers.
+
 SwiftTerm package manifest: allow the OShell release build to supply its deployment target, including the macOS 11 Universal compatibility flavor. Default development and macOS 10.13 behavior are retained.
 
 DejaVu Sans Mono 2.37
@@ -97,6 +99,17 @@ Upstream: https://dejavu-fonts.github.io/
 Full upstream notices: Vendor/DejaVuFonts/LICENSE, also distributed in
 Contents/Resources/DejaVuFonts. These font licenses remain in effect and
 are not replaced by OShell's GPL license.
+
+Cascadia Code 2407.24
+---------------------
+Copyright (c) 2019 - Present, Microsoft Corporation.
+Reserved Font Name: Cascadia Code.
+OShell bundles the unmodified static TrueType Regular, Bold, Italic and
+Bold Italic faces under the SIL Open Font License, Version 1.1.
+Upstream: https://github.com/microsoft/cascadia-code/releases/tag/v2407.24
+Full license: Vendor/CascadiaCode/LICENSE, also distributed in
+Contents/Resources/CascadiaCode. The font license is not replaced by
+OShell's GPL license. Fonts are registered for this process only.
 
 Unicode 17.0.0 East Asian Ambiguous width data
 https://www.unicode.org/Public/17.0.0/ucd/EastAsianWidth.txt

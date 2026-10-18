@@ -4,3 +4,5 @@
 *.gz -text
 *.zip -text
 Vendor/Sparkle/** -text
+*.ttf -text
+Vendor/CascadiaCode/LICENSE -text

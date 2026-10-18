@@ -389,7 +389,7 @@ open class Terminal {
     public private(set) var synchronizedOutputActive: Bool = false
     private var synchronizedOutputTimeoutItem: DispatchWorkItem?
 
-    var displayBuffer: Buffer {
+    public var displayBuffer: Buffer {
         buffer
     }
 

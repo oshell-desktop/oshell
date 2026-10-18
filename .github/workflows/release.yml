@@ -13,7 +13,7 @@ on:
         required: false
         type: string
       publish:
-        description: '发布 GitHub Release（需配置更新签名 Secret）；关闭则仅编译四种 DMG'
+        description: '发布 GitHub Release（需配置更新签名 Secret）；关闭则仅编译两种 DMG'
         type: boolean
         default: true
 
@@ -81,17 +81,13 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 2
       matrix:
         include:
           - flavor: legacy
             runner: macos-15-intel
-          - flavor: compat
-            runner: macos-15-intel
           - flavor: arm64
             runner: macos-15
-          - flavor: intel
-            runner: macos-15-intel
     env:
       # Pin a toolchain that includes the macOS 10.13 Swift runtime.
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
@@ -218,7 +214,7 @@ jobs:
           pattern: updates-*
           path: work/update-input
           merge-multiple: false
-      - name: Require four matching DMGs and prepare checksums
+      - name: Require two matching DMGs and prepare checksums
         run: |
           python3 scripts/ci-release.py collect --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" \
             --artifacts work/release-input --updates-artifacts work/update-input --repository "$GITHUB_REPOSITORY" \

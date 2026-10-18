@@ -17,4 +17,5 @@ TARGETS = {
     # Retain the existing optional modern Universal command for local builds.
     'modern': ReleaseTarget(('arm64', 'x86_64'), '13.0', 'macOS13-Universal'),
 }
-RELEASE_FLAVORS = ('legacy', 'compat', 'arm64', 'intel')
+# Historical targets remain available for explicit local diagnostics only.
+RELEASE_FLAVORS = ('legacy', 'arm64')

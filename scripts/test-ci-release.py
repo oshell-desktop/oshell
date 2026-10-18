@@ -53,10 +53,10 @@ class ReleaseTests(unittest.TestCase):
         _, jobs = self.workflow_jobs('release.yml')
         build = jobs['build']
         self.assertIn('runs-on: ${{ matrix.runner }}', build)
-        self.assertIn('max-parallel: 4', build)
+        self.assertIn('max-parallel: 2', build)
         self.assertNotIn('container:', build)
         entries = re.findall(r'- flavor: (\w+)\n\s+runner: ([\w-]+)', build)
-        self.assertEqual(entries, [('legacy','macos-15-intel'),('compat','macos-15-intel'),('arm64','macos-15'),('intel','macos-15-intel')])
+        self.assertEqual(entries, [('legacy','macos-15-intel'),('arm64','macos-15')])
         self.assertIn('/Applications/Xcode_16.4.app/Contents/Developer', build)
         self.assertIn('actions/cache/restore@', build)
         self.assertIn('actions/cache/save@', build)
@@ -101,8 +101,8 @@ class ReleaseTests(unittest.TestCase):
     def mutate(self, flavor, change):
         path = self.incoming/('dmg-' + flavor)/'manifest.json'; value = json.loads(path.read_text()); change(value); path.write_text(json.dumps(value))
 
-    def test_four_distinct_target_names(self):
-        self.assertEqual(len({CI.artifact_name('1.2.3', flavor) for flavor in RELEASE_FLAVORS}), 4)
+    def test_two_distinct_target_names(self):
+        self.assertEqual(len({CI.artifact_name('1.2.3', flavor) for flavor in RELEASE_FLAVORS}), 2)
         self.assertEqual(TARGETS['legacy'].architectures, ('x86_64',))
         self.assertEqual(TARGETS['compat'].architectures, ('arm64', 'x86_64'))
         self.assertEqual(TARGETS['compat'].minimum, '11.0')
@@ -213,8 +213,8 @@ class ReleaseTests(unittest.TestCase):
 
     def test_collect_complete_set_and_checksums(self):
         result = self.collect()
-        self.assertEqual(len(result['installers']), 4)
-        self.assertEqual(len(list(self.output.glob('*.dmg'))), 4)
+        self.assertEqual(len(result['installers']), 2)
+        self.assertEqual(len(list(self.output.glob('*.dmg'))), 2)
         self.assertFalse(result['notarized'])
         for line in (self.output/'SHA256SUMS.txt').read_text().splitlines():
             expected, name = line.split('  ', 1); self.assertEqual(CI.sha256(self.output/name), expected)
@@ -264,7 +264,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_missing_build_prevents_release(self):
         import shutil
-        shutil.rmtree(self.incoming/'dmg-intel')
+        shutil.rmtree(self.incoming/'dmg-legacy')
         with self.assertRaises(ValueError): self.collect()
         self.assertFalse(self.output.exists())
 
@@ -273,11 +273,11 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.collect()
 
     def test_wrong_architecture_rejected(self):
-        self.mutate('intel', lambda record: record['verification'].update(architectures=['arm64']))
+        self.mutate('legacy', lambda record: record['verification'].update(architectures=['arm64']))
         with self.assertRaises(ValueError): self.collect()
 
     def test_wrong_minimum_rejected(self):
-        self.mutate('compat', lambda record: record['verification'].update(minimumOS='13.0'))
+        self.mutate('legacy', lambda record: record['verification'].update(minimumOS='13.0'))
         with self.assertRaises(ValueError): self.collect()
 
     def test_unverified_payload_rejected(self):
@@ -285,7 +285,7 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.collect()
 
     def test_modified_dmg_rejected(self):
-        next((self.incoming/'dmg-intel').glob('*.dmg')).write_bytes(b'tampered fixture')
+        next((self.incoming/'dmg-legacy').glob('*.dmg')).write_bytes(b'tampered fixture')
         with self.assertRaises(ValueError): self.collect()
 
     def test_unexpected_files_rejected(self):
@@ -334,7 +334,7 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(CI, 'gh', self.fake_gh(calls)): CI.publish(META, 'owner/repo', self.output)
         upload = next(call for call in calls if call[:2] == ('release', 'upload'))
         self.assertFalse(any(path.endswith(('.xml','-update.zip','.json','.txt')) for path in upload))
-        self.assertEqual(len(list(self.output.glob('*.dmg'))),4)
+        self.assertEqual(len(list(self.output.glob('*.dmg'))),2)
 
     def test_missing_update_architecture_prevents_release(self):
         import shutil

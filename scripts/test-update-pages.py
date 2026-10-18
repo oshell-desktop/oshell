@@ -26,7 +26,7 @@ class PagesTests(unittest.TestCase):
     def generate(self, release=None): return PAGES.document(release or self.release, 'example/OShell', self.public)
     def test_complete_signed_release(self):
         value = self.generate()
-        self.assertEqual(value['build'], '45'); self.assertEqual(len(value['platforms']), 4)
+        self.assertEqual(value['build'], '45'); self.assertEqual(len(value['platforms']), 2)
         for suffix,platform in value['platforms'].items():
             self.assertIn(f':{suffix}:{platform["signedFeed"]} -->', self.release['body'])
     def test_publication_failure_never_writes_site(self):

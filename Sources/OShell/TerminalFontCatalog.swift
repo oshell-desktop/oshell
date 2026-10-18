@@ -34,7 +34,7 @@ enum TerminalFontCatalog {
             guard !family.hasPrefix("."), family != "LastResort",
                   let font = manager.font(withFamily: family, traits: [], weight: 5, size: 13),
                   supportsTerminalText(font), seen.insert(font.fontName).inserted,
-                  !font.fontName.hasPrefix("DejaVuSansMono") else { return nil }
+                  !font.fontName.hasPrefix("DejaVuSansMono"), font.familyName != "Cascadia Code" else { return nil }
             let path = (CTFontCopyAttribute(font as CTFont, kCTFontURLAttribute) as? URL)?.path ?? ""
             let system = path.hasPrefix("/System/Library/") || path.hasPrefix("/Library/Apple/System/")
             return Entry(name: font.fontName, title: font.familyName ?? family, monospaced: isMonospaced(font), system: system)
@@ -55,6 +55,7 @@ enum TerminalFontCatalog {
         }
         add("系统等宽（自动）", name: "")
         add("DejaVu Sans Mono（内置）", name: "DejaVuSansMono")
+        add("Cascadia Code（内置）", name: "CascadiaCode-Regular")
         let entries = available()
         for (monospaced, title) in [(true, "本机等宽字体（推荐）"), (false, "其他本机字体（非等宽）")] {
             let group = entries.filter { $0.monospaced == monospaced }

@@ -27,20 +27,25 @@ enum SessionSidebarPreferences {
 final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSSearchFieldDelegate {
     final class Node: NSObject {
         let key: String, title: String, metadata: String, directory: String?
-        let profileID: UUID?
+        let profileID: UUID?, linkID: UUID?
         let isLink: Bool
         var children = [Node](), visible = [Node]()
-        init(key: String, title: String, metadata: String, directory: String? = nil, profileID: UUID? = nil, isLink: Bool = false) {
-            self.key = key; self.title = title; self.metadata = metadata; self.directory = directory; self.profileID = profileID; self.isLink = isLink
+        init(key: String, title: String, metadata: String, directory: String? = nil, profileID: UUID? = nil, isLink: Bool = false, linkID: UUID? = nil) {
+            self.key = key; self.title = title; self.metadata = metadata; self.directory = directory; self.profileID = profileID; self.isLink = isLink; self.linkID = linkID
         }
     }
     private final class Outline: NSOutlineView {
         var onReturn: (() -> Void)?
+        var makeContextMenu: ((Int) -> NSMenu?)?
+        override func menu(for event: NSEvent) -> NSMenu? {
+            makeContextMenu?(row(at: convert(event.locationInWindow, from: nil)))
+        }
         override func keyDown(with event: NSEvent) {
             if event.keyCode == 36 && event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty { onReturn?() }
             else { super.keyDown(with: event) }
         }
     }
+    private var actions: SessionManager?
     private let tree = Outline()
     var outline: NSOutlineView { tree }
     let search = NSSearchField()
@@ -58,9 +63,10 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         search.placeholderString = "搜索会话、主机或目录"; search.delegate = self
         search.identifier = .init("sidebar.session.search"); search.setAccessibilityLabel("搜索会话列表")
         let column = NSTableColumn(identifier: .init("session")); column.width = 240
-        tree.addTableColumn(column); tree.outlineTableColumn = column; tree.headerView = nil; tree.rowHeight = 28
+        tree.addTableColumn(column); tree.outlineTableColumn = column; tree.headerView = nil; tree.rowHeight = 28; tree.allowsMultipleSelection = true
         tree.indentationPerLevel = 14; tree.dataSource = self; tree.delegate = self; tree.target = self; tree.doubleAction = #selector(activateClicked)
         tree.onReturn = { [weak self] in self?.activateSelected() }
+        tree.makeContextMenu = { [weak self] row in self?.contextMenu(for: row) }
         tree.setAccessibilityLabel("会话目录树"); tree.identifier = .init("sidebar.session.tree")
         if #available(macOS 11, *) { tree.style = .plain }
         let scroll = NSScrollView(); scroll.documentView = tree; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
@@ -95,7 +101,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         for link in configuration.sessionLinks.entries {
             guard let profile = profiles[link.profileID] else { continue }
             let path = SessionLinks.directory(for: link.folder)
-            let node = Node(key: "l:"+link.id.uuidString, title: link.name, metadata: SessionSearchQuery.metadata(profile)+" "+SessionSearchQuery.normalize(link.name+" "+SessionDirectory.display(path)), profileID: profile.id, isLink: true)
+            let node = Node(key: "l:"+link.id.uuidString, title: link.name, metadata: SessionSearchQuery.metadata(profile)+" "+SessionSearchQuery.normalize(link.name+" "+SessionDirectory.display(path)), profileID: profile.id, isLink: true, linkID: link.id)
             nodes[node.key] = node; directories[path]?.children.append(node)
         }
         for node in [root] + Array(nodes.values) {
@@ -166,7 +172,27 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         cell.toolTip = node.directory.map(SessionDirectory.display) ?? node.metadata
         return cell
     }
-    func dispose() { tree.delegate = nil; tree.dataSource = nil; tree.onReturn = nil; search.delegate = nil; onOpen = nil; onHide = nil; onManage = nil }
+    func configureActions(workspace: WorkspaceController) {
+        actions = SessionManager(workspace: workspace, sidebar: self)
+    }
+    func contextMenu(for row: Int) -> NSMenu? {
+        let node = row >= 0 ? tree.item(atRow: row) as? Node : nil
+        if node != nil {
+            if !tree.selectedRowIndexes.contains(row) { tree.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+        }
+        else { tree.deselectAll(nil) }
+        return actions?.sidebarContextMenu(tree.selectedRowIndexes.compactMap { tree.item(atRow: $0) as? Node }, clicked: node)
+    }
+    func revealDirectory(_ directory: String) {
+        search.stringValue = ""; filter(preserving: nil)
+        var path = directory, ancestors = [String]()
+        while !path.isEmpty { ancestors.append(path); path = SessionDirectory.parent(path) }
+        for path in ancestors.reversed() { if let node = nodes["d:"+path] { tree.expandItem(node) } }
+        if let node = nodes["d:"+directory], tree.row(forItem: node) >= 0 {
+            let row = tree.row(forItem: node); tree.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false); tree.scrollRowToVisible(row)
+        }
+    }
+    func dispose() { actions = nil; tree.makeContextMenu = nil; tree.delegate = nil; tree.dataSource = nil; tree.onReturn = nil; search.delegate = nil; onOpen = nil; onHide = nil; onManage = nil }
 }
 
 extension WorkspaceController {
@@ -178,6 +204,7 @@ extension WorkspaceController {
         for view in [left, divider, terminalWorkspace] { view.translatesAutoresizingMaskIntoConstraints = false; host.addSubview(view) }
         sidebarWidth = left.widthAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([left.topAnchor.constraint(equalTo: host.topAnchor), left.bottomAnchor.constraint(equalTo: host.bottomAnchor), left.leadingAnchor.constraint(equalTo: host.leadingAnchor), sidebarWidth!, divider.leadingAnchor.constraint(equalTo: left.trailingAnchor), divider.widthAnchor.constraint(equalToConstant: 1), divider.topAnchor.constraint(equalTo: host.topAnchor), divider.bottomAnchor.constraint(equalTo: host.bottomAnchor), terminalWorkspace.leadingAnchor.constraint(equalTo: divider.trailingAnchor), terminalWorkspace.trailingAnchor.constraint(equalTo: host.trailingAnchor), terminalWorkspace.topAnchor.constraint(equalTo: host.topAnchor), terminalWorkspace.bottomAnchor.constraint(equalTo: host.bottomAnchor)])
+        sessionSidebar.configureActions(workspace: self)
         sessionSidebar.onOpen = { [weak self] id in
             guard let self, self.isSecurityUnlocked, let profile = self.configuration.profiles.first(where: { $0.id == id }) else { return }
             self.open(profile)
