@@ -18,6 +18,7 @@ import tempfile
 from release_targets import TARGETS, RELEASE_FLAVORS
 import installer_metadata
 import code_signing
+from compilation_cache import CompilationCache
 
 ROOT = Path(__file__).resolve().parent.parent
 WORK = ROOT / 'work/release'
@@ -50,6 +51,15 @@ def core_check_command(binaries, native):
 def build_swift(flavor, arch, minimum):
     base = ROOT / ('work/build-legacy' if flavor == 'legacy' else f'work/build-compat-{arch}' if flavor == 'compat' else f'work/build-modern-{arch}')
     if INCLUDE_TESTS: base = ROOT / f'work/build-test-{flavor}-{arch}'
+    cache = CompilationCache(ROOT, f'swift-{flavor}-{arch}-{minimum}',
+        ['Package.swift', 'Package.resolved', 'Sources', 'Tests/OShellCoreTests',
+         'Vendor/SwiftTerm', 'Vendor/CryptoSwift', 'Vendor/Sparkle/Sparkle.xcframework',
+         'scripts/package-release.py', 'scripts/compilation_cache.py'],
+        dict(flavor=flavor, arch=arch, minimum=minimum, tests=INCLUDE_TESTS))
+    restored = base/'cached-products'
+    if restored.exists(): shutil.rmtree(restored)
+    products = [*PROGRAMS, 'OShellCoreChecks']
+    if cache.restore(restored, products): return restored
     env = dict(os.environ, OSHELL_LEGACY='1' if flavor == 'legacy' else '0', OSHELL_MACOS_MINIMUM=minimum, OSHELL_TEST_HARNESS='1' if INCLUDE_TESTS else '0')
     args = ['swift','build','--package-path',ROOT,'--scratch-path',base/'swift','--cache-path',base/'cache',
         '--config-path',base/'config','--security-path',base/'security','--disable-sandbox','-c','release',
@@ -59,12 +69,21 @@ def build_swift(flavor, arch, minimum):
     if flavor == 'legacy': args += ['-Xswiftc','-DOSHELL_LEGACY']
     print('Building',flavor,arch,flush=True)
     run(args,env=env,log=f'package-{flavor}-{arch}-build.log')
-    return base/'swift'/f'{arch}-apple-macosx'/'release'
+    binaries = base/'swift'/f'{arch}-apple-macosx'/'release'
+    cache.store(binaries, products + [p.name for p in binaries.glob('*.bundle')])
+    return binaries
 
 def build_lrzsz(arch, minimum):
     base = WORK/f'lrzsz-{arch}-{minimum}'
+    cache = CompilationCache(ROOT, f'lrzsz-{arch}-{minimum}',
+        ['Vendor/lrzsz-0.12.20.tar.gz', 'scripts/package-release.py', 'scripts/compilation_cache.py'],
+        dict(arch=arch, minimum=minimum))
+    restored = WORK/f'cached-lrzsz-{arch}-{minimum}'
+    if restored.exists(): shutil.rmtree(restored)
+    products = ['src/lrz', 'src/lsz', 'COPYING']
+    if cache.restore(restored, products): return restored/'src'
     marker = base/'.built-public-paths'
-    if not marker.exists():
+    if cache.entry is not None or not marker.exists():
         base.mkdir(parents=True,exist_ok=True)
         run(['tar','-xzf',ROOT/'Vendor/lrzsz-0.12.20.tar.gz','--strip-components=1','-C',base])
         env=dict(os.environ,CC='clang',CFLAGS=f'-arch {arch} -Os -mmacosx-version-min={minimum} -std=gnu89 -Wno-error=implicit-function-declaration -Wno-error=incompatible-function-pointer-types -ffile-prefix-map={ROOT}=/OShell -fdebug-prefix-map={ROOT}=/OShell',LDFLAGS=f'-arch {arch} -mmacosx-version-min={minimum}')
@@ -73,6 +92,7 @@ def build_lrzsz(arch, minimum):
         run(['make','clean'],cwd=base,env=env,log=f'package-lrzsz-{arch}-{minimum}-clean.log')
         run(['make','-j4'],cwd=base,env=env,log=f'package-lrzsz-{arch}-{minimum}-build.log')
         marker.write_text('OShell reproducible helper build\n')
+    cache.store(base, products)
     return base/'src'
 
 def macho(path):

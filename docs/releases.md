@@ -38,6 +38,17 @@ GitHub API 只使用自动提供的 `GITHUB_TOKEN`，无需额外 PAT。发布�
 
 参考：[GitHub 托管 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)、[macOS 15 工具链清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)、[GitHub CLI Release 命令](https://cli.github.com/manual/gh_release_create)。
 
+
+## MacBook 编译缓存
+
+`release.yml` 在 Runner 工具缓存目录下的 `oshell-compile-cache/<owner>/<repository>` 保存本机编译产物，位于源码检出目录和临时目录之外，checkout 清理不会删除它。不上传网络缓存。
+
+Swift 缓存按源码与测试代码、Package 定义、依赖内容、编译脚本、工具链与 SDK、检出路径、架构、最低系统版本和测试模式区分；匹配后复用编译结果。只改版本号或文档可以命中；相关源码变更会重新编译 Swift。rz/sz 辅助程序单独缓存，应用源码变化不影响其复用。
+
+缓存只保存所需的编译程序、资源 bundle 和辅助程序许可，不保存主密码、用户配置、签名私钥、已签名 App 或 DMG。每次构建仍重新执行核心检查、应用组装、固定签名、DMG 打包及完整安装包验证。缓存清单记录文件 SHA-256 和权限；损坏、缺失或格式不匹配时按未命中处理并重新构建。
+
+每个架构/目标缓存保留最近两代，命中情况写入 Actions 日志与任务摘要。删除对应仓库的缓存目录即可恢复冷构建；普通本地打包默认不启用缓存，只有设置 `OSHELL_COMPILATION_CACHE_DIR` 才启用。首次建立缓存的耗时不代表后续命中性能，评估时需使用同一提交分别比较冷、热两轮，并排除人工等待 Runner 授权的时间。
+
 ## 本地构建与 CI 安装包
 
 日常开发仅运行 `bash scripts/build.sh`，保留本机架构的 `dist/OShell.app`。四种兼容安装包通过上方 Actions 流程生成；需要构建但暂不发布时关闭 `publish`。

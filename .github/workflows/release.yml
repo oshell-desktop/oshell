@@ -54,6 +54,7 @@ jobs:
           python3 scripts/test-development-tools.py
           python3 scripts/test-code-signing.py
           python3 scripts/test-macbook-release.py
+          python3 scripts/test-compilation-cache.py
       - name: Resolve version and prepare immutable release tag
         id: meta
         env:
@@ -103,6 +104,8 @@ jobs:
       - name: Check toolchain
         run: |
           python3 scripts/check-macbook-toolchain.py --flavor "$FLAVOR" --github-env "$GITHUB_ENV"
+          # Keep compilation products outside checkout cleanup and runner temp.
+          echo "OSHELL_COMPILATION_CACHE_DIR=${RUNNER_TOOL_CACHE:?}/oshell-compile-cache/$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
       - name: Validate fixed code signing identity
         env:
           OSHELL_CODESIGN_P12: ${{ secrets.OSHELL_CODESIGN_P12 }}
