@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (c) 2026 OShell contributors
+name: MacBook native compilation check
+
+on:
+  push:
+    branches: [codex/macbook-runner-check]
+    paths: [.github/workflows/macbook-build-check.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macbook-native-compilation-check
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compile:
+    runs-on: [self-hosted, macOS, ARM64, self-macbook]
+    timeout-minutes: 60
+    env:
+      # Compilation validation only: no release credentials or publication.
+      OSHELL_ALLOW_ADHOC: '1'
+      OSHELL_REQUIRE_FIXED_SIGNING: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          path: macbook-check
+      - name: Verify native toolchain
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+          python3 --version
+      - name: Compile arm64 application and run core checks
+        working-directory: macbook-check
+        run: python3 scripts/package-release.py --flavor arm64 --apps-only --test-core
+      - name: Verify application bundle
+        working-directory: macbook-check
+        run: |
+          codesign --verify --deep --strict work/release/arm64/OShell.app
+          lipo -verify_arch arm64 work/release/arm64/OShell.app/Contents/MacOS/OShell
+          python3 scripts/check-public-source.py --app work/release/arm64/OShell.app
+          echo 'Native arm64 application compilation and core checks passed.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macbook-build-diagnostics
+          path: macbook-check/validation/package-*.log
+          if-no-files-found: ignore
+          retention-days: 3
