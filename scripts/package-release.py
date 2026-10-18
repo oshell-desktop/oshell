@@ -19,6 +19,7 @@ from release_targets import TARGETS, RELEASE_FLAVORS
 import installer_metadata
 import code_signing
 from compilation_cache import CompilationCache
+from incremental_cache import IncrementalCache
 
 ROOT = Path(__file__).resolve().parent.parent
 WORK = ROOT / 'work/release'
@@ -51,11 +52,11 @@ def core_check_command(binaries, native):
 def build_swift(flavor, arch, minimum):
     base = ROOT / ('work/build-legacy' if flavor == 'legacy' else f'work/build-compat-{arch}' if flavor == 'compat' else f'work/build-modern-{arch}')
     if INCLUDE_TESTS: base = ROOT / f'work/build-test-{flavor}-{arch}'
-    cache = CompilationCache(ROOT, f'swift-{flavor}-{arch}-{minimum}',
-        ['Package.swift', 'Package.resolved', 'Sources', 'Tests/OShellCoreTests',
+    inputs = ['Package.swift', 'Package.resolved', 'Sources', 'Tests/OShellCoreTests',
          'Vendor/SwiftTerm', 'Vendor/CryptoSwift', 'Vendor/Sparkle/Sparkle.xcframework',
-         'scripts/package-release.py', 'scripts/compilation_cache.py'],
-        dict(flavor=flavor, arch=arch, minimum=minimum, tests=INCLUDE_TESTS))
+         'scripts/package-release.py', 'scripts/compilation_cache.py', 'scripts/incremental_cache.py']
+    variant = dict(flavor=flavor, arch=arch, minimum=minimum, tests=INCLUDE_TESTS)
+    cache = CompilationCache(ROOT, f'swift-{flavor}-{arch}-{minimum}', inputs, variant)
     restored = base/'cached-products'
     if restored.exists(): shutil.rmtree(restored)
     products = [*PROGRAMS, 'OShellCoreChecks']
@@ -68,7 +69,13 @@ def build_swift(flavor, arch, minimum):
     args += ['-Xswiftc','-file-prefix-map','-Xswiftc',f'{ROOT}=/OShell','-Xswiftc','-debug-prefix-map','-Xswiftc',f'{ROOT}=/OShell','-Xswiftc','-file-compilation-dir','-Xswiftc','/OShell','-Xcc',f'-ffile-prefix-map={ROOT}=/OShell']
     if flavor == 'legacy': args += ['-Xswiftc','-DOSHELL_LEGACY']
     print('Building',flavor,arch,flush=True)
-    run(args,env=env,log=f'package-{flavor}-{arch}-build.log')
+    incremental = IncrementalCache(ROOT, f'{flavor}-{arch}-{minimum}',
+        ['Package.swift', 'Package.resolved', 'Vendor/SwiftTerm/Package.swift',
+         'Vendor/CryptoSwift/Package.swift', 'Vendor/Sparkle/Sparkle.xcframework',
+         'scripts/package-release.py', 'scripts/compilation_cache.py', 'scripts/incremental_cache.py'],
+        inputs, variant)
+    with incremental.workspace(base):
+        run(args,env=env,log=f'package-{flavor}-{arch}-build.log')
     binaries = base/'swift'/f'{arch}-apple-macosx'/'release'
     cache.store(binaries, products + [p.name for p in binaries.glob('*.bundle')])
     return binaries
