@@ -66,7 +66,7 @@ public final class StorageLocation {
         if choice.mode == .migrate {
             _ = try Self.validateData(at: source, master: master)
             let names = try FileManager.default.contentsOfDirectory(atPath: target.path).filter { $0 != ".DS_Store" }
-            guard names.isEmpty else { throw ModelError.invalid("新同步目录必须为空；已有加密数据请使用“连接已有同步目录”。") }
+            guard names.isEmpty else { throw ModelError.invalid("请选择空文件夹，或包含 configuration.json 的已有同步文件夹。") }
         } else {
             guard let data = try SharedDataFile.readIfPresent(target.appendingPathComponent("configuration.json")), SharedVault.isEncrypted(data) else { throw ModelError.invalid("请选择包含完整加密同步数据的目录。") }
             _ = try Self.validateData(at: target, master: master)
@@ -75,6 +75,19 @@ public final class StorageLocation {
     public func schedule(_ choice: Pending?, master: String? = nil) throws {
         if let choice { try validate(choice, master: master) }
         var state = try read(); state.pending = choice; try write(state)
+    }
+    /// Live selection only changes the replica destination, never moves the active database.
+    /// Legacy direct-directory migration still runs exclusively during startup.
+    public func activateReplica(_ choice: Pending, master: String) throws {
+        let state = try read()
+        guard state.current == nil || state.replicaVersion == 2 else { throw ModelError.invalid("旧版数据目录需先重新启动完成迁移。") }
+        try validate(choice, master: master)
+        _ = try Self.validateData(at: base, master: master)
+        guard let local = try SharedDataFile.readIfPresent(base.appendingPathComponent("configuration.json")), SharedVault.isEncrypted(local) else { throw ModelError.invalid("请先完成本机配置加密。") }
+        let target = URL(fileURLWithPath: choice.path).standardizedFileURL.resolvingSymlinksInPath()
+        let baseline = baselineURL(for: target)
+        if FileManager.default.fileExists(atPath: baseline.path) { try FileManager.default.removeItem(at: baseline) }
+        try write(State(current: target.path, pending: nil, replicaVersion: 2, allowCreate: choice.mode == .migrate))
     }
     public static func validateData(at directory: URL, master: String? = nil) throws -> Configuration {
         guard try SharedDataFile.readIfPresent(directory.appendingPathComponent("configuration.json")) != nil else { throw ModelError.invalid("目录中没有 OShell 的 configuration.json。") }

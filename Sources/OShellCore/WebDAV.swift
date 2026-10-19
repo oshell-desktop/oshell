@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 OShell contributors
 import Foundation
+import Security
 
 public struct WebDAVSettings: Codable {
     public var address: String
     public var username: String
     public var password: String
+    /// Stored only in this Mac's encrypted WebDAV settings, not the shared vault configuration.
+    public var trustedServerCertificate: WebDAVCertificateTrust? = nil
     public init(address: String, username: String, password: String) { self.address = address; self.username = username; self.password = password }
     public func directory(allowLoopbackHTTP: Bool = false) throws -> URL {
         guard var parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -23,13 +26,14 @@ public struct WebDAVObject {
     public let etag: String
 }
 public enum WebDAVFailure: Error, LocalizedError {
-    case conflict, authentication, status(Int), unsafeVersion, network, tooLarge, redirect
+    case conflict, authentication, status(Int), unsafeVersion, network, tls, tooLarge, redirect
     public var errorDescription: String? {
         switch self {
         case .conflict: return "共享版本已变化，未覆盖。请重新同步并确认冲突。"
         case .authentication: return "WebDAV 身份验证失败，请检查账号、密码及应用专用密码。"
         case .status(let code): return "WebDAV 返回 HTTP \(code)。请确认目录存在且账号有读写权限。"
         case .unsafeVersion: return "服务器未提供可用的强 ETag，无法安全同步；不会无条件覆盖数据。"
+        case .tls: return "WebDAV TLS 连接或证书校验失败，请检查服务器证书和 HTTPS 配置。"
         case .network: return "WebDAV 网络请求失败或超时，本地数据已保留。"
         case .tooLarge: return "WebDAV 响应超过大小限制。"
         case .redirect: return "WebDAV 地址发生重定向。请直接填写最终 HTTPS 目录地址。"
@@ -38,6 +42,29 @@ public enum WebDAVFailure: Error, LocalizedError {
 }
 private final class DAVRequest: NSObject, URLSessionDataDelegate {
     let done = DispatchSemaphore(value: 0)
+    let endpoint: URL
+    let pinned: WebDAVCertificateTrust?
+    init(endpoint: URL, pinned: WebDAVCertificateTrust?) { self.endpoint = endpoint; self.pinned = pinned }
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else { completionHandler(.performDefaultHandling, nil); return }
+        guard WebDAVCertificateTrust.normalizedHost(challenge.protectionSpace.host) == endpoint.host.map(WebDAVCertificateTrust.normalizedHost),
+              challenge.protectionSpace.port == (endpoint.port ?? 443),
+              let leaf = SecTrustGetCertificateAtIndex(trust, 0) else {
+            error = WebDAVFailure.tls; completionHandler(.cancelAuthenticationChallenge, nil); return
+        }
+        let certificate = WebDAVCertificateTrust(host: challenge.protectionSpace.host, port: challenge.protectionSpace.port, certificateDER: SecCertificateCopyData(leaf) as Data)
+        let pin = pinned.flatMap { $0.matches(endpoint) ? $0 : nil }
+        let changed = pin.map { $0.certificateDER != certificate.certificateDER } ?? false
+        let systemTrusted = WebDAVCertificateTrust.evaluate(trust)
+        if !changed && systemTrusted && (pin == nil || certificate.isCurrent()) { completionHandler(.performDefaultHandling, nil); return }
+        let validation = certificate.validation(trust)
+        if !changed, pin != nil, validation.acceptable {
+            completionHandler(.useCredential, URLCredential(trust: trust)); return
+        }
+        error = WebDAVCertificateIssue(certificate: certificate, changed: changed, canTrust: validation.acceptable, requiresExplicitIPTrust: validation.explicitIPTrust)
+        completionHandler(.cancelAuthenticationChallenge, nil)
+    }
     var data = Data(), response: HTTPURLResponse?, error: Error?
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { error = WebDAVFailure.redirect; completionHandler(nil) }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
@@ -49,7 +76,10 @@ private final class DAVRequest: NSObject, URLSessionDataDelegate {
         if data.count + chunk.count > SharedVault.maximumSize { error = WebDAVFailure.tooLarge; dataTask.cancel() }
         else { data.append(chunk) }
     }
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError failure: Error?) { if error == nil, failure != nil { error = WebDAVFailure.network }; done.signal() }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError failure: Error?) { if error == nil, let failure {
+            let value = failure as NSError
+            error = value.domain == NSURLErrorDomain && (-1206 ... -1200).contains(value.code) ? WebDAVFailure.tls : WebDAVFailure.network
+        }; done.signal() }
 }
 public final class WebDAVClient {
     private let settings: WebDAVSettings, directory: URL
@@ -63,7 +93,7 @@ public final class WebDAVClient {
         request.setValue("Basic " + Data((settings.username + ":" + settings.password).utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
         request.setValue("OShell", forHTTPHeaderField: "User-Agent")
         headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
-        let delegate = DAVRequest(), queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
+        let delegate = DAVRequest(endpoint: directory, pinned: settings.trustedServerCertificate), queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
         let config = URLSessionConfiguration.ephemeral; config.urlCache = nil; config.urlCredentialStorage = nil; config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.timeoutIntervalForResource = 45
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
         lock.lock(); let stopped = cancelled; if !stopped { active = session }; lock.unlock()

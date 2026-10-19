@@ -8,7 +8,7 @@ enum Dialogs {
     static func session(_ existing: SessionProfile? = nil, profiles: [SessionProfile] = [], directories: [String] = [], initialDirectory: String = "服务器", kind: SessionKind = .ssh, defaults: SessionDefaults = SessionDefaults(), proxies: [ProxyProfile] = [], manageProxies: (() -> [ProxyProfile])? = nil) -> SessionProfile? {
         SessionEditor(existing, profiles: profiles, directories: directories, initialDirectory: initialDirectory, kind: kind, defaults: defaults, proxies: proxies, manageProxies: manageProxies).run()
     }
-    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
+    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
         let font = NSPopUpButton()
         TerminalFontCatalog.populate(font, selected: current.fontName)
         let size = NSPopUpButton(); [11, 12, 13, 14, 15, 16, 18, 20, 24, 26].forEach { size.addItem(withTitle: String($0)) }
@@ -44,7 +44,7 @@ enum Dialogs {
         let updates = NSTabViewItem(identifier: "updates"); updates.label = "更新"; updates.view = updatesView; tabs.addTabViewItem(updates)
         let shortcuts = NSTabViewItem(identifier: "shortcuts"); shortcuts.label = "快捷键"; shortcuts.view = shortcutView; tabs.addTabViewItem(shortcuts)
         if let storageView {
-            let storage = NSTabViewItem(identifier: "storage"); storage.label = "数据与同步"; storage.view = storageView; tabs.addTabViewItem(storage)
+            let storage = NSTabViewItem(identifier: "storage"); storage.label = "多设备同步"; storage.view = storageView; tabs.addTabViewItem(storage)
         }
         let selectionTab = NSTabViewItem(identifier: "selection"); selectionTab.label = "选择"; selectionTab.view = selection; tabs.addTabViewItem(selectionTab)
         let textView = TerminalTextSettingsView(current)
@@ -54,7 +54,8 @@ enum Dialogs {
             let security = NSTabViewItem(identifier: "security"); security.label = "安全"; security.view = securityView; tabs.addTabViewItem(security)
         }
         let about = NSTabViewItem(identifier: "about"); about.label = "关于"; about.view = AboutSettingsView(preferences: current); tabs.addTabViewItem(about)
-        tabs.selectTabViewItem(at: updatesSelected ? 2 : (appearanceSelected ? 1 : 0))
+        if storageSelected, storageView != nil { tabs.selectTabViewItem(withIdentifier: "storage") }
+        else { tabs.selectTabViewItem(at: updatesSelected ? 2 : (appearanceSelected ? 1 : 0)) }
         let dialog = SettingsWindow(tabs: tabs, appearanceView: appearanceView)
         var prefs = current
         while true {

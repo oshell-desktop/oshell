@@ -59,6 +59,15 @@ final class TabStripView: InterfaceSurfaceView {
         var makeMenu: (() -> NSMenu?)?
         var dragEnabled = false
         var onDragEnd: (() -> Void)?
+        var onDragCompletion: ((NSPoint, NSDragOperation, Bool) -> Void)?
+        private var dragEventMonitor: Any?
+        private var dragCancelled = false
+        private var dragOriginFrame: NSRect?
+        private func clearDragMonitor() {
+            if let dragEventMonitor { NSEvent.removeMonitor(dragEventMonitor) }
+            dragEventMonitor = nil
+        }
+        deinit { clearDragMonitor() }
         func track(_ event: NSEvent) -> Bool {
             guard dragEnabled, !event.modifierFlags.contains(.control), event.clickCount == 1, let window else { return false }
             let start = event.locationInWindow
@@ -72,12 +81,32 @@ final class TabStripView: InterfaceSurfaceView {
                 NSColor.windowBackgroundColor.setFill(); NSBezierPath(roundedRect: NSRect(origin: .zero, size: bounds.size), xRadius: 4, yRadius: 4).fill()
                 (selectButton.title as NSString).draw(at: NSPoint(x: 10, y: 6), withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.labelColor]); image.unlockFocus()
                 item.setDraggingFrame(bounds, contents: image)
+                clearDragMonitor(); dragCancelled = false; dragOriginFrame = window.frame
+                dragEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    if event.keyCode == 53 { self?.dragCancelled = true }
+                    return event // AppKit still handles cancellation of its native drag session.
+                }
                 beginDraggingSession(with: [item], event: next, source: self); return true
             }
             return true
         }
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { context == .withinApplication ? .move : [] }
-        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { onDragEnd?() }
+        func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+            if onDragCompletion != nil, let frame = dragOriginFrame {
+                session.animatesToStartingPositionsOnCancelOrFail = frame.insetBy(dx: -12, dy: -12).contains(screenPoint)
+            }
+        }
+        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+            let escape = NSApp.currentEvent.map { $0.type == .keyDown && $0.keyCode == 53 } ?? false
+            // A cancelled native drag also reports .none. Never interpret Escape
+            // or cancellation while the button is still held as a detached tab.
+            let cancelled = dragCancelled || escape || NSEvent.pressedMouseButtons & 1 != 0
+            finishDragging(at: screenPoint, operation: operation, cancelled: cancelled)
+        }
+        func finishDragging(at screenPoint: NSPoint, operation: NSDragOperation, cancelled: Bool) {
+            clearDragMonitor(); dragOriginFrame = nil; dragCancelled = false
+            onDragEnd?(); onDragCompletion?(screenPoint, operation, cancelled)
+        }
         var selected = false { didSet { needsDisplay = true } }
         var hasUnreadOutput = false { didSet { if oldValue != hasUnreadOutput { needsDisplay = true } } }
         var connectionStatus: ConnectionStatus? { didSet { if oldValue != connectionStatus { needsDisplay = true } } }
@@ -153,6 +182,7 @@ final class TabStripView: InterfaceSurfaceView {
     var contextMenu: ((UUID) -> NSMenu?)?
     var allowsTabDragging = false
     var onDragEnd: (() -> Void)?
+    var onDragCompletion: ((UUID, NSPoint, NSDragOperation, Bool) -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([TabDropHost.pasteboardType])
@@ -210,6 +240,11 @@ final class TabStripView: InterfaceSurfaceView {
                 let item = Item(id: entry.id)
                 item.dragEnabled = allowsTabDragging
                 item.onDragEnd = { [weak self] in self?.onDragEnd?() }
+                // The group strip may be rebuilt while dragging. Keep the weak
+                // workspace callback, not a dependency on the old strip's lifetime.
+                if let completion = onDragCompletion {
+                    item.onDragCompletion = { point, operation, cancelled in completion(entry.id, point, operation, cancelled) }
+                }
                 item.onSelect = { [weak self] in self?.onSelect?(entry.id) }
                 item.onDuplicate = { [weak self] in self?.onDuplicate?(entry.id) }
                 item.onClose = { [weak self] in self?.onClose?(entry.id) }
@@ -231,6 +266,7 @@ final class TabStripView: InterfaceSurfaceView {
             item.selectButton.setAccessibilityValue((item.selected ? "已选中" : "未选中") + (entry.connectionStatus.map { "，" + $0.title } ?? "") + (entry.hasUnreadOutput ? "，有未读输出" : ""))
             item.toolTip = "\(number). \(entry.title)\n" + (entry.connectionStatus.map { "连接状态：" + $0.title + "\n" } ?? "") + (entry.hasUnreadOutput ? "有新输出，切换查看后清除提示\n" : "") + entry.detail
             if let number = entry.number { item.toolTip = (item.toolTip ?? "") + (number <= 9 ? "\n" + ShortcutRuntime.hint(ShortcutAction(rawValue: "tab\(number)")!) + " 跳转" : "\n" + ShortcutRuntime.hint(.tabNumber) + " 输入编号跳转") }
+            if onDragCompletion != nil { item.toolTip = (item.toolTip ?? "") + "\n拖出当前窗口并松开，可移到新窗口；Esc 取消拖动。" }
             item.selectButton.toolTip = item.toolTip
             item.closeButton.toolTip = "关闭“\(title)”"; item.closeButton.setAccessibilityLabel("关闭“\(title)”")
             item.preferredWidth = min(320, max(120, (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .bold)]).width + 48))

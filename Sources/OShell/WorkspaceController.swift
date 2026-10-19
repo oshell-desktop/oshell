@@ -5,7 +5,7 @@ import AppKit
 import OShellCore
 
 final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
-    weak var windowCoordinator: WorkspaceWindows?
+    weak var windowCoordinator: WorkspaceWindows? { didSet { refreshSyncStatusButton() } }
     private lazy var standaloneUpdater = AppUpdater(workspace: self)
     var appUpdater: AppUpdater { windowCoordinator?.updater ?? standaloneUpdater }
     let store: ConfigurationStore
@@ -17,6 +17,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     private let tabStrip = TabStripView()
     let sessionLinkBar = SessionLinkBar()
     var sessionLinkHeight: NSLayoutConstraint!
+    let syncStatusButton = SyncStatusButton()
     let currentPropertiesButton = NSButton(), defaultPropertiesButton = NSButton(), updateButton = NSButton()
     let splitButton = NSPopUpButton(frame: .zero, pullsDown: true)
     let tabGroupButton = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -67,6 +68,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     private var quickSendVisibilityObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
     private var updateStateObserver: NSObjectProtocol?
+    private var syncStateObserver: NSObjectProtocol?
     private var quickSendRefreshPending = false
     let syncIndicator = NSTextField(labelWithString: "")
     let stopSyncButton = NSButton()
@@ -134,12 +136,17 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             DispatchQueue.main.async { [weak self] in self?.quickSendRefreshPending = false; self?.refreshQuickSendBar() }
         }
         updateStateObserver = NotificationCenter.default.addObserver(forName: AppUpdater.stateDidChange, object: nil, queue: .main) { [weak self] _ in self?.refreshUpdateButton() }
+        syncStateObserver = NotificationCenter.default.addObserver(forName: WebDAVSync.statusDidChange, object: nil, queue: .main) { [weak self] note in
+            guard let self, let sync = note.object as? WebDAVSync, sync === self.windowCoordinator?.webDAV else { return }
+            self.refreshSyncStatusButton()
+        }
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: NSApp, queue: .main) { [weak self] _ in self?.markSelectedOutputRead() }
     }
     deinit {
         if let quickSendVisibilityObserver { NotificationCenter.default.removeObserver(quickSendVisibilityObserver) }
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
         if let updateStateObserver { NotificationCenter.default.removeObserver(updateStateObserver) }
+        if let syncStateObserver { NotificationCenter.default.removeObserver(syncStateObserver) }
     }
     func windowDidBecomeMain(_ notification: Notification) { windowCoordinator?.activate(self) }
     func windowDidBecomeKey(_ notification: Notification) { markSelectedOutputRead() }
@@ -199,7 +206,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         recordButton.image = NSImage(oshellSymbolName: "record.circle", accessibilityDescription: "日志记录")
         recordButton.imagePosition = .imageLeading; recordButton.bezelStyle = .texturedRounded
         let settings = iconButton("", "gearshape", #selector(showPreferences)); settings.toolTip = "设置"
-        configurePropertyButtons()
+        configurePropertyButtons(); configureSyncStatusButton()
         updateButton.identifier = .init("toolbar.checkUpdates")
         updateButton.target = self; updateButton.action = #selector(checkForUpdates)
         updateButton.image = NSImage(named: NSImage.refreshTemplateName)
@@ -209,10 +216,10 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         sessionSidebarButton.target = self; sessionSidebarButton.action = #selector(toggleSessionSidebar)
         sessionSidebarButton.identifier = .init("toolbar.sessionSidebar"); sessionSidebarButton.setAccessibilityLabel("显示 / 隐藏会话列表")
         sessionSidebarButton.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        let toolbar = WorkspaceToolbar(views: [sessionSidebarButton, connect, quickButton, new, local, files, currentPropertiesButton, defaultPropertiesButton, tools, tabGroupButton, splitButton, arrangementButton, syncIndicator, stopSyncButton, NSView(), updateButton, find, recordButton, settings])
+        let toolbar = WorkspaceToolbar(views: [sessionSidebarButton, connect, quickButton, new, local, files, currentPropertiesButton, defaultPropertiesButton, tools, tabGroupButton, splitButton, arrangementButton, syncIndicator, stopSyncButton, NSView(), syncStatusButton, updateButton, find, recordButton, settings])
         topToolbar = toolbar
         toolbar.identifier = .init("workspace.toolbar")
-        toolbar.compactButtons = [new, local, files, updateButton, find, recordButton]
+        toolbar.compactButtons = [connect, new, local, files, updateButton, find, recordButton]
         for (button, label) in [(new, "新建会话"), (local, "本地终端"), (find, "搜索终端"), (recordButton, "记录终端日志")] {
             button.toolTip = label; button.setAccessibilityLabel(label)
         }
@@ -254,6 +261,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         strip.onDragEnd = { [weak self] in
             self?.terminalHost.clearPreview(); self?.tabStrip.clearDragPreview()
             self?.groupStrips.forEach { $0.1.clearDragPreview() }
+        }
+        strip.onDragCompletion = { [weak self] id, point, operation, cancelled in
+            _ = self?.finishTabDrag(id, at: point, operation: operation, cancelled: cancelled)
         }
         strip.onSelect = { [weak self] id in
             guard let self, let tab = self.tabs.first(where: { $0.id == id }) else { return }
@@ -832,12 +842,12 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     }
     @objc func showPreferences() { editPreferences(appearanceSelected: false) }
     @objc func showAppearancePreferences() { editPreferences(appearanceSelected: true) }
-    func editPreferences(appearanceSelected: Bool, updatesSelected: Bool = false) {
+    func editPreferences(appearanceSelected: Bool, updatesSelected: Bool = false, storageSelected: Bool = false) {
         let storageView = StorageSettingsView(workspace: self)
         let securityView = SecuritySettingsView(workspace: self)
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
-        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageView: storageView, securityView: securityView, selectionView: { autoCopy, trim in
+        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
         }, localShortcutSelection: { localShortcut = $0 }) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
@@ -850,7 +860,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let applied = configuration.preferences
         ApplicationAppearance.apply(applied.interfaceTheme)
         tabs.flatMap { $0.layout.panes }.forEach { $0.apply(applied) }; refreshSelection()
-        do { try storageView.applySelection() } catch { Dialogs.message("目录选择未保存：" + error.localizedDescription) }
+        do { try storageView.applySelection() } catch { Dialogs.message("同步设置未保存：" + error.localizedDescription) }
         do { try securityView.applySelection() } catch { Dialogs.message("Touch ID 设置未完成：" + error.localizedDescription) }
     }
     @objc func syncWebDAVNow() { windowCoordinator?.webDAV.sync(interactive: true) }
@@ -923,7 +933,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         }
         if menuItem.action == #selector(showUpdatePreferences) { return isSecurityUnlocked && NSApp.modalWindow == nil }
         if menuItem.action == #selector(clearMasterPassword) { return isSecurityUnlocked && configuration.hasMasterPassword && NSApp.modalWindow == nil }
-        if [#selector(showPreferences), #selector(showAppearancePreferences)].contains(menuItem.action) { return NSApp.modalWindow == nil && window?.attachedSheet == nil }
+        if [#selector(showPreferences), #selector(showAppearancePreferences), #selector(showSyncPreferences)].contains(menuItem.action) { return NSApp.modalWindow == nil && window?.attachedSheet == nil }
         if menuItem.action == #selector(editCurrentSessionProfile) { return canEditCurrentSessionProfile }
         if [#selector(splitVertical), #selector(splitHorizontal)].contains(menuItem.action) { return isSecurityUnlocked && selectedTab != nil }
         if menuItem.action == #selector(showCurrentSessionProperties) { return selectedTab?.activePane.canEditLiveKeepAlive == true }
@@ -953,14 +963,37 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     var activeFileOperationCount: Int { fileWindows.filter(\.hasActiveOperation).count }
     @objc func newWindow() { windowCoordinator?.newWindow() }
     @objc func moveTabToNewWindow(_ sender: NSMenuItem) {
-        guard window?.attachedSheet == nil, NSApp.modalWindow == nil,
-              let id = sender.representedObject as? UUID, let tab = tabs.first(where: { $0.id == id }),
-              let destination = windowCoordinator?.newWindow() else { return }
-        move(tab, to: destination)
+        guard let id = sender.representedObject as? UUID else { return }
+        _ = detachTab(id)
     }
-    func move(_ tab: TerminalTab, to destination: WorkspaceController) {
+    /// Only an unaccepted release outside the source window tears off a tab.
+    /// Internal reorder/split drops and cancelled drags must remain no-ops here.
+    @discardableResult func finishTabDrag(_ id: UUID, at point: NSPoint, operation: NSDragOperation, cancelled: Bool) -> WorkspaceController? {
+        guard !cancelled, operation.isEmpty, let window, window.isVisible, !window.isMiniaturized,
+              !window.frame.insetBy(dx: -12, dy: -12).contains(point),
+              NSScreen.screens.contains(where: { $0.frame.contains(point) }) else { return nil }
+        return detachTab(id, at: point)
+    }
+    @discardableResult func detachTab(_ id: UUID, at point: NSPoint? = nil) -> WorkspaceController? {
+        guard isSecurityUnlocked, !loadFailed, window?.attachedSheet == nil, NSApp.modalWindow == nil,
+              let tab = tabs.first(where: { $0.id == id }), let windows = windowCoordinator else { return nil }
+        let destination = windows.newWindow()
+        if let point, let targetWindow = destination.window,
+           let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
+            let visible = screen.visibleFrame
+            var size = window?.styleMask.contains(.fullScreen) == true ? targetWindow.frame.size : (window?.frame.size ?? targetWindow.frame.size)
+            size.width = min(size.width, visible.width); size.height = min(size.height, visible.height)
+            let origin = NSPoint(x: min(max(point.x - 160, visible.minX), visible.maxX - size.width),
+                                 y: min(max(point.y + 30 - size.height, visible.minY), visible.maxY - size.height))
+            targetWindow.setFrame(NSRect(origin: origin, size: size), display: true)
+        }
+        guard move(tab, to: destination) else { destination.window?.close(); return nil }
+        destination.show(); return destination
+    }
+    @discardableResult func move(_ tab: TerminalTab, to destination: WorkspaceController) -> Bool {
         guard destination !== self, let index = tabs.firstIndex(where: { $0 === tab }),
-              destination.isSecurityUnlocked, window?.attachedSheet == nil else { return }
+              isSecurityUnlocked, destination.isSecurityUnlocked, window?.attachedSheet == nil,
+              destination.window?.attachedSheet == nil, NSApp.modalWindow == nil else { return false }
         let ids = Set(tab.layout.panes.map(\.id))
         syncTargets.subtract(ids); composerTargets.subtract(ids); quickSendSelected.subtract(ids)
         tab.displayView.removeFromSuperview(); tabs.remove(at: index); tabHistory.removeAll { $0 == tab.id }
@@ -969,6 +1002,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         destination.tabs.append(tab); destination.selectedTab = tab
         tab.layout.panes.forEach { destination.bindPane($0) }
         destination.rebuildWorkspace(); destination.select(tab); destination.refreshOperatorState()
+        return true
     }
     func receiveConfiguration(_ value: Configuration) {
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys

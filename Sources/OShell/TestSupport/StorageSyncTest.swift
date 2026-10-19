@@ -55,8 +55,8 @@ enum StorageSyncTest {
                     root.cacheDisplay(in: root.bounds, to: bitmap)
                     try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: preview))
                 }
-                checks["storageControlsFitScrollablePage"] = descendants(document).filter { $0 is NSTextField || $0 is NSButton }.allSatisfy { document.bounds.contains($0.convert($0.bounds, to: document)) }
-                checks["testDirectoryOverrideCannotBeChanged"] = descendants(storage).compactMap { $0 as? NSButton }.filter { ["新建同步目录…", "连接已有同步目录…"].contains($0.title) }.allSatisfy { !$0.isEnabled }
+                checks["storageControlsFitScrollablePage"] = descendants(document).filter { !$0.isHiddenOrHasHiddenAncestor && ($0 is NSTextField || $0 is NSButton) }.allSatisfy { document.bounds.contains($0.convert($0.bounds, to: document)) }
+                checks["testDirectoryOverrideCannotBeChanged"] = descendants(storage).compactMap { $0 as? NSButton }.filter { $0.identifier?.rawValue == "storage.chooseDirectory" }.allSatisfy { !$0.isEnabled }
                 _ = PopupKeyboard.dismiss(window: NSApp.modalWindow!)
             }
             workspace.showPreferences()

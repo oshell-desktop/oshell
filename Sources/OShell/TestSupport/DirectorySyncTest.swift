@@ -49,9 +49,10 @@ final class DirectorySyncTest {
     private func unchanged() {
         let beforeLocal = try? Data(contentsOf: workspace.store.url)
         let beforeRemote = try? Data(contentsOf: shared.appendingPathComponent("configuration.json"))
-        sync.sync(interactive: false)
+        sync.sync(interactive: true)
         wait("unchangedSyncCompletes", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in
             sync.cancel()
+            checks["manualUnchangedHasNoSuccessPopup"] = NSApp.modalWindow == nil
             checks["unchangedDoesNotRewrite"] = (try? Data(contentsOf: workspace.store.url)) == beforeLocal && (try? Data(contentsOf: shared.appendingPathComponent("configuration.json"))) == beforeRemote
             modalDefersSync()
         }
@@ -161,6 +162,7 @@ final class DirectorySyncTest {
     private func diagnosticsUI() {
         let view = SyncStatusView(sync: sync)
         func label(_ id: String) -> NSTextField? { descendants(view).compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == id } }
+        checks["toolbarShowsDirectorySuccess"] = workspace.syncStatusButton.presentation.mark == .complete && workspace.syncStatusButton.toolTip?.contains("同步目录") == true
         checks["statusCardShowsSuccess"] = label("sync.status.title")?.stringValue.contains("对齐") == true && sync.summary.lastSuccess != nil && sync.pendingLocalChanges == false
         let events = sync.diagnostics.entries()
         checks["diagnosticStagesRecorded"] = [SyncDiagnostics.Event.started, .fetched, .uploading, .completed, .conflict, .failed].allSatisfy { kind in events.contains { $0.event == kind } }

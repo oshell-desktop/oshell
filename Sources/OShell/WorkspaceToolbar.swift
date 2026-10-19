@@ -87,7 +87,7 @@ extension WorkspaceController {
         topToolbar?.needsLayout = true
     }
     func refreshToolbarActions() {
-        refreshUpdateButton()
+        refreshUpdateButton(); refreshSyncStatusButton()
         currentPropertiesButton.isEnabled = canEditCurrentSessionProfile
         currentPropertiesButton.toolTip = canEditCurrentSessionProfile ? "当前会话属性：" + (selectedTab?.activePane.profile.name ?? "") + "（保存后新建连接生效）" : "当前会话属性：请先选择 SSH 会话"
         defaultPropertiesButton.isEnabled = isSecurityUnlocked

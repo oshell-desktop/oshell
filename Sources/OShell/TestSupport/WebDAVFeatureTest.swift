@@ -75,8 +75,8 @@ final class WebDAVFeatureTest {
             let settings = try Data(contentsOf: WebDAVSync.settingsURL)
             checks["accountSecretEncryptedLocally"] = SharedVault.isEncrypted(settings) && !String(decoding: settings, as: UTF8.self).contains("fixture-password")
             do { _ = try workspace.disableMasterProtection(master); checks["cannotClearMasterWhileSharing"] = false } catch { checks["cannotClearMasterWhileSharing"] = true }
-            sync.sync(interactive: false)
-            wait("firstUploadCompletes", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in sync.cancel(); makeConflict() }
+            sync.sync(interactive: true)
+            wait("firstUploadCompletes", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in checks["manualSuccessDoesNotInterruptWithPopup"] = NSApp.modalWindow == nil; checks["toolbarShowsWebDAVSuccess"] = workspace.syncStatusButton.presentation.mark == .complete; sync.cancel(); makeConflict() }
         } catch { checks["enableSync"] = false; finish() }
     }
     private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
@@ -129,6 +129,7 @@ final class WebDAVFeatureTest {
         sync.sync(interactive: false)
         wait("offlineCompletesWithoutOverwrite", condition: { !self.sync.busy && self.sync.status.contains("503") }) { [self] in
             checks["offlineDoesNotInterruptWithPopup"] = NSApp.modalWindow == nil
+            checks["toolbarShowsFailureWithoutPopup"] = workspace.syncStatusButton.presentation.mark == .attention
             checks["offlineRetainsEncryptedCache"] = (try? Data(contentsOf: workspace.store.url)) == before
             checks["terminalNeverRestarted"] = pane?.terminal.process.shellPid == pid && pane?.isShutdown == false
             workspace.lockPasswords(); checks["lockingForgetsStorageMaster"] = workspace.store.masterPassword == nil && PasswordVault.shared.cachedMaster == nil

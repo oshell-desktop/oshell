@@ -6,6 +6,8 @@ import OShellCore
 final class SyncStatusView: NSView {
     private weak var sync: WebDAVSync?
     private var observer: NSObjectProtocol?
+    var onUnlock: (() -> Void)?
+    private let icon = NSImageView()
     private let heading = NSTextField(labelWithString: "同步状态")
     private let spinner = NSProgressIndicator()
     private let backend = NSTextField(labelWithString: "")
@@ -22,11 +24,13 @@ final class SyncStatusView: NSView {
         heading.font = .systemFont(ofSize: 16, weight: .semibold); heading.identifier = .init("sync.status.title")
         spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
         spinner.widthAnchor.constraint(equalToConstant: 16).isActive = true; spinner.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        let header = NSStackView(views: [spinner, heading]); header.spacing = 8
+        icon.imageScaling = .scaleProportionallyDown
+        icon.widthAnchor.constraint(equalToConstant: 20).isActive = true; icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        let header = NSStackView(views: [icon, heading, NSView(), spinner]); header.spacing = 8
         times.identifier = .init("sync.status.times"); pending.identifier = .init("sync.status.pending"); detail.identifier = .init("sync.status.detail")
         for label in [backend, times, pending, detail, hint] { label.font = .systemFont(ofSize: 12) }
-        detail.maximumNumberOfLines = 2; detail.lineBreakMode = .byTruncatingTail
-        times.maximumNumberOfLines = 2; hint.maximumNumberOfLines = 2
+        detail.maximumNumberOfLines = 3; detail.lineBreakMode = .byWordWrapping
+        times.maximumNumberOfLines = 2; hint.maximumNumberOfLines = 3
         hint.textColor = .secondaryLabelColor; hint.font = .systemFont(ofSize: 11)
         run.target = self; run.action = #selector(syncNow); run.identifier = .init("sync.status.run")
         run.toolTip = "关闭设置后使用已保存的配置进行同步；不会应用尚未保存的设置。"
@@ -39,7 +43,8 @@ final class SyncStatusView: NSView {
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 9
         stack.translatesAutoresizingMaskIntoConstraints = false; addSubview(stack)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 258),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -51,37 +56,40 @@ final class SyncStatusView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     private func date(_ value: Date?) -> String { value.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .medium) } ?? "暂无" }
+    override func draw(_ dirtyRect: NSRect) {
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        NSColor.controlBackgroundColor.withAlphaComponent(0.5).setFill(); shape.fill()
+        NSColor.gridColor.withAlphaComponent(0.6).setStroke(); shape.lineWidth = 0.6; shape.stroke()
+    }
+    @available(macOS 10.14, *)
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refresh() }
     func refresh() {
-        guard let sync else { heading.stringValue = "同步未就绪"; run.isEnabled = false; stop.isEnabled = false; return }
-        if !sync.syncEnabled { heading.stringValue = "未启用同步"; heading.textColor = .secondaryLabelColor }
-        else if sync.isLocked { heading.stringValue = "已锁定 · 等待主密码"; heading.textColor = .systemOrange }
-        else {
-            switch sync.phase {
-            case .idle: heading.stringValue = "等待检查"; heading.textColor = .labelColor
-            case .queued: heading.stringValue = "等待同步"; heading.textColor = .systemOrange
-            case .reading: heading.stringValue = "正在读取共享数据"; heading.textColor = .labelColor
-            case .writing: heading.stringValue = "正在加密并上传"; heading.textColor = .labelColor
-            case .applying: heading.stringValue = "正在应用共享数据"; heading.textColor = .labelColor
-            case .success: heading.stringValue = sync.directory == nil ? "同步完成" : "已与本机同步目录对齐"; heading.textColor = .systemGreen
-            case .failed: heading.stringValue = "同步失败 · 本地数据已保留"; heading.textColor = .systemOrange
-            case .conflict: heading.stringValue = "有待确认的同步冲突"; heading.textColor = .systemOrange
-            case .cancelled: heading.stringValue = "本次同步已取消"; heading.textColor = .secondaryLabelColor
-            }
+        let presentation = SyncStatusPresentation(sync: sync)
+        heading.stringValue = presentation.title; heading.textColor = presentation.color; icon.image = presentation.image
+        guard let sync else {
+            detail.stringValue = "请选择下方同步方式。"; run.isEnabled = false; stop.isEnabled = false; return
         }
         if sync.busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         let duration = sync.summary.durationMS.map { String(format: " · 最近耗时 %.1f 秒", Double($0) / 1000) } ?? ""
-        backend.stringValue = "方式：" + (sync.syncEnabled ? (sync.directory == nil ? "WebDAV" : "iCloud / 自定义目录") : "仅本地") + duration
-        times.stringValue = "最近尝试：\(date(sync.summary.lastAttempt))\n最近成功：\(date(sync.summary.lastSuccess))"
+        backend.stringValue = "当前已保存配置：" + (sync.syncEnabled ? (sync.directory == nil ? "WebDAV" : "iCloud / 自定义目录") : "未启用") + duration
+        times.stringValue = "最近成功：\(date(sync.summary.lastSuccess))    最近尝试：\(date(sync.summary.lastAttempt))"
         pending.stringValue = "本地改动：" + (!sync.syncEnabled ? "仅保存在本机" : sync.pendingLocalChanges.map { $0 ? "已保存，等待同步" : "暂无待同步修改" } ?? "待首次比较确认")
-        detail.stringValue = sync.recentError.map { "最近错误：" + $0 } ?? sync.status
-        detail.toolTip = detail.stringValue; detail.textColor = sync.recentError == nil ? .secondaryLabelColor : .systemOrange
-        let schedule = sync.nextCheck.map { "下一次自动检查：" + date($0) + "；设置打开时暂停新检查。" } ?? "自动同步在启动、保存修改、切回应用及定期检查时执行。"
-        hint.stringValue = sync.diagnostics.writeIssue ?? (sync.directory == nil ? schedule : "此状态不代表 iCloud 已上传云端；云端进度请在 Finder 查看。\n" + schedule)
-        run.isEnabled = sync.syncEnabled && !sync.busy && !sync.manualQueued && !sync.isLocked
+        let error = sync.syncEnabled && !sync.busy ? sync.recentError : nil
+        detail.stringValue = presentation.guidance + (error.map { "\n上次错误：" + $0 } ?? "")
+        detail.toolTip = detail.stringValue; detail.textColor = error == nil ? .secondaryLabelColor : .systemOrange
+        let schedule = !sync.syncEnabled ? "选择同步方式并应用后启用；设置草稿不会立即更改当前同步。" : sync.manualQueued ? "关闭设置后开始；若修改了连接配置，请先点击“应用”。" : "设置打开时暂停新的检查；关闭后恢复自动同步。"
+        let cloud = sync.directory != nil && sync.phase != .success ? "iCloud 云端进度请在 Finder 查看。" : ""
+        hint.stringValue = sync.diagnostics.writeIssue ?? (schedule + cloud)
+        run.title = sync.isLocked ? "解锁主密码…" : (sync.manualQueued ? "已安排同步" : "关闭设置后同步")
+        run.toolTip = sync.isLocked ? "解锁主密码以继续同步。" : "关闭设置后使用已保存配置同步；未应用的修改不会保存。"
+        run.isEnabled = sync.syncEnabled && !sync.busy && !sync.manualQueued && (!sync.isLocked || onUnlock != nil)
         stop.isEnabled = sync.busy || sync.manualQueued
-        needsLayout = true
+        needsLayout = true; needsDisplay = true
     }
-    @objc private func syncNow() { sync?.queueManualSync(); refresh() }
+    @objc private func syncNow() {
+        if sync?.isLocked == true { onUnlock?() } else { sync?.queueManualSync() }
+        refresh()
+    }
     @objc private func cancelSync() { sync?.cancelCurrent(); refresh() }
     @objc private func exportLogs() {
         guard let sync else { return }

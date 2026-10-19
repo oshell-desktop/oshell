@@ -14,6 +14,9 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.install() }
     }
     static func run(_ controller: WorkspaceController) {
+        if CommandLine.arguments.contains("--tab-detach-test") { TabDetachTest.run(controller) }
+        if CommandLine.arguments.contains("--sync-settings-test") { SyncSettingsTest.run(controller) }
+        if CommandLine.arguments.contains("--webdav-certificate-test") { WebDAVCertificateTest.run(controller) }
         if CommandLine.arguments.contains("--update-startup-state-test") { UpdateStartupStateTest.run(controller) }
         if CommandLine.arguments.contains("--file-resume-test") { FileResumeUITest.run(controller) }
         if CommandLine.arguments.contains("--file-transfer-history-test") { FileTransferHistoryTest.run(controller) }

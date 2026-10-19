@@ -19,6 +19,7 @@ enum ToolbarActionsTest {
         func press(_ root: NSView, _ title: String) { descendants(root).compactMap { $0 as? NSButton }.first { $0.title == title }?.performClick(nil) }
         checks["disabledCurrentWithoutSession"] = !workspace.currentPropertiesButton.isEnabled
         checks["disabledSplitWithoutSession"] = !workspace.splitButton.isEnabled
+        checks["syncButtonAvailableWithoutSession"] = workspace.syncStatusButton.isEnabled && workspace.syncStatusButton.image != nil && workspace.syncStatusButton.action == #selector(WorkspaceController.showSyncPreferences)
         checks["updateButtonWired"] = workspace.updateButton.action == #selector(WorkspaceController.checkForUpdates) && workspace.updateButton.target === workspace && workspace.updateButton.image != nil
         checks["updateEnabledWithoutSession"] = workspace.updateButton.isEnabled
         checks["defaultsAvailableWithoutSession"] = workspace.defaultPropertiesButton.isEnabled
@@ -47,7 +48,7 @@ enum ToolbarActionsTest {
         let root = workspace.window!.contentView!, toolbar = descendants(root).compactMap { $0 as? WorkspaceToolbar }.first!
         for width in [760, 980, 1080, 1180] {
             workspace.window?.setContentSize(NSSize(width: width, height: 620)); root.layoutSubtreeIfNeeded(); toolbar.layoutSubtreeIfNeeded(); root.layoutSubtreeIfNeeded()
-            for (index, button) in [workspace.currentPropertiesButton, workspace.defaultPropertiesButton, workspace.splitButton, workspace.updateButton].enumerated() {
+            for (index, button) in [workspace.currentPropertiesButton, workspace.defaultPropertiesButton, workspace.splitButton, workspace.updateButton, workspace.syncStatusButton].enumerated() {
                 let frame = button.convert(button.bounds, to: toolbar)
                 checks["buttonVisible-\(width)-\(index)"] = !button.isHiddenOrHasHiddenAncestor && frame.width >= 24 && frame.height >= 18 && toolbar.bounds.contains(frame)
             }

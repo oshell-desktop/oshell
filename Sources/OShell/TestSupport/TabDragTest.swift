@@ -34,9 +34,19 @@ enum TabDragTest {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             if ProcessInfo.processInfo.environment["OSHELL_TAB_DRAG_INTERACTIVE"] == "1" {
+                if ProcessInfo.processInfo.environment["OSHELL_TAB_DRAG_DETACH_VERIFY"] == "1", let screen = window.screen ?? NSScreen.main {
+                    window.setFrame(NSRect(x: screen.visibleFrame.minX + 30, y: screen.visibleFrame.minY + 50, width: 820, height: 500), display: true)
+                }
                 controller.show()
+                let initialPIDs = Set(controller.tabs.flatMap { $0.layout.panes.map { Int($0.terminal.process.shellPid) } })
                 let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
                     let data: [String: Any] = ["groups": controller.customTabLayout?.groups.count ?? 1, "tabs": controller.tabs.count, "pids": controller.tabs.flatMap { $0.layout.panes.map { Int($0.terminal.process.shellPid) } }]
+                    if ProcessInfo.processInfo.environment["OSHELL_TAB_DRAG_DETACH_VERIFY"] == "1", let windows = controller.windowCoordinator, windows.workspaces.count > 1 {
+                        let tabs = windows.workspaces.flatMap(\.tabs), pids = Set(tabs.flatMap { $0.layout.panes.map { Int($0.terminal.process.shellPid) } })
+                        let checks = ["nativeMouseDragCreatesWindow": windows.workspaces.count == 2, "allOriginalTabsPreserved": tabs.count == 4, "nativeDragKeepsPTYs": pids == initialPIDs && !pids.contains(0), "singleTabInNewWindow": windows.workspaces.first { $0 !== controller }?.tabs.count == 1]
+                        if let path = ProcessInfo.processInfo.environment["OSHELL_TAB_DRAG_OUTPUT"] { try? JSONSerialization.data(withJSONObject: ["passed": checks.values.allSatisfy { $0 }, "checks": checks]).write(to: URL(fileURLWithPath: path)) }
+                        windows.workspaces.forEach { $0.shutdown() }; NSApp.terminate(nil); return
+                    }
                     if let path = ProcessInfo.processInfo.environment["OSHELL_TAB_DRAG_OUTPUT"] { try? JSONSerialization.data(withJSONObject: data).write(to: URL(fileURLWithPath: path)) }
                 }
                 _ = timer; return

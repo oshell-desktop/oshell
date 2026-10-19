@@ -1382,6 +1382,41 @@ final class CoreTests {
         let remaining = try FileManager.default.contentsOfDirectory(atPath: empty.path)
         XCTAssertTrue(remaining.isEmpty)
     }
+    func testLiveReplicaSelection() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sync-selection-fixture-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let local = root.appendingPathComponent("local"), destination = root.appendingPathComponent("destination")
+        for url in [local, destination] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        let master = "sync-selection-synthetic-master"
+        var config = Configuration(profiles: [SessionProfile(name: "shared-session", host: "sync.example.test")])
+        config.masterPasswordVerifier = try MasterPasswordProtection.createVerifier(master)
+        let store = ConfigurationStore(directory: local, masterPassword: master, requiresMasterProtection: true)
+        try store.save(config)
+        let localBefore = try Data(contentsOf: store.url)
+        let location = StorageLocation(base: local)
+        let choice = StorageLocation.Pending(path: destination.path, mode: .migrate)
+        XCTAssertThrowsError(try location.activateReplica(choice, master: "incorrect"))
+        XCTAssertNil(try location.syncDirectory())
+        // Apply changes only the destination; first sync still performs remote confirmation and publication.
+        try location.activateReplica(choice, master: master)
+        XCTAssertEqual(try location.syncDirectory()?.resolvingSymlinksInPath(), destination.resolvingSymlinksInPath())
+        XCTAssertEqual(try location.needsActivation(), false)
+        XCTAssertEqual(try location.allowsInitialUpload(), true)
+        XCTAssertTrue(!FileManager.default.fileExists(atPath: destination.appendingPathComponent("configuration.json").path))
+        XCTAssertEqual(try Data(contentsOf: store.url), localBefore)
+        try location.disableSync()
+        let remote = destination.appendingPathComponent("configuration.json")
+        try PrivateFile.write(localBefore, to: remote)
+        try location.activateReplica(.init(path: destination.path, mode: .existing), master: master)
+        XCTAssertEqual(try location.allowsInitialUpload(), false)
+        XCTAssertEqual(try Data(contentsOf: remote), localBefore)
+        try location.disableSync()
+        try FileManager.default.removeItem(at: remote)
+        try Data().write(to: destination.appendingPathComponent(".configuration.json.icloud"))
+        XCTAssertThrowsError(try SharedDataFile.readIfPresent(remote))
+        XCTAssertThrowsError(try location.activateReplica(choice, master: master))
+        XCTAssertNil(try location.syncDirectory())
+    }
     func testDirectoryReplicaMigrationAndOffline() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("replica-fixture-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2097,6 +2132,7 @@ extension CoreTests {
         try tests.testWebDAVAndSharingProtection()
         try tests.testStorageLocationAndSharedWrites()
         try tests.testDirectoryReplicaMigrationAndOffline()
+        try tests.testLiveReplicaSelection()
         try tests.testSyncDiagnosticsPrivacyAndRetention()
         try tests.testConfigurationRoundTripAndPermissions()
         tests.testSplitANSISequencesAndUTF8ArePreserved()
@@ -2104,7 +2140,7 @@ extension CoreTests {
         tests.testInvalidZmodemHeadersRemainOrdinaryOutput()
         try tests.testLoggerFlushesEveryAcceptedChunk()
         tests.testCancellationDropsInFlightBytesAcrossEveryBoundary()
-        if failures.isEmpty { print("PASS: 69 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
+        if failures.isEmpty { print("PASS: 70 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
         else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
     }
 }

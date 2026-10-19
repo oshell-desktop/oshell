@@ -207,7 +207,6 @@ final class WebDAVSync {
                                 baseline.masterPasswordVerifier = local.masterPasswordVerifier
                                 if Self.same(baseline, remote) {
                                     self.succeeded(unchanged: true)
-                                    if interactive { Dialogs.message("本地配置与已读取的共享版本一致。iCloud 云端上传进度请在 Finder 查看。") }
                                     return
                                 }
                             }
@@ -297,7 +296,6 @@ final class WebDAVSync {
                         self.record(.retryNeeded, always: true); self.summary.outcome = .retryNeeded; self.summary.durationMS = self.elapsed; self.diagnostics.saveSummary(self.summary)
                         self.finish(); self.schedule(localChanges: true)
                     } else { self.succeeded() }
-                    if interactive { Dialogs.message(editedWhileSyncing ? "本次传输完成，本地的新修改已排队继续同步。" : self.directory == nil ? "WebDAV 同步完成。现有终端连接保持运行。" : "已与本机的同步目录文件完成同步。iCloud 上传由系统继续处理；现有终端连接保持运行。") }
                 } catch { self.fail(error, interactive: interactive) }
             }
         }

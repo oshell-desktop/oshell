@@ -32,11 +32,12 @@ public final class SyncDiagnostics {
         }
     }
     public enum Failure: String, Codable {
-        case authentication, remoteChanged, network, http, invalidData, storage, cancelled, directoryUnavailable, cloudDownload, remoteDeleted, encryption, cloudConflict
+        case authentication, remoteChanged, network, tls, http, invalidData, storage, cancelled, directoryUnavailable, cloudDownload, remoteDeleted, encryption, cloudConflict
         public var title: String {
             switch self {
             case .authentication: return "认证失败，请检查 WebDAV 账号"
             case .remoteChanged: return "共享版本已变化，请重新比较"
+            case .tls: return "WebDAV 证书或 TLS 校验失败，请在设置中测试并确认"
             case .network: return "网络请求失败或超时"
             case .http: return "WebDAV HTTP 响应异常"
             case .invalidData: return "配置、主密码、加密数据或同步条件校验失败"
@@ -55,12 +56,14 @@ public final class SyncDiagnostics {
         public let code: Int?
         public var text: String { kind.title + (code.map { "（代码 \($0)）" } ?? "") }
         public init(_ error: Error) {
-            if let dav = error as? WebDAVFailure {
+            if error is WebDAVCertificateIssue { kind = .tls; code = nil }
+            else if let dav = error as? WebDAVFailure {
                 switch dav {
                 case .authentication: kind = .authentication; code = nil
                 case .conflict: kind = .remoteChanged; code = 412
                 case .status(let value): kind = .http; code = value
                 case .network: kind = .network; code = nil
+                case .tls: kind = .tls; code = nil
                 default: kind = .invalidData; code = nil
                 }
             } else {
