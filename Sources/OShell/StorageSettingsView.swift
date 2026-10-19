@@ -15,10 +15,8 @@ final class StorageSettingsView: NSView {
     private let directoryFields = NSStackView(), davFields = NSStackView()
     private let status = NSTextField(wrappingLabelWithString: "")
     private let selectionHint = NSTextField(wrappingLabelWithString: "")
-    private var statusCard: SyncStatusView?
     private let certificateControls = NSStackView()
     private let details = NSStackView()
-    private var syncObserver: NSObjectProtocol?
     private let davStatus = NSTextField(wrappingLabelWithString: "")
     private let address = NSTextField(), username = NSTextField(), password = NSSecureTextField()
     private var trustedCertificate: WebDAVCertificateTrust?
@@ -69,7 +67,8 @@ final class StorageSettingsView: NSView {
         let help = label("点击“应用”生效，无需重启；首次接入和同步冲突仍需确认。启用时会引导设置或解锁主密码。")
         let localPath = label("本机始终使用：" + current.path); localPath.isSelectable = true; localPath.identifier = .init("storage.current")
         let localActions = NSStackView(views: [button("打开本机目录", #selector(reveal)), button("设置 / 解锁主密码…", #selector(setupMaster))]); localActions.spacing = 8
-        let syncCard = SyncStatusView(sync: workspace.windowCoordinator?.webDAV); statusCard = syncCard
+        let syncCard = SyncStatusView(sync: workspace.windowCoordinator?.webDAV)
+        syncCard.onLayoutChange = { [weak self] in self?.needsLayout = true }
         syncCard.onUnlock = { [weak self] in self?.setupMaster() }
         details.orientation = .vertical; details.alignment = .leading; details.spacing = 12; details.isHidden = true
         for view in [localPath, localActions] { details.addArrangedSubview(view) }
@@ -87,11 +86,9 @@ final class StorageSettingsView: NSView {
         status.widthAnchor.constraint(equalTo: directoryFields.widthAnchor).isActive = true
         for view in [address, username, password, davStatus, certificateStatus] { view.widthAnchor.constraint(equalTo: davFields.widthAnchor).isActive = true }
         loadSettings()
-        syncObserver = NotificationCenter.default.addObserver(forName: WebDAVSync.statusDidChange, object: workspace.windowCoordinator?.webDAV, queue: .main) { [weak self] _ in self?.updateStatus() }
         updateStatus(); updateCertificateStatus()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit { if let syncObserver { NotificationCenter.default.removeObserver(syncObserver) } }
     override func layout() {
         super.layout(); document.setFrameSize(NSSize(width: scroll.contentSize.width, height: document.frame.height)); document.layoutSubtreeIfNeeded()
         let height = max(scroll.contentSize.height, (contentStack?.fittingSize.height ?? 0) + 44)
@@ -142,7 +139,7 @@ final class StorageSettingsView: NSView {
         directoryFields.isHidden = selectedMethod != .directory; davFields.isHidden = selectedMethod != .webDAV
         selectionHint.isHidden = selectionHint.stringValue.isEmpty
         davStatus.isHidden = davStatus.stringValue.isEmpty
-        statusCard?.refresh(); needsLayout = true
+        needsLayout = true
     }
     @objc private func toggleDetails(_ sender: NSButton) {
         details.isHidden.toggle(); sender.title = details.isHidden ? "显示本机数据与安全选项" : "收起本机数据与安全选项"; needsLayout = true

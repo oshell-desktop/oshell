@@ -6,7 +6,9 @@ import OShellCore
 final class SyncStatusView: NSView {
     private weak var sync: WebDAVSync?
     private var observer: NSObjectProtocol?
-    var onUnlock: (() -> Void)?
+    var onUnlock: (() -> Void)? { didSet { refresh() } }
+    var onLayoutChange: (() -> Void)?
+    private var displayedMark: SyncStatusPresentation.Mark?
     private let icon = NSImageView()
     private let heading = NSTextField(labelWithString: "同步状态")
     private let spinner = NSProgressIndicator()
@@ -62,29 +64,30 @@ final class SyncStatusView: NSView {
         NSColor.gridColor.withAlphaComponent(0.6).setStroke(); shape.lineWidth = 0.6; shape.stroke()
     }
     @available(macOS 10.14, *)
-    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refresh() }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); displayedMark = nil; refresh() }
     func refresh() {
         let presentation = SyncStatusPresentation(sync: sync)
-        heading.stringValue = presentation.title; heading.textColor = presentation.color; icon.image = presentation.image
+        heading.stringValue = presentation.title; heading.textColor = presentation.color
+        if displayedMark != presentation.mark { icon.image = presentation.image; displayedMark = presentation.mark }
         guard let sync else {
             detail.stringValue = "请选择下方同步方式。"; run.isEnabled = false; stop.isEnabled = false; return
         }
         if sync.busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         let duration = sync.summary.durationMS.map { String(format: " · 最近耗时 %.1f 秒", Double($0) / 1000) } ?? ""
-        backend.stringValue = "当前已保存配置：" + (sync.syncEnabled ? (sync.directory == nil ? "WebDAV" : "iCloud / 自定义目录") : "未启用") + duration
+        backend.stringValue = "当前已保存配置：" + (presentation.enabled ? presentation.backendName : "未启用") + duration
         times.stringValue = "最近成功：\(date(sync.summary.lastSuccess))    最近尝试：\(date(sync.summary.lastAttempt))"
-        pending.stringValue = "本地改动：" + (!sync.syncEnabled ? "仅保存在本机" : sync.pendingLocalChanges.map { $0 ? "已保存，等待同步" : "暂无待同步修改" } ?? "待首次比较确认")
-        let error = sync.syncEnabled && !sync.busy ? sync.recentError : nil
+        pending.stringValue = "本地改动：" + (!presentation.enabled ? "仅保存在本机" : sync.pendingLocalChanges.map { $0 ? "已保存，等待同步" : "暂无待同步修改" } ?? "待首次比较确认")
+        let error = presentation.enabled && !sync.busy ? sync.recentError : nil
         detail.stringValue = presentation.guidance + (error.map { "\n上次错误：" + $0 } ?? "")
         detail.toolTip = detail.stringValue; detail.textColor = error == nil ? .secondaryLabelColor : .systemOrange
-        let schedule = !sync.syncEnabled ? "选择同步方式并应用后启用；设置草稿不会立即更改当前同步。" : sync.manualQueued ? "关闭设置后开始；若修改了连接配置，请先点击“应用”。" : "设置打开时暂停新的检查；关闭后恢复自动同步。"
-        let cloud = sync.directory != nil && sync.phase != .success ? "iCloud 云端进度请在 Finder 查看。" : ""
+        let schedule = !presentation.enabled ? "选择同步方式并应用后启用；设置草稿不会立即更改当前同步。" : sync.manualQueued ? "关闭设置后开始；若修改了连接配置，请先点击“应用”。" : "设置打开时暂停新的检查；关闭后恢复自动同步。"
+        let cloud = presentation.directory && sync.phase != .success ? "iCloud 云端进度请在 Finder 查看。" : ""
         hint.stringValue = sync.diagnostics.writeIssue ?? (schedule + cloud)
-        run.title = sync.isLocked ? "解锁主密码…" : (sync.manualQueued ? "已安排同步" : "关闭设置后同步")
-        run.toolTip = sync.isLocked ? "解锁主密码以继续同步。" : "关闭设置后使用已保存配置同步；未应用的修改不会保存。"
-        run.isEnabled = sync.syncEnabled && !sync.busy && !sync.manualQueued && (!sync.isLocked || onUnlock != nil)
+        run.title = (presentation.mark == .locked) ? "解锁主密码…" : (sync.manualQueued ? "已安排同步" : "关闭设置后同步")
+        run.toolTip = (presentation.mark == .locked) ? "解锁主密码以继续同步。" : "关闭设置后使用已保存配置同步；未应用的修改不会保存。"
+        run.isEnabled = presentation.enabled && !sync.busy && !sync.manualQueued && (!(presentation.mark == .locked) || onUnlock != nil)
         stop.isEnabled = sync.busy || sync.manualQueued
-        needsLayout = true; needsDisplay = true
+        needsLayout = true; needsDisplay = true; onLayoutChange?()
     }
     @objc private func syncNow() {
         if sync?.isLocked == true { onUnlock?() } else { sync?.queueManualSync() }

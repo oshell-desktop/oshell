@@ -6,6 +6,9 @@ import OShellCore
 /// One description for the toolbar, accessibility, and the settings card.
 struct SyncStatusPresentation {
     enum Mark { case off, waiting, working, complete, attention, locked, cancelled }
+    let enabled: Bool
+    let directory: Bool
+    var backendName: String { enabled ? (directory ? "iCloud / 自定义目录" : "WebDAV") : "仅本地" }
     let mark: Mark
     let title: String
     let guidance: String
@@ -18,10 +21,14 @@ struct SyncStatusPresentation {
         }
     }
     init(sync: WebDAVSync?) {
-        self.init(enabled: sync?.syncEnabled == true, locked: sync?.isLocked == true, phase: sync?.phase ?? .idle,
-                  directory: sync?.directory != nil, manualQueued: sync?.manualQueued == true, failure: sync?.summary.failure?.kind)
+        // Read the local target once per presentation, not once per UI field.
+        let directory = sync?.directory != nil
+        let enabled = directory || sync?.enabled == true
+        self.init(enabled: enabled, locked: enabled && PasswordVault.shared.cachedMaster == nil, phase: sync?.phase ?? .idle,
+                  directory: directory, manualQueued: sync?.manualQueued == true, failure: sync?.summary.failure?.kind)
     }
     init(enabled: Bool, locked: Bool = false, phase: WebDAVSync.Phase = .idle, directory: Bool = false, manualQueued: Bool = false, failure: SyncDiagnostics.Failure? = nil) {
+        self.enabled = enabled; self.directory = directory
         if !enabled { mark = .off; title = "未启用同步"; guidance = "在下方选择同步方式；配置目前只保存在本机。"; return }
         if locked { mark = .locked; title = "等待解锁主密码"; guidance = "解锁后继续同步；本地修改已保留。"; return }
         switch phase {
@@ -87,7 +94,9 @@ struct SyncStatusPresentation {
 }
 
 final class SyncStatusButton: NSButton {
-    var presentation = SyncStatusPresentation(sync: nil) { didSet { image = presentation.image } }
+    var presentation = SyncStatusPresentation(sync: nil) {
+        didSet { if image == nil || oldValue.mark != presentation.mark { image = presentation.image } }
+    }
     @available(macOS 10.14, *)
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance(); image = presentation.image
@@ -107,7 +116,7 @@ extension WorkspaceController {
         syncStatusButton.presentation = presentation
         syncStatusButton.isEnabled = isSecurityUnlocked && !loadFailed
         syncStatusButton.setAccessibilityLabel("多设备同步：" + presentation.title)
-        let method = sync?.syncEnabled == true ? (sync?.directory == nil ? "WebDAV" : "同步目录") : "仅本地"
+        let method = presentation.directory ? "同步目录" : presentation.backendName
         let success = sync?.summary.lastSuccess.map { "\n最近成功：" + DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .medium) } ?? ""
         syncStatusButton.toolTip = "多设备同步 · \(method)\n\(presentation.title)\(success)\n点击查看同步状态和配置。"
     }

@@ -4,6 +4,8 @@
 """Safety checks for local cleanup and the isolated UI test entry point."""
 import importlib.util, plistlib, subprocess, tempfile, unittest
 from pathlib import Path
+from unittest.mock import patch
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 def load(name):
@@ -25,6 +27,29 @@ class DevelopmentToolsTests(unittest.TestCase):
         self.assertIn(self.root/'work/build', paths)
         self.assertIn(self.root/'work/release', paths)
         for p in keep: self.assertFalse(any(p == q or q in p.parents for q in paths))
+    def retained_app(self, name):
+        app = self.root/'work'/name/'OShell.app'
+        (app/'Contents').mkdir(parents=True)
+        (app/'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'app.oshell.mac'}))
+        return app.parent
+    def test_preserved_builds_require_known_bundle_and_no_other_files(self):
+        old = self.retained_app('running-app-old')
+        unrelated = self.retained_app('running-app-with-notes'); self.file('work/running-app-with-notes/notes.txt')
+        self.file('work/running-app-unrelated/valuable.txt')
+        self.assertIn(old, CLEAN.candidates(self.root))
+        self.assertNotIn(unrelated, CLEAN.candidates(self.root))
+        self.assertNotIn(self.root/'work/running-app-unrelated', CLEAN.candidates(self.root))
+    def test_loaded_image_protects_renamed_running_bundle(self):
+        old = self.retained_app('running-app-active')
+        exe = self.root/'dist/OShell.app/Contents/MacOS/OShell'
+        mapped = old/'OShell.app/Contents/MacOS/OShell'
+        with patch.object(CLEAN.subprocess, 'check_output', return_value='42 '+str(exe)+'\n'), patch.object(CLEAN.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='p42\nn'+str(mapped)+'\n')):
+            active = CLEAN.active_paths(self.root)
+        self.assertTrue(CLEAN.in_use(old, active))
+    def test_failed_image_inspection_preserves_retained_apps(self):
+        old = self.retained_app('running-app-protected')
+        with patch.object(CLEAN.subprocess, 'check_output', return_value='42 '+str(self.root/'dist/OShell.app/Contents/MacOS/OShell')+'\n'), patch.object(CLEAN.subprocess, 'run', side_effect=FileNotFoundError):
+            self.assertTrue(CLEAN.in_use(old, CLEAN.active_paths(self.root)))
     def test_cleanup_rejects_tracked_files(self):
         p = self.file('work/build/valuable.txt').parent
         with self.assertRaisesRegex(RuntimeError, 'tracked'):

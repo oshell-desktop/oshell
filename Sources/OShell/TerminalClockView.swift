@@ -20,25 +20,45 @@ final class TerminalClockTicker {
         formatter.timeZone = .autoupdatingCurrent
         return formatter.string(from: date)
     }
+    private var visibilityObservers = [NSObjectProtocol]()
     func update(_ view: TerminalClockView) {
         views.remove(view)
-        if view.needsClockUpdates { views.add(view); view.updateText(text(at: Date())) }
-        if views.allObjects.isEmpty { timer?.invalidate(); timer = nil }
-        else if timer == nil {
+        if view.needsClockUpdates { views.add(view) }
+        refreshVisibility()
+    }
+    private func refreshVisibility() {
+        let subscribers = views.allObjects
+        if subscribers.isEmpty {
+            timer?.invalidate(); timer = nil
+            visibilityObservers.forEach(NotificationCenter.default.removeObserver); visibilityObservers.removeAll()
+            return
+        }
+        if visibilityObservers.isEmpty {
+            for name in [NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification, NSWindow.didChangeOcclusionStateNotification] {
+                visibilityObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    guard let self, let window = note.object as? NSWindow, self.views.allObjects.contains(where: { $0.window === window }) else { return }
+                    self.refreshVisibility()
+                })
+            }
+        }
+        let visible = subscribers.filter(\.needsVisibleClockUpdates)
+        guard !visible.isEmpty else { timer?.invalidate(); timer = nil; return }
+        let text = text(at: Date()); visible.forEach { $0.updateText(text) }
+        if timer == nil {
             let now = Date().timeIntervalSince1970
-            let source = Timer(fire: Date(timeIntervalSince1970: floor(now) + 1), interval: 1, repeats: true) { [weak self] _ in self?.tick() }
+            let source = Timer(fire: Date(timeIntervalSince1970: floor(now) + 1), interval: 1, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }; self.tick()
+            }
             source.tolerance = 0.08; timer = source
             RunLoop.main.add(source, forMode: .common); RunLoop.main.add(source, forMode: .modalPanel)
         }
     }
     private func tick() {
-        let text = text(at: Date())
-        for view in views.allObjects {
-            if !view.needsClockUpdates { views.remove(view) }
-            else if view.window?.isMiniaturized == false && !view.isHiddenOrHasHiddenAncestor { view.updateText(text) }
-        }
-        if views.allObjects.isEmpty { timer?.invalidate(); timer = nil }
+        for view in views.allObjects where !view.needsClockUpdates { views.remove(view) }
+        refreshVisibility()
     }
+    deinit { timer?.invalidate(); visibilityObservers.forEach(NotificationCenter.default.removeObserver) }
+
 }
 
 /// Pure decoration: no PTY writes, no selection, and all pointer events pass through.
@@ -52,6 +72,7 @@ final class TerminalClockView: NSView {
     private weak var terminalArea: NSView?
     private var placement = [NSLayoutConstraint]()
     var needsClockUpdates: Bool { enabled && alphaValue > 0 && !disposed && window != nil }
+    var needsVisibleClockUpdates: Bool { needsClockUpdates && window?.isVisible == true && window?.isMiniaturized == false && !isHiddenOrHasHiddenAncestor }
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override var acceptsFirstResponder: Bool { false }
@@ -64,6 +85,8 @@ final class TerminalClockView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); TerminalClockTicker.shared.update(self) }
+    override func viewDidHide() { super.viewDidHide(); TerminalClockTicker.shared.update(self) }
+    override func viewDidUnhide() { super.viewDidUnhide(); TerminalClockTicker.shared.update(self) }
     func apply(_ preferences: Preferences) {
         guard !disposed else { return }
         var preferences = preferences; preferences.clampClockStyle()

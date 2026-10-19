@@ -103,7 +103,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         // Protected startup builds the toolbar while locked. Refresh as soon as
         // unlock completes, even when there are no tabs or updater notifications.
         // Unprotected startup may reach here before buildInterface().
-        if topToolbar != nil { refreshToolbarActions(); refreshSessionSidebar() }
+        if topToolbar != nil { refreshToolbarActions(); refreshSyncStatusButton(); refreshSessionSidebar() }
         let callbacks = startupWaiters; startupWaiters.removeAll()
         callbacks.forEach { $0(allowed) }
     }

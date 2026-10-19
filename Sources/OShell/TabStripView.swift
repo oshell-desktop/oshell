@@ -8,7 +8,7 @@ import OShellCore
 /// intrinsic size of a stack view inside an unconstrained clip view.
 final class TabStripView: InterfaceSurfaceView {
     static let barHeight: CGFloat = 30
-    enum ConnectionStatus {
+    enum ConnectionStatus: Equatable {
         case disconnected, connecting, connected, commandConnection
         var title: String { switch self { case .disconnected: return "未连接 / 已断开"; case .connecting: return "正在连接 / 等待认证"; case .connected: return "已连接"; case .commandConnection: return "命令行连接运行中" } }
         var color: NSColor { self == .disconnected ? .systemRed : .systemGreen }
@@ -175,6 +175,8 @@ final class TabStripView: InterfaceSurfaceView {
     private let listButton = MenuPopUp(frame: .zero, pullsDown: true)
     private(set) var items = [Item]()
     private var selectedID: UUID?
+    private var displayedEntries: [Entry]?
+    private var displayedShortcuts: KeyboardShortcuts?
     var onSelect: ((UUID) -> Void)?
     var onClose: ((UUID) -> Void)?
     var onDuplicate: ((UUID) -> Void)?
@@ -216,7 +218,7 @@ final class TabStripView: InterfaceSurfaceView {
         groupWidth = min(120, max(76, (caption as NSString).size(withAttributes: [.font: groupButton.font!]).width + 24))
         needsLayout = true
     }
-    struct Entry {
+    struct Entry: Equatable {
         let id: UUID
         let title: String
         let detail: String
@@ -234,7 +236,11 @@ final class TabStripView: InterfaceSurfaceView {
         }, selectedID: selected?.id)
     }
     func update(entries: [Entry], selectedID: UUID?) {
-        if items.map(\.id) != entries.map(\.id) {
+        let shortcuts = ShortcutRuntime.current
+        guard displayedEntries != entries || self.selectedID != selectedID || displayedShortcuts != shortcuts else { return }
+        let previous = displayedEntries, shortcutsChanged = displayedShortcuts != shortcuts
+        let reordered = items.map(\.id) != entries.map(\.id)
+        if reordered {
             items.forEach { $0.removeFromSuperview() }
             items = entries.map { entry in
                 let item = Item(id: entry.id)
@@ -253,9 +259,12 @@ final class TabStripView: InterfaceSurfaceView {
             }
         }
         self.selectedID = selectedID
-        let menu = NSMenu(); menu.addItem(NSMenuItem(title: "", action: nil, keyEquivalent: ""))
+        let rebuildMenu = reordered || listButton.menu == nil
+        let menu = rebuildMenu ? NSMenu() : listButton.menu!
+        if rebuildMenu { menu.addItem(NSMenuItem(title: "", action: nil, keyEquivalent: "")) }
         for (index, entry) in entries.enumerated() {
             let item = items[index], number = entry.number ?? index + 1
+            if !rebuildMenu, !shortcutsChanged, previous?[index] == entry, item.selected == (entry.id == selectedID) { continue }
             let title = entry.number.map { "\($0)  \(entry.title)" } ?? entry.title
             item.selectButton.title = title; item.hasUnreadOutput = entry.hasUnreadOutput
             item.connectionStatus = entry.connectionStatus
@@ -270,15 +279,18 @@ final class TabStripView: InterfaceSurfaceView {
             item.selectButton.toolTip = item.toolTip
             item.closeButton.toolTip = "关闭“\(title)”"; item.closeButton.setAccessibilityLabel("关闭“\(title)”")
             item.preferredWidth = min(320, max(120, (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .bold)]).width + 48))
-            let choice = NSMenuItem(title: (entry.hasUnreadOutput ? "● " : "") + "\(number). \(entry.title)" + (entry.hasUnreadOutput ? "（新输出）" : ""), action: #selector(selectFromList(_:)), keyEquivalent: "")
+            let choice = rebuildMenu ? NSMenuItem(title: "", action: #selector(selectFromList(_:)), keyEquivalent: "") : menu.items[index + 1]
+            choice.title = (entry.hasUnreadOutput ? "● " : "") + "\(number). \(entry.title)" + (entry.hasUnreadOutput ? "（新输出）" : "")
             choice.representedObject = entry.id; choice.target = self; choice.state = item.selected ? .on : .off
-            menu.addItem(choice)
+            if rebuildMenu { menu.addItem(choice) }
         }
         let unread = entries.filter(\.hasUnreadOutput).count
         listButton.oshellContentTintColor = unread > 0 ? .systemOrange : nil
         listButton.toolTip = unread > 0 ? "所有标签 · \(unread) 个有未读输出" : "所有标签"
         listButton.setAccessibilityValue(unread > 0 ? "\(unread) 个标签有未读输出" : "无未读输出")
-        listButton.menu = menu; listButton.isEnabled = !entries.isEmpty; needsLayout = true
+        if rebuildMenu { listButton.menu = menu }
+        listButton.isEnabled = !entries.isEmpty
+        displayedEntries = entries; displayedShortcuts = shortcuts; needsLayout = true
     }
     override func layout() {
         super.layout()

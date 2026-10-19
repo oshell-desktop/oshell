@@ -95,6 +95,13 @@ final class WebDAVSync {
         diagnostics = SyncDiagnostics(directory: Self.root)
         restoreDiagnostics()
     }
+    #if OSHELL_TEST_HARNESS
+    var diagnosticTimers: (refresh: Timer?, queued: Timer?) { (refreshTimer, queuedTimer) }
+    #endif
+    deinit {
+        // Weak timer callbacks do not remove the timer from the run loop.
+        queuedTimer?.invalidate(); refreshTimer?.invalidate(); task?.cancel(); client?.cancel()
+    }
     func settings(master: String) throws -> WebDAVSettings? {
         guard let data = try SharedDataFile.readIfPresent(Self.settingsURL) else { return nil }
         return try JSONDecoder().decode(WebDAVSettings.self, from: SharedVault.open(data, password: master))
