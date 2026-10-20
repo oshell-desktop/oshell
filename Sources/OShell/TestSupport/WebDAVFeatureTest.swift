@@ -31,7 +31,7 @@ final class WebDAVFeatureTest {
     private func start() {
         do {
             let profile = SessionProfile(name: "dav-a", host: "a.example.test")
-            var value = workspace.configuration; value.profiles = [profile, SessionProfile(name: "dav-b", host: "b.example.test")]; value.preferences.metal = false
+            var value = workspace.configuration; value.profiles = [profile, SessionProfile(name: "dav-b", host: "b.example.test")]; value.preferences.metal = false; value.preferences.fontSize = 23; value.sessionDefaults.sshPort = 2201; value.sessionLinks.visible = false; value.quickCommands = [QuickCommand(name: "local-only", text: "echo local")]
             checks["localFixtureSaved"] = workspace.saveConfiguration(value)
             checks["noMasterCannotShare"] = (try? SharingProtection.require(workspace.configuration)) == nil
             checks["masterEnabled"] = try workspace.enableMasterProtection(master)
@@ -76,8 +76,38 @@ final class WebDAVFeatureTest {
             checks["accountSecretEncryptedLocally"] = SharedVault.isEncrypted(settings) && !String(decoding: settings, as: UTF8.self).contains("fixture-password")
             do { _ = try workspace.disableMasterProtection(master); checks["cannotClearMasterWhileSharing"] = false } catch { checks["cannotClearMasterWhileSharing"] = true }
             sync.sync(interactive: true)
-            wait("firstUploadCompletes", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in checks["manualSuccessDoesNotInterruptWithPopup"] = NSApp.modalWindow == nil; checks["toolbarShowsWebDAVSuccess"] = workspace.syncStatusButton.presentation.mark == .complete; sync.cancel(); makeConflict() }
+            wait("firstUploadCompletes", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in checks["manualSuccessDoesNotInterruptWithPopup"] = NSApp.modalWindow == nil; checks["toolbarShowsWebDAVSuccess"] = workspace.syncStatusButton.presentation.mark == .complete; sync.cancel(); sessionScope() }
         } catch { checks["enableSync"] = false; finish() }
+    }
+    private func sessionScope() {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let result = Result { () -> (Data, Bool) in
+                let c = try client("engine"), object = try c.fetch()!
+                var remote = try SharedVault.decode(object.data, password: master)
+                let omitted = remote.preferences.fontSize != 23 && remote.sessionDefaults.sshPort != 2201 && remote.quickCommands.isEmpty && remote.sessionLinks.visible
+                remote.preferences.fontSize = 18; remote.sessionDefaults.sshPort = 2218
+                remote.quickCommands = [QuickCommand(name: "peer-only", text: "echo peer")]
+                let data = try SharedVault.encode(remote, password: master)
+                try c.put(data, matching: object.etag); return (data, omitted)
+            }
+            DispatchQueue.main.async { [self] in
+                do {
+                    let (expected, omitted) = try result.get(); checks["firstUploadOmitsLocalClientSettings"] = omitted
+                    var local = workspace.configuration; local.preferences.fontSize = 25
+                    checks["clientSettingsSavedLocally"] = workspace.saveConfiguration(local)
+                    checks["clientSettingsDoNotMarkSessionsPending"] = sync.pendingLocalChanges == false
+                    sync.sync(interactive: false)
+                    wait("settingsOnlyRemoteChangeCompletes", condition: { !self.sync.busy && self.sync.phase == .success }) { [self] in
+                        sync.cancel()
+                        checks["incomingSettingsDoNotApplyLocally"] = workspace.configuration.preferences.fontSize == 25 && workspace.configuration.sessionDefaults.sshPort == 2201 && workspace.configuration.quickCommands.first?.name == "local-only" && !workspace.configuration.sessionLinks.visible
+                        DispatchQueue.global(qos: .utility).async { [self] in
+                            let unchanged = (try? client("engine").fetch()?.data) == expected
+                            DispatchQueue.main.async { [self] in checks["settingsOnlyChangesDoNotRewriteRemote"] = unchanged; makeConflict() }
+                        }
+                    }
+                } catch { checks["scopeSetup"] = false; finish() }
+            }
+        }
     }
     private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     private func makeConflict() {
@@ -118,6 +148,7 @@ final class WebDAVFeatureTest {
                 sync.sync(interactive: false)
                 wait("remoteOnlyDownloaded", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in
                     sync.cancel(); checks["remoteOnlyUpdateApplied"] = workspace.configuration.profiles[1].name == "remote-only"
+                    checks["sessionDownloadKeepsClientSettings"] = workspace.configuration.preferences.fontSize == 25 && workspace.configuration.sessionDefaults.sshPort == 2201 && !workspace.configuration.sessionLinks.visible
                     offline()
                 }
             }

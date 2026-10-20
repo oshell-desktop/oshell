@@ -29,3 +29,13 @@ python3 scripts/test-sync-interop.py --native-source /path/to/OShell
 - Swift 核心源码摘要：`c5cadb3869a544e059e91a165806704a02a654e7fae6ef2881dbf87f7b1870a7`。
 - Go 原生兼容样本及 `test-sync-interop.py` 真实双向验证通过：Swift/Go 往返、多节点目录与 WebDAV 同步、首次读取无多余改写、完整共享字段与未知字段拒绝、会话归档使用同一字段定义。
 - 本次侧栏专用快捷键、显示状态和鼠标选词偏好留在 Mac 本机，不进入共享配置；Touch ID 记录、命令历史、文件传输记录及续传检查点不加入同步。
+
+## OShell 会话范围同步（v2 兼容模式）
+
+OShell 的传输合并使用 `SessionSyncConfiguration` 白名单：profiles、proxies、directories、sessionLinks 的 entries/folders/rootOrder，以及用于认证和比较的 masterPasswordVerifier。客户端 Preferences、默认会话属性、快速命令、高亮规则及 Links.visible 保留本机，不参与远端差异比较。
+
+编码合同与信封版本不变。已有目标的客户端设置部分作为兼容字段保留，新目标填入固定协议默认值，不导出本机客户端设置。接收旧 v1/v2 数据时仍先验证完整合同、密码和引用，未知数据继续拒绝；再仅将白名单会话内容应用到当前完整本机配置。写入仍使用强 ETag / 内容版本条件。
+
+此变更仅在 OShell 实现。未修改的 Desktop 继续读取同一格式，其自身客户端设置处理不由 OShell 控制；不能宣称旧 Desktop 也实现了“设置仅本机”。
+
+除原有双向协议回归外，可运行 `python3 scripts/test-session-sync-interop.py --desktop-source /path/to/oshell-desktop`。该测试在临时 Go overlay 中使用 Desktop 的实际核心实现，不修改 Desktop 项目文件，验证会话/代理/密码/链接往返、旧包兼容、OShell 设置保留和仅设置变化不上传。

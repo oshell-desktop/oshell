@@ -1382,6 +1382,53 @@ final class CoreTests {
         let remaining = try FileManager.default.contentsOfDirectory(atPath: empty.path)
         XCTAssertTrue(remaining.isEmpty)
     }
+    func testSessionOnlySyncProjection() throws {
+        let master = "scope-fixture-master"
+        var own = Configuration(profiles: [SessionProfile(name: "own", host: "scope.example.test", username: "fixture")])
+        own.masterPasswordVerifier = try MasterPasswordProtection.createVerifier(master)
+        own.profiles[0].encryptedPassword = try SessionCipher.encrypt("fixture-password", master: master, profile: own.profiles[0], identity: SSHIdentity(host: own.profiles[0].host, user: own.profiles[0].username, port: own.profiles[0].port))
+        own.preferences.fontSize = 23; own.preferences.scrollback = 12345; own.preferences.interfaceTheme = .light
+        own.sessionDefaults.sshPort = 2201; own.quickCommands = [QuickCommand(name: "local-only", text: "echo local")]; own.sessionLinks.visible = false
+        var remote = own; remote.preferences.fontSize = 18; remote.preferences.interfaceTheme = .dark
+        remote.sessionDefaults.sshPort = 2209; remote.quickCommands = []; remote.sessionLinks.visible = true
+        XCTAssertTrue(SessionSyncConfiguration.same(own, remote))
+        let projection = try SessionSyncConfiguration.project(own)
+        let body = String(decoding: try SessionSyncConfiguration.data(own), as: UTF8.self)
+        for excluded in ["preferences", "sessionDefaults", "quickCommands", "highlightSets", "visible"] { XCTAssertTrue(!body.contains("\"" + excluded + "\"")) }
+        remote.profiles[0].name = "remote-name"
+        let applied = SessionSyncConfiguration.applying(try SessionSyncConfiguration.project(remote), to: own)
+        XCTAssertEqual(applied.profiles[0].name, "remote-name")
+        XCTAssertEqual(applied.preferences.fontSize, 23); XCTAssertEqual(applied.preferences.scrollback, 12345)
+        XCTAssertEqual(applied.sessionDefaults, own.sessionDefaults); XCTAssertEqual(applied.quickCommands, own.quickCommands)
+        XCTAssertEqual(applied.sessionLinks.visible, false)
+        XCTAssertEqual(try SessionCipher.decrypt(applied.profiles[0].encryptedPassword!, master: master, profile: applied.profiles[0]), "fixture-password")
+        let wire = try SessionSyncConfiguration.wireConfiguration(applied, preserving: remote)
+        XCTAssertEqual(wire.preferences.fontSize, 18); XCTAssertEqual(wire.sessionDefaults.sshPort, 2209)
+        XCTAssertEqual(wire.sessionLinks.visible, true); XCTAssertTrue(wire.quickCommands.isEmpty)
+        let first = try SessionSyncConfiguration.wireConfiguration(own, preserving: nil)
+        XCTAssertEqual(first.preferences.fontSize, Preferences().fontSize); XCTAssertTrue(first.quickCommands.isEmpty)
+        let encoded = try SharedVault.encode(wire, password: master)
+        XCTAssertEqual(try SharedVault.decode(encoded, password: master).profiles, wire.profiles)
+        var otherEdit = remote; otherEdit.preferences.fontSize = 24
+        let plan = try ConfigurationMerge(base: projection, local: SessionSyncConfiguration.project(own), remote: SessionSyncConfiguration.project(otherEdit))
+        XCTAssertTrue(plan.conflicts.isEmpty)
+        XCTAssertEqual(try plan.resolve([:]).profiles[0].name, "remote-name")
+        var localEdit = own; localEdit.profiles[0].name = "own-name"
+        XCTAssertEqual(try ConfigurationMerge(base: projection, local: SessionSyncConfiguration.project(localEdit), remote: SessionSyncConfiguration.project(remote)).conflicts.count, 1)
+        // Initial merge must include proxy/link dependencies of both disjoint sessions.
+        var peer = Configuration(profiles: [SessionProfile(name: "peer", host: "peer.example.test")]); peer.masterPasswordVerifier = own.masterPasswordVerifier
+        var proxy = ProxySettings(); proxy.kind = .jump; proxy.host = "jump.example.test"; proxy.username = "jump"
+        own.proxies = [ProxyProfile(name: "local-jump", settings: proxy)]; own.profiles[0].proxyID = proxy.id
+        own.sessionLinks.entries = [SessionLink(profileID: own.profiles[0].id, name: "local-link")]
+        peer.sessionLinks.entries = [SessionLink(profileID: peer.profiles[0].id, name: "peer-link")]
+        own.directories = ["local-empty"]; peer.directories = ["peer-empty"]
+        let initial = try SessionSyncConfiguration.initialMerge(local: own, remote: peer)
+        XCTAssertTrue(initial.conflicts.isEmpty)
+        let merged = try initial.resolve([:])
+        XCTAssertEqual(merged.profiles.count, 2); XCTAssertEqual(merged.proxies.count, 1); XCTAssertEqual(merged.sessionLinks.entries.count, 2)
+        XCTAssertTrue(merged.directories.contains("local-empty") && merged.directories.contains("peer-empty"))
+        XCTAssertEqual(merged.profiles.first { $0.id == own.profiles[0].id }?.proxyID, proxy.id)
+    }
     func testLiveReplicaSelection() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sync-selection-fixture-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2133,6 +2180,7 @@ extension CoreTests {
         try tests.testStorageLocationAndSharedWrites()
         try tests.testDirectoryReplicaMigrationAndOffline()
         try tests.testLiveReplicaSelection()
+        try tests.testSessionOnlySyncProjection()
         try tests.testSyncDiagnosticsPrivacyAndRetention()
         try tests.testConfigurationRoundTripAndPermissions()
         tests.testSplitANSISequencesAndUTF8ArePreserved()
@@ -2140,7 +2188,7 @@ extension CoreTests {
         tests.testInvalidZmodemHeadersRemainOrdinaryOutput()
         try tests.testLoggerFlushesEveryAcceptedChunk()
         tests.testCancellationDropsInFlightBytesAcrossEveryBoundary()
-        if failures.isEmpty { print("PASS: 70 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
+        if failures.isEmpty { print("PASS: 71 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
         else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
     }
 }

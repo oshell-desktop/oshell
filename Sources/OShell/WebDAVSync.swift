@@ -19,7 +19,11 @@ final class WebDAVSync {
     var isLocked: Bool { syncEnabled && PasswordVault.shared.cachedMaster == nil }
     var recentError: String? { lastError }
     private func notify() { NotificationCenter.default.post(name: Self.statusDidChange, object: self) }
-    private func fingerprint() -> String? { (try? SharedDataFile.readIfPresent(store.url)).map { PlatformDigest.sha256($0).map { String(format: "%02x", $0) }.joined() } }
+    private func fingerprint() -> String? {
+        guard let configuration = windows?.active?.configuration ?? windows?.workspaces.first?.configuration,
+              let data = try? SessionSyncConfiguration.data(configuration) else { return nil }
+        return PlatformDigest.sha256(data).map { String(format: "%02x", $0) }.joined()
+    }
     private func restoreDiagnostics() {
         let identity = directory.map { Data($0.path.utf8) } ?? (try? SharedDataFile.readIfPresent(Self.settingsURL)) ?? Data("disabled".utf8)
         let scope = PlatformDigest.sha256(identity).map { String(format: "%02x", $0) }.joined()
@@ -142,6 +146,8 @@ final class WebDAVSync {
     func schedule(localChanges: Bool = false) {
         guard syncEnabled, !applying else { return }
         if localChanges {
+            let changed = fingerprint() != summary.localFingerprint
+            if !changed, summary.lastSuccess != nil { pendingLocalChanges = false; installRefreshTimer(); notify(); return }
             if pendingLocalChanges != true { diagnostics.record(.localChanged, backend: diagnosticBackend) }
             pendingLocalChanges = true
             if !busy && !deferredConflict && !manualQueued { phase = .queued; status = "本地修改已保存，等待同步" }
@@ -179,7 +185,7 @@ final class WebDAVSync {
                 guard let settings = try settings(master: master) else { return }
                 client = try makeClient(settings); baselineURL = Self.root.appendingPathComponent("webdav-baseline.json"); allowCreate = true
             }
-            let local = workspace.configuration, revision = workspace.configurationRevision, current = UUID()
+            let local = try SessionSyncConfiguration.project(workspace.configuration), revision = workspace.configurationRevision, current = UUID()
             let name = backendName
             token = current; self.client = client; busy = true; status = "正在读取\(name)共享数据…"; notify()
             let baseData = try SharedDataFile.readIfPresent(baselineURL)
@@ -193,7 +199,9 @@ final class WebDAVSync {
                 DispatchQueue.main.async { [weak self, weak workspace] in
                     guard let self, self.token == current, let workspace else { return }
                     do {
-                        let (object, remote, baseline) = try result.get(); self.record(.fetched)
+                        let (object, compatibility, oldBaseline) = try result.get(); self.record(.fetched)
+                        let remote = try compatibility.map(SessionSyncConfiguration.project)
+                        let baseline = try oldBaseline.map(SessionSyncConfiguration.project)
                         guard NSApp.modalWindow == nil else {
                             self.phase = .queued; self.status = "等待关闭当前对话框后继续同步"; self.record(.queued, always: true)
                             self.finish()
@@ -226,23 +234,21 @@ final class WebDAVSync {
                             } else {
                                 self.phase = .conflict; self.status = "首次连接已有数据，等待选择"; self.record(.conflict, always: true); self.notify()
                                 let alert = PopupAlert(); alert.messageText = "\(name)已有共享数据"
-                                alert.informativeText = "首次同步：共享端有 \(remote.profiles.count) 个会话，本机有 \(local.profiles.count) 个。请选择加载共享版本，或合并本机会话；不会按时间直接覆盖。"
+                                alert.informativeText = "首次同步：共享端有 \(remote.profiles.count) 个会话，本机有 \(local.profiles.count) 个。请选择加载共享会话，或合并本机会话及其代理、目录和链接；客户端设置保留在本机，不会按时间直接覆盖。"
                                 alert.addButton(withTitle: "使用共享版本"); alert.addButton(withTitle: "合并本机会话"); alert.addButton(withTitle: "取消")
                                 let response = alert.runModal()
                                 if response == .alertFirstButtonReturn { resolved = remote }
                                 else if response == .alertSecondButtonReturn {
-                                    var base = remote; base.profiles = []
-                                    var own = remote; own.profiles = local.profiles
-                                    let plan = try ConfigurationMerge(base: base, local: own, remote: remote)
+                                    let plan = try SessionSyncConfiguration.initialMerge(local: local, remote: remote)
                                     guard let choices = self.choose(plan, name: name) else { self.finish(); return }; resolved = try plan.resolve(choices)
                                 } else { self.deferredConflict = true; self.phase = .conflict; self.status = "首次同步待确认，请手动同步继续"; self.record(.postponed, always: true); self.summary.outcome = .postponed; self.diagnostics.saveSummary(self.summary); self.finish(); return }
                             }
                             guard workspace.configurationRevision == revision, PasswordVault.shared.cachedMaster == master else { throw ModelError.invalid("选择期间本机配置发生变化，请重新同步。本机修改已保留。") }
                             let needsUpload = !Self.same(resolved, remote)
-                            self.commit(resolved, remote: object, upload: needsUpload, client: client, baselineURL: baselineURL, backupLocal: baseline == nil && object != nil, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
+                            self.commit(resolved, compatibility: compatibility, remote: object, upload: needsUpload, client: client, baselineURL: baselineURL, backupLocal: baseline == nil && object != nil, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
                         } else {
                             guard baseline == nil && allowCreate else { throw ModelError.invalid("远端同步文件被删除，未自动重建或覆盖。请确认远端目录后重新配置。") }
-                            self.commit(resolved, remote: nil, upload: true, client: client, baselineURL: baselineURL, backupLocal: false, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
+                            self.commit(resolved, compatibility: nil, remote: nil, upload: true, client: client, baselineURL: baselineURL, backupLocal: false, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
                         }
                     } catch { self.fail(error, interactive: interactive) }
                 }
@@ -259,13 +265,14 @@ final class WebDAVSync {
         guard alert.runModal() == .alertFirstButtonReturn else { deferredConflict = true; status = "有待确认的会话冲突，请手动同步继续"; record(.postponed, always: true); summary.outcome = .postponed; diagnostics.saveSummary(summary); return nil }
         return view.choices
     }
-    private func commit(_ value: Configuration, remote: WebDAVObject?, upload: Bool, client: SharedSyncTransport, baselineURL: URL, backupLocal: Bool, master: String, revision: Int, workspace: WorkspaceController, token: UUID, interactive: Bool) {
+    private func commit(_ value: Configuration, compatibility: Configuration?, remote: WebDAVObject?, upload: Bool, client: SharedSyncTransport, baselineURL: URL, backupLocal: Bool, master: String, revision: Int, workspace: WorkspaceController, token: UUID, interactive: Bool) {
         phase = upload ? .writing : .applying
         status = upload ? "正在加密并上传…" : "正在载入共享数据…"
         record(upload ? .uploading : .applying); notify()
         DispatchQueue.global(qos: .utility).async { [weak self, weak workspace] in
             let result = Result { () -> Data in
-                let encrypted = try SharedVault.encode(value, password: master)
+                let wire = try SessionSyncConfiguration.wireConfiguration(value, preserving: compatibility)
+                let encrypted = try SharedVault.encode(wire, password: master)
                 if upload { try client.put(encrypted, matching: remote?.etag) }
                 else if try client.fetch()?.etag != remote?.etag { throw WebDAVFailure.conflict }
                 return encrypted
@@ -285,16 +292,17 @@ final class WebDAVSync {
                     let editedWhileSyncing = workspace.configurationRevision != revision
                     if !editedWhileSyncing {
                         self.applying = true; defer { self.applying = false }
-                        guard !workspace.appUpdater.isBusy || value.preferences.updateRepository == workspace.configuration.preferences.updateRepository else { throw ModelError.invalid("更新正在进行，请完成后再同步配置。") }
                         if backupLocal, let prior = try SharedDataFile.readIfPresent(self.store.url) {
                             let backup = Self.root.appendingPathComponent("storage-backups").appendingPathComponent(UUID().uuidString + ".json")
                             try FileManager.default.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                             try PrivateFile.write(prior, to: backup)
                         }
-                        if !Self.same(value, workspace.configuration) { try self.store.save(value) }
-
-                        PasswordVault.shared.acceptSharedConfiguration(value)
-                        workspace.acceptSavedConfiguration(value, applyPreferences: true)
+                        let applied = SessionSyncConfiguration.applying(value, to: workspace.configuration)
+                        if !Self.same(applied, workspace.configuration) {
+                            try self.store.save(applied)
+                            PasswordVault.shared.acceptSharedConfiguration(applied)
+                            workspace.acceptSavedConfiguration(applied, applyPreferences: false)
+                        }
                         try FileManager.default.createDirectory(at: baselineURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                         try PrivateFile.write(encrypted, to: baselineURL)
                     }

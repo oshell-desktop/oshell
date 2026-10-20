@@ -134,7 +134,11 @@ final class DirectorySyncTest {
     private func initialAdoption() {
         do {
             sync.cancel()
+            let ownSettings = workspace.configuration.preferences
+            let ownDefaults = workspace.configuration.sessionDefaults
+            let ownVisibility = workspace.configuration.sessionLinks.visible
             var remote = workspace.configuration; remote.profiles[0].name = "existing-directory"
+            remote.preferences.fontSize = 26; remote.sessionDefaults.sshPort = 2239; remote.sessionLinks.visible = !ownVisibility
             let encrypted = try SharedVault.encode(remote, password: master)
             try DirectorySyncClient(directory: shared).put(encrypted, matching: nil)
             let location = StorageLocation(base: root)
@@ -151,6 +155,7 @@ final class DirectorySyncTest {
                 sync.cancel(); answer("使用共享版本"); sync.sync(interactive: false)
                 wait("initialAdoptionConfirmed", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in
                     sync.cancel()
+                    checks["firstAdoptionKeepsClientSettings"] = workspace.configuration.preferences.fontSize == ownSettings.fontSize && workspace.configuration.sessionDefaults == ownDefaults && workspace.configuration.sessionLinks.visible == ownVisibility
                     checks["adoptUsesLocalDatabase"] = workspace.configuration.profiles[0].name == "existing-directory" && workspace.store.url == root.appendingPathComponent("configuration.json")
                     let backups = (try? FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("storage-backups"), includingPropertiesForKeys: nil)) ?? []
                     checks["adoptionKeepsLocalBackup"] = backups.contains { (try? Data(contentsOf: $0)) == localBefore }

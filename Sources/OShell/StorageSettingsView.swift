@@ -63,7 +63,7 @@ final class StorageSettingsView: NSView {
         certificateStatus.font = .systemFont(ofSize: 12); certificateStatus.isSelectable = true
         certificateStatus.identifier = .init("webdav.certificateStatus")
         for v in [address, username, password, probe, davStatus, certificateStatus, certificateControls] { davFields.addArrangedSubview(v) }
-        let intro = label("先选择一种同步方式，再配置同步位置。多台设备使用同一位置和相同主密码，共享会话与配置。")
+        let intro = label("先选择一种同步方式，再配置同步位置。多台设备使用同一位置和相同主密码；仅同步会话、目录、快捷链接、代理和加密密码。客户端设置保留在本机。")
         let help = label("点击“应用”生效，无需重启；首次接入和同步冲突仍需确认。启用时会引导设置或解锁主密码。")
         let localPath = label("本机始终使用：" + current.path); localPath.isSelectable = true; localPath.identifier = .init("storage.current")
         let localActions = NSStackView(views: [button("打开本机目录", #selector(reveal)), button("设置 / 解锁主密码…", #selector(setupMaster))]); localActions.spacing = 8
