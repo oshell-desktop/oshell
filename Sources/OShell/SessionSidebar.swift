@@ -56,10 +56,21 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     init() {
         super.init(frame: .zero)
         let heading = NSTextField(labelWithString: "会话"); heading.font = .systemFont(ofSize: 13, weight: .semibold)
-        let hide = NSButton(title: "", target: self, action: #selector(hideSidebar)); hide.image = NSImage(oshellSymbolName: "xmark", accessibilityDescription: "隐藏会话列表"); hide.isBordered = false; hide.toolTip = "隐藏会话列表"
-        let manage = NSButton(title: "管理…", target: self, action: #selector(manageSessions)); manage.bezelStyle = .rounded
-        let header = NSStackView(views: [heading, NSView(), manage, hide]); header.spacing = 6
-        hide.widthAnchor.constraint(equalToConstant: 20).isActive = true
+        func headerButton(_ symbol: String, label: String, action: Selector, identifier: String) -> NSButton {
+            let button = NSButton(title: "", target: self, action: action)
+            button.bezelStyle = .recessed; button.setButtonType(.momentaryPushIn)
+            (button.cell as? NSButtonCell)?.showsBorderOnlyWhileMouseInside = true
+            button.imagePosition = .imageOnly; button.imageScaling = .scaleProportionallyDown
+            button.image = NSImage(oshellSymbolName: symbol, accessibilityDescription: label)
+            button.image?.size = NSSize(width: 14, height: 14)
+            button.oshellContentTintColor = .secondaryLabelColor
+            button.toolTip = label; button.setAccessibilityLabel(label); button.identifier = .init(identifier)
+            NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 26), button.heightAnchor.constraint(equalToConstant: 24)])
+            return button
+        }
+        let manage = headerButton("gearshape", label: "管理会话", action: #selector(manageSessions), identifier: "sidebar.session.manage")
+        let hide = headerButton("chevron.left", label: "隐藏会话列表", action: #selector(hideSidebar), identifier: "sidebar.session.hide")
+        let header = NSStackView(views: [heading, NSView(), manage, hide]); header.spacing = 4
         search.placeholderString = "搜索会话、主机或目录"; search.delegate = self
         search.identifier = .init("sidebar.session.search"); search.setAccessibilityLabel("搜索会话列表")
         let expand = NSButton(title: "全部展开", target: self, action: #selector(expandAll))

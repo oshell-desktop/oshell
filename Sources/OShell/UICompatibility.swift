@@ -28,7 +28,7 @@ extension NSImage {
         let image: NSImage
         if symbol.contains("folder"), let folder = NSImage(named: NSImage.folderName) { image = folder }
         else {
-            let glyphs = ["chevron.up": "↑", "chevron.down": "↓", "plus": "+", "xmark": "×", "terminal": ">_", "magnifyingglass": "⌕", "gearshape": "⚙", "record.circle": "●", "stop.circle.fill": "■", "arrow.turn.up.left": "↰"]
+            let glyphs = ["chevron.left": "‹", "chevron.up": "↑", "chevron.down": "↓", "plus": "+", "xmark": "×", "terminal": ">_", "magnifyingglass": "⌕", "gearshape": "⚙", "record.circle": "●", "stop.circle.fill": "■", "arrow.turn.up.left": "↰"]
             let glyph = glyphs[symbol] ?? "≡"
             image = NSImage(size: NSSize(width: 18, height: 18))
             image.lockFocus()
