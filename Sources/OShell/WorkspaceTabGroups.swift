@@ -69,7 +69,7 @@ extension WorkspaceController {
         let entries = node.tabs.compactMap { id in tabs.first { $0.id == id } }
         let active = entries.first { $0.id == node.active } ?? entries.first
         node.active = active?.id
-        let strip = TabStripView(); configureTerminalTabStrip(strip)
+        let strip = TabStripView(); configureTerminalTabStrip(strip, groupID: node.id)
         strip.onReorderTab = { [weak self, weak node] id, before in
             guard let node else { return false }; return self?.reorderTab(id, before: before, inGroup: node.id) ?? false
         }

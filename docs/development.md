@@ -20,6 +20,8 @@ bash scripts/build.sh --tests
 python3 scripts/run-ui-tests.py --list
 python3 scripts/run-ui-tests.py directory-picker-stress terminal-clock tab-bar-menu
 python3 scripts/run-ui-tests.py resource-review
+python3 scripts/run-ui-tests.py auth-concurrency login-password-save proxy-catalog
+python3 scripts/run-ui-tests.py tab-window-merge tab-detach tab-reorder multi-window
 python3 scripts/run-ui-tests.py --group sessions
 ```
 

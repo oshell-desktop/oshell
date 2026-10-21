@@ -4,7 +4,6 @@
 
 """Loopback protocol and duplex/backpressure checks for OShellProxy (stdlib only)."""
 import json, os, socket, struct, subprocess, sys, tempfile, threading
-from pathlib import Path
 
 def exact(sock, n):
     data = b''

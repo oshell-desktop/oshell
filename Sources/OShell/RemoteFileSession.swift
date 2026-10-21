@@ -65,6 +65,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         super.init(nibName: nil, bundle: nil)
         view = NSView(frame: NSRect(x: 0, y: 0, width: 940, height: 560)); build()
     }
+    func reassignWorkspace(_ workspace: WorkspaceController) { self.workspace = workspace }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private var selected: [RemoteFileEntry] { table.selectedRowIndexes.compactMap { visibleEntries.indices.contains($0) ? visibleEntries[$0] : nil } }
     private func build() {

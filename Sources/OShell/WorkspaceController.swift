@@ -253,10 +253,19 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             workspace.trailingAnchor.constraint(equalTo: content.trailingAnchor), workspace.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
     }
-    func configureTerminalTabStrip(_ strip: TabStripView) {
+    func configureTerminalTabStrip(_ strip: TabStripView, groupID: UUID? = nil) {
         strip.allowsTabDragging = true
         strip.canAcceptTab = { [weak self] id in self?.isSecurityUnlocked == true && self?.tabs.contains(where: { $0.id == id }) == true }
         strip.onReorderTab = { [weak self] id, before in self?.reorderTab(id, before: before) ?? false }
+        strip.canAcceptExternalTab = { [weak self] id, source in
+            self?.externalTabSource(id, window: source, groupID: groupID) != nil
+        }
+        strip.onExternalTabDrop = { [weak self] id, sourceWindow, before in
+            guard let self, let source = self.externalTabSource(id, window: sourceWindow, groupID: groupID),
+                  let tab = source.tabs.first(where: { $0.id == id }),
+                  source.move(tab, to: self, before: before, inGroup: groupID) else { return false }
+            self.show(); return true
+        }
         strip.onDragOver = { [weak self] in self?.terminalHost.clearPreview() }
         strip.onDragEnd = { [weak self] in
             self?.terminalHost.clearPreview(); self?.tabStrip.clearDragPreview()
@@ -972,6 +981,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         guard !cancelled, operation.isEmpty, let window, window.isVisible, !window.isMiniaturized,
               !window.frame.insetBy(dx: -12, dy: -12).contains(point),
               NSScreen.screens.contains(where: { $0.frame.contains(point) }) else { return nil }
+        // A rejected drop over another OShell window must not create a third
+        // window (for example, a locked destination or a missed tab strip).
+        if windowCoordinator?.workspaces.contains(where: { $0 !== self && $0.window?.isVisible == true && $0.window?.isMiniaturized == false && $0.window?.frame.contains(point) == true }) == true { return nil }
         return detachTab(id, at: point)
     }
     @discardableResult func detachTab(_ id: UUID, at point: NSPoint? = nil) -> WorkspaceController? {
@@ -990,18 +1002,52 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         guard move(tab, to: destination) else { destination.window?.close(); return nil }
         destination.show(); return destination
     }
-    @discardableResult func move(_ tab: TerminalTab, to destination: WorkspaceController) -> Bool {
+    private func externalTabSource(_ id: UUID, window sourceWindow: NSWindow, groupID: UUID?) -> WorkspaceController? {
+        guard isSecurityUnlocked, !loadFailed, window?.isVisible == true, window?.attachedSheet == nil, NSApp.modalWindow == nil,
+              let source = windowCoordinator?.workspaces.first(where: { $0.window === sourceWindow }), source !== self,
+              source.isSecurityUnlocked, !source.loadFailed, sourceWindow.attachedSheet == nil,
+              source.tabs.contains(where: { $0.id == id }), !tabs.contains(where: { $0.id == id }) else { return nil }
+        if let groupID { guard customTabLayout?.groups.contains(where: { $0.id == groupID && !$0.isHidden }) == true else { return nil } }
+        else if customTabLayout != nil { return nil }
+        return source
+    }
+    @discardableResult func move(_ tab: TerminalTab, to destination: WorkspaceController, before: UUID? = nil, inGroup groupID: UUID? = nil) -> Bool {
         guard destination !== self, let index = tabs.firstIndex(where: { $0 === tab }),
-              isSecurityUnlocked, destination.isSecurityUnlocked, window?.attachedSheet == nil,
+              isSecurityUnlocked, destination.isSecurityUnlocked, !loadFailed, !destination.loadFailed,
+              windowCoordinator != nil, windowCoordinator === destination.windowCoordinator, !destination.tabs.contains(where: { $0.id == tab.id }), window?.attachedSheet == nil,
               destination.window?.attachedSheet == nil, NSApp.modalWindow == nil else { return false }
+        let group: TabGroupNode?
+        if let root = destination.customTabLayout {
+            group = root.groups.first { $0.id == (groupID ?? destination.activeTabGroupID) && !$0.isHidden } ?? (groupID == nil ? root.groups.first { !$0.isHidden } : nil)
+            guard let group, before == nil || group.tabs.contains(before!) else { return false }
+        } else {
+            guard groupID == nil, before == nil || destination.tabs.contains(where: { $0.id == before }) else { return false }
+            group = nil
+        }
         let ids = Set(tab.layout.panes.map(\.id))
         syncTargets.subtract(ids); composerTargets.subtract(ids); quickSendSelected.subtract(ids)
         tab.displayView.removeFromSuperview(); tabs.remove(at: index); tabHistory.removeAll { $0 == tab.id }
         if selectedTab === tab { selectedTab = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)] }
         rebuildWorkspace(); refreshOperatorState()
-        destination.tabs.append(tab); destination.selectedTab = tab
+        destination.tabs.insert(tab, at: before.flatMap { target in destination.tabs.firstIndex { $0.id == target } } ?? destination.tabs.count)
+        if let group {
+            group.tabs.insert(tab.id, at: before.flatMap { group.tabs.firstIndex(of: $0) } ?? group.tabs.count)
+            group.active = tab.id; destination.activeTabGroupID = group.id
+        }
+        destination.selectedTab = tab
         tab.layout.panes.forEach { destination.bindPane($0) }
         destination.rebuildWorkspace(); destination.select(tab); destination.refreshOperatorState()
+        if tabs.isEmpty {
+            // An empty source can be closed only after every live owner has
+            // moved. shutdown() must not cancel an independent file transfer.
+            let managers = fileWindows; fileWindows = []
+            for manager in managers {
+                manager.reassignWorkspace(destination)
+                if !destination.fileWindows.contains(where: { $0 === manager }) { destination.fileWindows.append(manager) }
+            }
+            windowCoordinator?.activate(destination); destination.show()
+            window?.close()
+        }
         return true
     }
     func receiveConfiguration(_ value: Configuration) {

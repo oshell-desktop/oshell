@@ -185,6 +185,8 @@ final class TabStripView: InterfaceSurfaceView {
     var allowsTabDragging = false
     var onDragEnd: (() -> Void)?
     var onDragCompletion: ((UUID, NSPoint, NSDragOperation, Bool) -> Void)?
+    var canAcceptExternalTab: ((UUID, NSWindow) -> Bool)?
+    var onExternalTabDrop: ((UUID, NSWindow, UUID?) -> Bool)?
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([TabDropHost.pasteboardType])
@@ -275,7 +277,7 @@ final class TabStripView: InterfaceSurfaceView {
             item.selectButton.setAccessibilityValue((item.selected ? "已选中" : "未选中") + (entry.connectionStatus.map { "，" + $0.title } ?? "") + (entry.hasUnreadOutput ? "，有未读输出" : ""))
             item.toolTip = "\(number). \(entry.title)\n" + (entry.connectionStatus.map { "连接状态：" + $0.title + "\n" } ?? "") + (entry.hasUnreadOutput ? "有新输出，切换查看后清除提示\n" : "") + entry.detail
             if let number = entry.number { item.toolTip = (item.toolTip ?? "") + (number <= 9 ? "\n" + ShortcutRuntime.hint(ShortcutAction(rawValue: "tab\(number)")!) + " 跳转" : "\n" + ShortcutRuntime.hint(.tabNumber) + " 输入编号跳转") }
-            if onDragCompletion != nil { item.toolTip = (item.toolTip ?? "") + "\n拖出当前窗口并松开，可移到新窗口；Esc 取消拖动。" }
+            if onDragCompletion != nil { item.toolTip = (item.toolTip ?? "") + "\n拖到其他窗口的标签栏可合并；拖到窗口外空白处可新建窗口；Esc 取消拖动。" }
             item.selectButton.toolTip = item.toolTip
             item.closeButton.toolTip = "关闭“\(title)”"; item.closeButton.setAccessibilityLabel("关闭“\(title)”")
             item.preferredWidth = min(320, max(120, (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .bold)]).width + 48))
@@ -324,10 +326,12 @@ final class TabStripView: InterfaceSurfaceView {
     }
     private func draggedTab(_ sender: NSDraggingInfo) -> UUID? {
         guard allowsTabDragging, onReorderTab != nil, sender.draggingSourceOperationMask.contains(.move),
-              let source = sender.draggingSource as? Item, source.dragEnabled, let window, source.window === window,
+              let source = sender.draggingSource as? Item, source.dragEnabled, let window, let sourceWindow = source.window,
               let raw = sender.draggingPasteboard.string(forType: TabDropHost.pasteboardType),
-              let id = UUID(uuidString: raw), source.id == id, canAcceptTab?(id) == true,
+              let id = UUID(uuidString: raw), source.id == id,
               bounds.contains(convert(sender.draggingLocation, from: nil)) else { return nil }
+        if sourceWindow === window { guard canAcceptTab?(id) == true else { return nil } }
+        else { guard onExternalTabDrop != nil, canAcceptExternalTab?(id, sourceWindow) == true else { return nil } }
         return id
     }
     /// Convert through the clip view so a scrolled strip uses document coordinates.
@@ -365,7 +369,11 @@ final class TabStripView: InterfaceSurfaceView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         defer { clearDragPreview() }
         guard let id = draggedTab(sender) else { return false }
-        return onReorderTab?(id,insertionBefore(at:convert(sender.draggingLocation,from:nil))) ?? false
+        let before = insertionBefore(at: convert(sender.draggingLocation, from: nil))
+        if let sourceWindow = (sender.draggingSource as? Item)?.window, sourceWindow !== window {
+            return onExternalTabDrop?(id, sourceWindow, before) ?? false
+        }
+        return onReorderTab?(id, before) ?? false
     }
     override func concludeDragOperation(_ sender: NSDraggingInfo?) { clearDragPreview() }
     func revealSelection() {

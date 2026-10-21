@@ -83,7 +83,9 @@ enum MultiWindowTest {
         checks["movedViewBelongsToDestination"] = pane.view.window === second!.window
         pane.onFocus?(pane)
         checks["movedFocusCallbackRebound"] = second!.selectedTab === original
-        first.newLocal(); let survivingPane = first.selectedTab!.activePane
+        checks["lastTransferredTabClosesSource"] = first.window?.isVisible == false && !windows.workspaces.contains { $0 === first }
+        let remaining = windows.newWindow()
+        remaining.newLocal(); let survivingPane = remaining.selectedTab!.activePane
         respond("取消")
         checks["cancelQuitLeavesAllSessions"] = !windows.canQuit() && !pane.isShutdown && !survivingPane.isShutdown
         second!.show()
@@ -95,8 +97,8 @@ enum MultiWindowTest {
         // Let the native close event and autoreleased responder objects drain.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             checks["closedControllerReleased"] = weakSecond == nil
-            checks["externalLaunchFollowsRemainingWindow"] = windows.externalWorkspace() === first
-            first.shutdown(); first.window?.close()
+            checks["externalLaunchFollowsRemainingWindow"] = windows.externalWorkspace() === remaining
+            remaining.shutdown(); remaining.window?.close()
             checks["lastWindowCanCloseWithoutQuitting"] = windows.workspaces.isEmpty
             let reopen = dockAction()
             checks["dockEnabledWithoutWindows"] = reopen.isEnabled

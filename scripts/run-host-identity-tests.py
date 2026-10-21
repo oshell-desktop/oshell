@@ -3,7 +3,7 @@
 # Copyright (c) 2026 OShell contributors
 
 """Two real PTY shells connected through nested OpenSSH; all accounts are disposable."""
-import fcntl,json,os,pathlib,pty,secrets,select,signal,socket,struct,subprocess,sys,tempfile,termios,threading,time
+import fcntl,json,os,pathlib,pty,secrets,select,signal,socket,struct,subprocess,tempfile,termios,threading
 import paramiko
 project=pathlib.Path(__file__).resolve().parent.parent
 integration = os.environ.get('OSHELL_IDENTITY_SHELL_INTEGRATION', '1') == '1'

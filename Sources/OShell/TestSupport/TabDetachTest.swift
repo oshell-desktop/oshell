@@ -63,7 +63,7 @@ enum TabDetachTest {
                 checks["closingOriginalDoesNotStopMovedSessions"] = panes.allSatisfy { !$0.isShutdown && $0.terminal.process.shellPid > 0 }
                 if let lastPoint = outside(destination.window!), let final = destination.finishTabDrag(tab.id, at: lastPoint, operation: [], cancelled: false) {
                     checks["lastTabCanDetach"] = destination.tabs.isEmpty && final.tabs.first === tab
-                    checks["emptySourceRemainsUsable"] = destination.window?.isVisible == true && destination.isSecurityUnlocked
+                    checks["emptySourceClosesAfterLastTabDetaches"] = destination.window?.isVisible == false && !windows.workspaces.contains { $0 === destination }
                     checks["lastTabStillUsesOriginalPTYs"] = panes.map { $0.terminal.process.shellPid } == pids
                 } else { checks["lastTabCanDetach"] = false }
             } else { checks["outsideReleaseCreatesExactlyOneWindow"] = false }

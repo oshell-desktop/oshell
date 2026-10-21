@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 OShell contributors
 """Portable signing policy checks; never imports a real private key."""
-import base64, hashlib, json, os, pathlib, shlex, tempfile, unittest
+import base64, hashlib, os, pathlib, shlex, tempfile, unittest
 from unittest.mock import patch
 import code_signing as signing
 

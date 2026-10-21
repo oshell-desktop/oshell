@@ -3,7 +3,7 @@
 # Copyright (c) 2026 OShell contributors
 
 """Isolated SSH/legacy/proxy/tunnel fixture. Requires paramiko, binds loopback only."""
-import base64, json, os, re, secrets, select, socket, struct, sys, threading, time
+import json, os, re, secrets, select, socket, struct, sys, threading, time
 from pathlib import Path
 import paramiko
 

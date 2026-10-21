@@ -44,6 +44,15 @@ final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
         }
         _ = addBlank()
     }
+    /// Transfer ownership without closing any backend or interrupting transfers.
+    func reassignWorkspace(_ workspace: WorkspaceController) {
+        guard !closed else { return }
+        self.workspace = workspace
+        sessions.forEach { $0.reassignWorkspace(workspace) }
+        onClosed = { [weak workspace, weak self] in
+            guard let self else { return }; workspace?.fileWindows.removeAll { $0 === self }
+        }
+    }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @discardableResult private func addBlank() -> RemoteFileSession? {
         guard let workspace, !closed else { return nil }

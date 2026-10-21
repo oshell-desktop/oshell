@@ -42,7 +42,6 @@ final class AppearanceSettingsView: NSView {
     private(set) var wells = [NSColorWell]()
     private(set) var custom: [TerminalColorScheme]
     private(set) var selectedID: String
-    private var headings = [NSTextField]()
     var allSchemes: [TerminalColorScheme] { TerminalColorScheme.presets + custom }
     var selected: TerminalColorScheme { allSchemes.first { $0.id == selectedID } ?? TerminalColorScheme.presets[0] }
     var onThemeChanged: (() -> Void)?
@@ -61,7 +60,7 @@ final class AppearanceSettingsView: NSView {
         let importButton = NSButton(title: "导入…", target: self, action: #selector(importScheme)); importButton.bezelStyle = .rounded
         let exportButton = NSButton(title: "导出…", target: self, action: #selector(exportScheme)); exportButton.bezelStyle = .rounded
         func label(_ text: String, _ frame: NSRect) {
-            let value = NSTextField(labelWithString: text); value.font = .systemFont(ofSize: 11); value.frame = frame; addSubview(value); headings.append(value)
+            let value = NSTextField(labelWithString: text); value.font = .systemFont(ofSize: 11); value.frame = frame; addSubview(value)
         }
         label("界面主题", NSRect(x: 18, y: 483, width: 80, height: 18)); theme.frame = NSRect(x: 100, y: 476, width: 190, height: 28)
         label("终端配色", NSRect(x: 316, y: 483, width: 80, height: 18)); schemes.frame = NSRect(x: 397, y: 476, width: 399, height: 28)

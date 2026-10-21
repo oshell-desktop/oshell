@@ -3,7 +3,7 @@
 # Copyright (c) 2026 OShell contributors
 
 """USM one-use ticket: SSH, SFTP and SCP share one authenticated transport."""
-import hashlib,json,os,pathlib,secrets,shutil,signal,socket,stat,subprocess,tempfile,threading,time
+import json,os,pathlib,secrets,shutil,signal,socket,subprocess,tempfile,threading,time
 import paramiko,re,errno,shlex
 project=pathlib.Path(__file__).resolve().parent.parent
 launcher=pathlib.Path(os.environ.get('OSHELL_TEST_APP',str(project/'work/test-app/OShell.app')))/'Contents/MacOS/OShell-ZOC'

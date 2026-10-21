@@ -5,7 +5,8 @@
 import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
-CASES = {'auth-concurrency':'OSHELL_AUTH_CONCURRENCY_OUTPUT',
+CASES = {'tab-window-merge':'OSHELL_TAB_WINDOW_MERGE_OUTPUT',
+ 'auth-concurrency':'OSHELL_AUTH_CONCURRENCY_OUTPUT',
  'resource-review':'OSHELL_RESOURCE_REVIEW_OUTPUT',
  'tab-detach':'OSHELL_TAB_DETACH_OUTPUT',
  'sync-settings':'OSHELL_SYNC_SETTINGS_OUTPUT',

@@ -3,7 +3,7 @@
 # Copyright (c) 2026 OShell contributors
 
 """USM launch + real SSH multiplexing, with one password authentication total."""
-import hashlib,json,os,pathlib,secrets,shutil,signal,socket,stat,subprocess,tempfile,threading,time
+import json,os,pathlib,secrets,shutil,signal,socket,subprocess,tempfile,threading,time
 import paramiko,re
 project=pathlib.Path(__file__).resolve().parent.parent
 launcher=project/'work/test-app/OShell.app/Contents/MacOS/OShell-ZOC'

@@ -55,7 +55,7 @@ enum FileWindowKeyboardTest {
             wait("escapeMinimizes",{ fileWindow.isMiniaturized }) {
                 checks["minimizeKeepsAllConnections"] = files.sessions.map(\.id) == sessions.map(\.id) && sessions.allSatisfy(\.connected) && backends.allSatisfy { !$0.isCancelled }
                 checks["escapeDoesNotCloseSSH"] = workspace.tabs.map(\.id) == originalTabs
-                files.showWindow(nil)
+                NSApp.activate(ignoringOtherApps: true); files.showWindow(nil)
                 wait("restoresSameWindow",{ !fileWindow.isMiniaturized && fileWindow.isKeyWindow }) {
                     checks["restoresFileState"] = sessions.map(\.directory) == ["/one","/two"]
                     modal { _ in NSApp.stopModal(withCode:.alertFirstButtonReturn) }
@@ -64,7 +64,7 @@ enum FileWindowKeyboardTest {
                         NSApp.postEvent(event(false),atStart:false)
                         wait("escapeMinimizesDuringTransfer",{ fileWindow.isMiniaturized }) {
                             checks["transferSurvivesMinimize"] = files.hasActiveOperation && !backends[0].isCancelled
-                            files.showWindow(nil)
+                            NSApp.activate(ignoringOtherApps: true); files.showWindow(nil)
                             wait("restoredDuringTransfer",{ fileWindow.isKeyWindow && !fileWindow.isMiniaturized }) {
                                 var cancelledPrompt = false
                                 modal { alert in
