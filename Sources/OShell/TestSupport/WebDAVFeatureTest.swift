@@ -17,7 +17,7 @@ final class WebDAVFeatureTest {
         let timer = Timer(timeInterval: 0.3, repeats: false) { _ in test.start() }; RunLoop.main.add(timer, forMode: .common)
     }
     private func client(_ path: String, password: String = "fixture-password") throws -> WebDAVClient {
-        try WebDAVClient(.init(address: server + path + "/", username: "fixture", password: password), allowLoopbackHTTP: true)
+        try WebDAVClient(.init(address: server + path + "/", username: "fixture", password: password))
     }
     private func wait(_ label: String, condition: @escaping () -> Bool, then: @escaping () -> Void) {
         let deadline = Date().addingTimeInterval(55)
@@ -72,6 +72,10 @@ final class WebDAVFeatureTest {
                     do { _ = try client("protocol", password: "incorrect").fetch(); results["badCredentialsRejected"] = false } catch { results["badCredentialsRejected"] = true }
                     let cancelled = try client("protocol"); cancelled.cancel()
                     do { _ = try cancelled.fetch(); results["cancelledRequestRejected"] = false } catch { results["cancelledRequestRejected"] = true }
+                    let slow = try client("slow"), started = Date()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) { slow.cancel() }
+                    do { _ = try slow.fetch(); results["inFlightHTTPCancelled"] = false } catch { results["inFlightHTTPCancelled"] = Date().timeIntervalSince(started) < 3 }
+
                 } catch { results["protocolUnexpectedError"] = false; print("WebDAV protocol fixture failed: \(error.localizedDescription)") }
                 let collected = results
                 DispatchQueue.main.async { [self] in checks.merge(collected, uniquingKeysWith: { _, new in new }); startSync() }
@@ -80,10 +84,22 @@ final class WebDAVFeatureTest {
     }
     private func startSync() {
         do {
-            sync.makeClient = { [weak self] _ in try self!.client("engine") }
             workspace.store.requiresMasterProtection = true; workspace.store.masterPassword = master
             checks["encryptedCacheSaved"] = workspace.saveConfiguration(workspace.configuration)
-            try sync.configure(.init(address: "https://fixture.example.test/dav/", username: "fixture", password: "fixture-password"), master: master)
+            try sync.configure(.init(address: server + "engine/", username: "fixture", password: "fixture-password"), master: master)
+
+            let page = StorageSettingsView(workspace: workspace)
+            let fields = descendants(page).compactMap { $0 as? NSTextField }
+            let note = fields.first { $0.identifier?.rawValue == "webdav.certificateStatus" }
+            checks["httpCredentialWarningVisible"] = note?.isHidden == false && note?.stringValue.contains("明文") == true
+            checks["httpDisablesCertificateTrust"] = descendants(page).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "webdav.trustCertificate" }?.isEnabled == false
+            if let address = fields.first(where: { $0.identifier?.rawValue == "webdav.address" }) {
+                address.stringValue = "https://fixture.example.test/dav/"
+                page.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: address))
+                checks["httpsClearsHTTPWarning"] = note?.isHidden == true && note?.stringValue.contains("明文") == false
+            }
+            let ats = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
+            checks["globalATSSecurityNotDisabled"] = ats?["NSAllowsArbitraryLoads"] as? Bool != true
             let settings = try Data(contentsOf: WebDAVSync.settingsURL)
             checks["accountSecretEncryptedLocally"] = SharedVault.isEncrypted(settings) && !String(decoding: settings, as: UTF8.self).contains("fixture-password")
             do { _ = try workspace.disableMasterProtection(master); checks["cannotClearMasterWhileSharing"] = false } catch { checks["cannotClearMasterWhileSharing"] = true }

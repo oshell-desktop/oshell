@@ -43,7 +43,9 @@ README 描述当前源码能力，安装包的实际功能以对应 [Release](ht
 在“设置 → 多设备同步”中先选择一种方式：
 
 1. **同步目录**：选择 iCloud Drive 或其他各设备可访问的文件夹，共享文件为 `configuration.json`。
-2. **WebDAV**：填写 HTTPS 父目录地址、账号及密码。自动复用或创建其下的 `oshell/`，共享文件为 `oshell-vault.json`。例如填写 `https://example.com/my_data_dir/`，默认使用 `my_data_dir/oshell/oshell-vault.json`；父目录须已存在且账号有创建目录及读写权限。旧目录中已有直接存放的同步文件时继续使用原位置，不自动搬迁。
+2. **WebDAV**：填写 HTTP 或 HTTPS 父目录地址、账号及密码（建议 HTTPS）。自动复用或创建其下的 `oshell/`，共享文件为 `oshell-vault.json`。例如填写 `https://example.com/my_data_dir/`，默认使用 `my_data_dir/oshell/oshell-vault.json`；父目录须已存在且账号有创建目录及读写权限。旧目录中已有直接存放的同步文件时继续使用原位置，不自动搬迁。
+
+HTTP 连接会明文传输 WebDAV 账号密码；同步文件仍由主密码加密。建议仅在可信网络使用 HTTP，HTTPS 保留证书校验。
 
 **只同步会话、目录、快捷链接、代理及加密保存的密码。**主题、字体、快捷键、默认会话属性、快速命令等客户端设置留在本机。同步目录和 WebDAV 二选一；各设备使用相同主密码，程序始终使用独立的本地工作副本，离线时仍可使用和编辑会话。
 

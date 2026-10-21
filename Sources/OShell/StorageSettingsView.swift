@@ -50,7 +50,7 @@ final class StorageSettingsView: NSView {
         directoryFields.identifier = .init("storage.directoryFields"); davFields.identifier = .init("storage.webdavFields")
         for stack in [directoryFields, davFields] { stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10 }
         directoryFields.addArrangedSubview(label("选择所有设备共同访问的文件夹，可使用 iCloud Drive。自动识别新建或已有同步配置。")); directoryFields.addArrangedSubview(status); directoryFields.addArrangedSubview(choose)
-        address.placeholderString = "https://服务器/WebDAV/（自动使用或创建 oshell 子目录）"
+        address.placeholderString = "HTTP / HTTPS WebDAV 父目录地址（自动使用 oshell 子目录）"
         username.placeholderString = "WebDAV 账号"; password.placeholderString = "WebDAV 密码 / 应用专用密码"
         address.identifier = .init("webdav.address"); username.identifier = .init("webdav.username"); password.identifier = .init("webdav.password")
         for field in [address, username, password] { field.delegate = self }
@@ -167,12 +167,14 @@ final class StorageSettingsView: NSView {
     }
     private func updateCertificateStatus() {
         let url = try? WebDAVSettings(address: address.stringValue, username: "", password: "").directory()
+        let plainHTTP = url?.scheme == "http"
         let active = url.flatMap { value in trustedCertificate.flatMap { $0.matches(value) ? $0 : nil } }
         certificateStatus.stringValue = active.map { "已保存此服务器证书信任（仅本机）\n\($0.endpoint) · \($0.subject)\nSHA-256：\($0.fingerprint)\n更改需点击“应用”保存。" } ?? "使用 macOS 默认信任；未受信任时先测试连接，再核对并信任证书。信任仅保存在本机，不参与会话同步。"
-        trustCertificate.isEnabled = !testing && pendingCertificate?.canTrust == true && url.map { pendingCertificate?.certificate.matches($0) == true } == true
+        if plainHTTP { certificateStatus.stringValue = "HTTP 连接未加密：WebDAV 账号密码会明文传输；会话数据文件仍由主密码加密。建议仅在可信网络使用。" }
+        trustCertificate.isEnabled = !plainHTTP && !testing && pendingCertificate?.canTrust == true && url.map { pendingCertificate?.certificate.matches($0) == true } == true
         forgetCertificate.isEnabled = !testing && active != nil
-        certificateStatus.isHidden = active == nil && pendingCertificate == nil
-        certificateControls.isHidden = certificateStatus.isHidden
+        certificateStatus.isHidden = !plainHTTP && active == nil && pendingCertificate == nil
+        certificateControls.isHidden = plainHTTP || certificateStatus.isHidden
         davStatus.isHidden = davStatus.stringValue.isEmpty; needsLayout = true
     }
     @objc private func trustServerCertificate() {

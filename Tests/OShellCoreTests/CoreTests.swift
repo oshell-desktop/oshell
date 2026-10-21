@@ -1272,7 +1272,14 @@ final class CoreTests {
     func testWebDAVAndSharingProtection() throws {
         let settings = WebDAVSettings(address: "https://example.test/dav/", username: "fixture", password: "fixture")
         XCTAssertEqual(try settings.directory().scheme, "https")
-        for address in ["http://example.test/dav", "https://u:p@example.test/dav", "https://example.test/dav?token=secret", "https://example.test/#fragment"] {
+        for address in ["http://example.test/dav", "http://192.0.2.10:8080/data/", "http://[::1]:8080/dav/", "HTTP://example.test/dav/"] {
+            XCTAssertEqual(try WebDAVSettings(address: address, username: "u", password: "p").directory().scheme, "http")
+        }
+        for address in ["http://u:p@example.test/", "http://example.test:0/", "http://example.test:65536/", "http://example.test/?token=secret"] {
+            XCTAssertThrowsError(try WebDAVSettings(address: address, username: "u", password: "p").directory())
+        }
+
+        for address in ["ftp://example.test/dav", "https://u:p@example.test/dav", "https://example.test/dav?token=secret", "https://example.test/#fragment"] {
             XCTAssertThrowsError(try WebDAVSettings(address: address, username: "u", password: "p").directory())
         }
         XCTAssertTrue(WebDAVClient.validETag("\"version-1\""))

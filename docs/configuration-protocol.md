@@ -43,3 +43,5 @@ OShell 的传输合并使用 `SessionSyncConfiguration` 白名单：profiles、p
 ### WebDAV 目录选择
 
 OShell 在用户填写的父目录下复用或创建 `oshell/`，文件名仍为 `oshell-vault.json`，共享协议不变。地址本身以 `oshell/`（含旧写法 `OShell/`）结尾时直接使用；父目录已存在旧版同步文件时保持原位置，不隐式迁移。未实现自动子目录选择的 Desktop 须填写实际同步目录地址。目录创建先检查 DAV collection，只有 404 才尝试 MKCOL；并发创建后的 405 也须重新验证目录。文件写入仍要求强 ETag 和条件请求。
+
+OShell 的 WebDAV 地址支持显式 HTTP 与 HTTPS；该地址及传输选项仅保存在本机，不改变共享数据格式。HTTP 使用独立的有界请求通道，HTTPS 仍使用原有证书校验；未开启 App 全局任意网络加载。Desktop 的 HTTP 地址支持取决于其版本，本次不修改对端实现；两端的共享文件及凭据加密保持不变。

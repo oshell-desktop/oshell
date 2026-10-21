@@ -29,9 +29,10 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         let key: String, title: String, metadata: String, directory: String?
         let profileID: UUID?, linkID: UUID?
         let isLink: Bool
+        let kind: SessionKind?
         var children = [Node](), visible = [Node]()
-        init(key: String, title: String, metadata: String, directory: String? = nil, profileID: UUID? = nil, isLink: Bool = false, linkID: UUID? = nil) {
-            self.key = key; self.title = title; self.metadata = metadata; self.directory = directory; self.profileID = profileID; self.isLink = isLink; self.linkID = linkID
+        init(key: String, title: String, metadata: String, directory: String? = nil, profileID: UUID? = nil, isLink: Bool = false, linkID: UUID? = nil, kind: SessionKind? = nil) {
+            self.key = key; self.title = title; self.metadata = metadata; self.directory = directory; self.profileID = profileID; self.isLink = isLink; self.linkID = linkID; self.kind = kind
         }
     }
     private final class Outline: NSOutlineView {
@@ -113,14 +114,14 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         }
         for (path, node) in directories where !path.isEmpty { directories[SessionDirectory.parent(path)]?.children.append(node) }
         for profile in configuration.profiles {
-            let node = Node(key: "p:"+profile.id.uuidString, title: profile.name, metadata: SessionSearchQuery.metadata(profile), profileID: profile.id)
+            let node = Node(key: "p:"+profile.id.uuidString, title: profile.name, metadata: SessionSearchQuery.metadata(profile), profileID: profile.id, kind: profile.kind)
             nodes[node.key] = node; directories[SessionDirectory.normalize(profile.group)]?.children.append(node)
         }
         let profiles = Dictionary(uniqueKeysWithValues: configuration.profiles.map { ($0.id, $0) })
         for link in configuration.sessionLinks.entries {
             guard let profile = profiles[link.profileID] else { continue }
             let path = SessionLinks.directory(for: link.folder)
-            let node = Node(key: "l:"+link.id.uuidString, title: link.name, metadata: SessionSearchQuery.metadata(profile)+" "+SessionSearchQuery.normalize(link.name+" "+SessionDirectory.display(path)), profileID: profile.id, isLink: true, linkID: link.id)
+            let node = Node(key: "l:"+link.id.uuidString, title: link.name, metadata: SessionSearchQuery.metadata(profile)+" "+SessionSearchQuery.normalize(link.name+" "+SessionDirectory.display(path)), profileID: profile.id, isLink: true, linkID: link.id, kind: profile.kind)
             nodes[node.key] = node; directories[path]?.children.append(node)
         }
         for node in [root] + Array(nodes.values) {
@@ -183,14 +184,15 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         if let reused = outlineView.makeView(withIdentifier: id, owner: self) as? NSTableCellView { cell = reused }
         else {
             cell = NSTableCellView(); cell.identifier = id
-            let label = NSTextField(labelWithString: ""), icon = NSImageView(); label.lineBreakMode = .byTruncatingTail
+            let label = NSTextField(labelWithString: ""), icon = SessionListIconView(); label.lineBreakMode = .byTruncatingTail
             label.font = .systemFont(ofSize: 12); cell.textField = label; cell.imageView = icon
             for view in [label, icon] { view.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(view) }
-            NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
+            NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 20), icon.heightAnchor.constraint(equalToConstant: 20), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         }
         cell.textField?.stringValue = node.title
-        cell.imageView?.image = NSImage(oshellSymbolName: node.directory != nil ? "folder" : (node.isLink ? "link" : "terminal"), accessibilityDescription: nil)
-        cell.toolTip = node.directory.map(SessionDirectory.display) ?? node.metadata
+        let style: SessionListIcon = node.kind.map { .session($0, shortcut: node.isLink) } ?? .directory
+        (cell.imageView as? SessionListIconView)?.style = style
+        cell.toolTip = node.directory.map(SessionDirectory.display) ?? (style.label + "\n" + node.metadata)
         return cell
     }
     func configureActions(workspace: WorkspaceController) {

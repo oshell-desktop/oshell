@@ -4,7 +4,7 @@
 
 """Exercise the exact USM 4.1.3 ZOC argv shape against a disposable SSH server."""
 import concurrent.futures, hashlib, json, os, pathlib, secrets, shutil, signal, socket, stat, subprocess, tempfile, threading, time
-import paramiko, re
+import paramiko
 project=pathlib.Path(__file__).resolve().parent.parent
 app=project/'work/test-app/OShell.app/Contents/MacOS/OShell'
 launcher=app.with_name('OShell-ZOC')
@@ -35,16 +35,10 @@ with tempfile.TemporaryDirectory(prefix='oshell-zoc-',dir='/tmp') as folder:
         try:
             transport.add_server_key(key);transport.start_server(server=Server());channel=transport.accept(15)
             if channel is None:return
-            time.sleep(.1);channel.send(b'USM_MOCK_READY\r\n[root@asset-host ~]# ')
-            line=bytearray()
-            while True:
-                chunk=channel.recv(4096)
-                if not chunk:break
-                for c in chunk:
-                    if c in (10,13):
-                        command=bytes(line);line.clear();token=re.search(rb'OSHELL_INFO_[0-9A-F]+:',command)
-                        if token:channel.sendall(command+b'\r\n\x1b]2;'+token.group()+b'asset-real|10.20.0.9|\x07[root@asset-host ~]# ')
-                    else:line.append(c)
+            # New sessions default to shell integration, not active host probing.
+            # Report identity as the real integration script does at a prompt.
+            time.sleep(.1);channel.sendall(b'USM_MOCK_READY\r\n\x1b]777;OShellHost=1;asset-real|10.20.0.9|\x07[root@asset-real ~]# ')
+            while channel.recv(4096):pass
         except (OSError,EOFError,paramiko.SSHException):pass
         finally:transport.close()
     def serve():

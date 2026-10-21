@@ -21,6 +21,11 @@ enum WebDAVCertificateTest {
                 checks["certificateDetailsAvailable"] = initial.certificate.validFrom != nil && initial.certificate.validUntil != nil && !initial.certificate.issuer.isEmpty && initial.certificate.fingerprint.count == 95
                 var trusted = settings("valid"); trusted.trustedServerCertificate = initial.certificate
                 try WebDAVClient(trusted).probe(); checks["explicitTrustEnablesHTTPS"] = true
+                var redirect = trusted; redirect.address = trusted.address.replacingOccurrences(of: "/dav/", with: "/redirect/")
+                do { try WebDAVClient(redirect).probe(); checks["httpsNeverDowngradesToHTTP"] = false }
+                catch WebDAVFailure.redirect { checks["httpsNeverDowngradesToHTTP"] = true }
+                catch { checks["httpsNeverDowngradesToHTTP"] = false }
+
                 let ipv6 = WebDAVCertificateTrust(host: "::1", port: 443, certificateDER: initial.certificate.certificateDER)
                 checks["ipv6ScopeNormalizesBrackets"] = ipv6.matches(URL(string: "https://[::1]/dav/")!) && !ipv6.matches(URL(string: "https://[::1]:8443/dav/")!)
                 let encoded = try JSONEncoder().encode(trusted)

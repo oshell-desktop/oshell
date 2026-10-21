@@ -10,13 +10,17 @@ public struct WebDAVSettings: Codable {
     /// Stored only in this Mac's encrypted WebDAV settings, not the shared vault configuration.
     public var trustedServerCertificate: WebDAVCertificateTrust? = nil
     public init(address: String, username: String, password: String) { self.address = address; self.username = username; self.password = password }
+    // Keep the argument for source compatibility with existing interop helpers.
     public func directory(allowLoopbackHTTP: Bool = false) throws -> URL {
         guard var parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
-              parts.scheme == "https" || (allowLoopbackHTTP && parts.scheme == "http" && ["127.0.0.1", "localhost", "::1"].contains(host)),
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              parts.port.map({ (1...65535).contains($0) }) ?? true,
+              username.utf8.count <= 4096, password.utf8.count <= 4096, !username.contains("\0"), !password.contains("\0"),
               !username.contains(":"), !username.contains("\n"), !username.contains("\r"), !password.contains("\n"), !password.contains("\r") else {
-            throw ModelError.invalid("请输入 HTTPS WebDAV 目录地址，账号密码请填写在单独字段中。")
+            throw ModelError.invalid("请输入 HTTP 或 HTTPS WebDAV 目录地址，使用有效端口，并将账号密码填写在单独字段中（最多 4096 字节，不含换行或空字符）。")
         }
+        parts.scheme = parts.scheme?.lowercased()
         if !parts.path.hasSuffix("/") { parts.path += "/" }
         guard let url = parts.url else { throw ModelError.invalid("WebDAV 地址无效。") }; return url
     }
@@ -36,7 +40,7 @@ public enum WebDAVFailure: Error, LocalizedError {
         case .tls: return "WebDAV TLS 连接或证书校验失败，请检查服务器证书和 HTTPS 配置。"
         case .network: return "WebDAV 网络请求失败或超时，本地数据已保留。"
         case .tooLarge: return "WebDAV 响应超过大小限制。"
-        case .redirect: return "WebDAV 地址发生重定向。请直接填写最终 HTTPS 目录地址。"
+        case .redirect: return "WebDAV 地址发生重定向。请直接填写最终 HTTP / HTTPS 目录地址。"
         }
     }
 }
@@ -115,10 +119,24 @@ public final class WebDAVClient {
     private let settings: WebDAVSettings, directory: URL
     private let lock = NSLock()
     private var active: URLSession?, cancelled = false
+    private var activeHTTP: WebDAVHTTPRequest?
     private var resolvedDirectory: URL?
     public init(_ settings: WebDAVSettings, allowLoopbackHTTP: Bool = false) throws { self.settings = settings; directory = try settings.directory(allowLoopbackHTTP: allowLoopbackHTTP) }
-    public func cancel() { lock.lock(); cancelled = true; let session = active; lock.unlock(); session?.invalidateAndCancel() }
+    public func cancel() { lock.lock(); cancelled = true; let session = active, http = activeHTTP; lock.unlock(); session?.invalidateAndCancel(); http?.cancel() }
     private func request(_ method: String, url: URL, data: Data? = nil, headers: [String: String] = [:]) throws -> (HTTPURLResponse, Data) {
+        if url.scheme == "http" {
+            let task = WebDAVHTTPRequest()
+            lock.lock(); let stopped = cancelled; if !stopped { activeHTTP = task }; lock.unlock()
+            defer { lock.lock(); activeHTTP = nil; lock.unlock() }
+            guard !stopped else { throw WebDAVFailure.network }
+            var fields = headers
+            fields["Authorization"] = "Basic " + Data((settings.username + ":" + settings.password).utf8).base64EncodedString()
+            fields["User-Agent"] = "OShell"
+            let result = try task.perform(method, url: url, body: data, headers: fields)
+            if [401, 403].contains(result.0.statusCode) { throw WebDAVFailure.authentication }
+            if (300...399).contains(result.0.statusCode) { throw WebDAVFailure.redirect }
+            return result
+        }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = method; request.httpBody = data
         request.setValue("Basic " + Data((settings.username + ":" + settings.password).utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")

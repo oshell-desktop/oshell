@@ -102,7 +102,9 @@ def assemble(flavor, arches, minimum, binaries, helpers):
             thin=path.with_suffix(path.suffix+'.thin')
             run(['lipo',path,'-thin','x86_64','-output',thin]);thin.replace(path)
         if path.relative_to(contents).parts[0] != 'Frameworks':
-            run(['xcrun','strip','-S',path],log='package-strip-last.log')
+            # Preserve external symbols and Swift/ObjC runtime metadata; remove
+            # local linker names as well as debug maps before signing the app.
+            run(['xcrun','strip','-S','-x',path],log='package-strip-last.log')
         if path != contents/'MacOS/OShell':
             run(['codesign','--force','--sign','-',path],log='package-codesign-last.log')
         entries.append({'path':str(path.relative_to(app)),'architectures':arches,'build':output(['vtool','-show-build',path]),'libraries':output(['otool','-L',path])})

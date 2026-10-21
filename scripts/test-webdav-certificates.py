@@ -38,7 +38,10 @@ with tempfile.TemporaryDirectory(prefix='oshell-tls-fixture-') as folder:
     self.rfile.read(int(self.headers.get('Content-Length','0')));self.reply(207, ('<d:multistatus xmlns:d="DAV:"><d:response><d:href>'+escape(self.path)+'</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>').encode())
     if rotate and self.path.startswith('/rotate/'):
      context.load_cert_chain(*rotate)
-   def do_GET(self): self.reply(404)
+   def do_GET(self):
+    if self.path.startswith('/redirect/'):
+     self.send_response(302);self.send_header('Location',f'http://127.0.0.1:{self.server.server_port}/downgrade/');self.send_header('Content-Length','0');self.end_headers()
+    else: self.reply(404)
   instance=ThreadingHTTPServer(('127.0.0.1',0),Handler)
   context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(*pair)
   instance.socket=context.wrap_socket(instance.socket,server_side=True)

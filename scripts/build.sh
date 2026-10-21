@@ -71,9 +71,10 @@ if [ "$OSHELL_TEST_HARNESS" = 1 ]; then
 fi
 swift "$project_root/scripts/icon.swift" "$build_dir/OShell.iconset"
 iconutil -c icns "$build_dir/OShell.iconset" -o "$app_dir/Contents/Resources/OShell.icns"
-# N_OSO debug maps contain object-file locations even with source-prefix mapping.
+# Drop debug maps and local linker names from shipped executables. Keep external
+# symbols and runtime metadata; never apply this to bundled third-party frameworks.
 for executable in "$app_dir/Contents/MacOS/OShell" "$app_dir/Contents/MacOS/OShell-ZOC" "$file_bridge/Contents/MacOS/OShell-FileZilla" "$app_dir/Contents/Helpers/OShellSSH" "$app_dir/Contents/Helpers/OShellProxy" "$app_dir/Contents/Helpers/OShellAskpass" "$app_dir/Contents/Helpers/lrz" "$app_dir/Contents/Helpers/lsz"; do
-    xcrun strip -S "$executable"
+    xcrun strip -S -x "$executable"
 done
 codesign --force --sign - "$app_dir/Contents/Helpers/lrz"
 codesign --force --sign - "$app_dir/Contents/Helpers/lsz"

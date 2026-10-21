@@ -7,7 +7,7 @@ import OShellCore
 final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
     private final class ListCell: NSTableCellView {
         let label = NSTextField(labelWithString: "")
-        let icon = NSImageView()
+        let icon = SessionListIconView()
         init(column: String) {
             super.init(frame: .zero)
             identifier = NSUserInterfaceItemIdentifier(column)
@@ -27,7 +27,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
                 NSLayoutConstraint.activate([
                     icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
                     icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-                    icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16),
+                    icon.widthAnchor.constraint(equalToConstant: 20), icon.heightAnchor.constraint(equalToConstant: 20),
                     label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8)
                 ])
             } else { label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6).isActive = true }
@@ -492,20 +492,21 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             return cell
         }
         let text: String
-        var symbol: String? = nil
+        let iconStyle: SessionListIcon
         switch rows[row] {
-        case .parent: text = identifier.rawValue == "name" ? "../" : ""; symbol = "arrow.turn.up.left"
+        case .parent: text = identifier.rawValue == "name" ? "../" : ""; iconStyle = .parent
         case .directory(let directory):
             switch identifier.rawValue {
             case "name": text = String(directory.split(separator: "/").last ?? "")
             case "directory": text = currentQuery.isEmpty ? "" : SessionDirectory.display(SessionDirectory.parent(directory))
             default: text = ""
             }
-            symbol = "folder"
+            iconStyle = .directory
         case .session, .link:
             let profile = displayProfile(rows[row])!
-            symbol = profile.kind.isFileSession ? "folder.badge.gearshape" : "terminal"
-            if case .link = rows[row] { symbol = "link" }
+            let shortcut: Bool
+            if case .link = rows[row] { shortcut = true } else { shortcut = false }
+            iconStyle = .session(profile.kind, shortcut: shortcut)
             switch tableColumn?.identifier.rawValue {
             case "name": text = profile.name
             case "protocol": text = profile.kind.title
@@ -528,10 +529,10 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             }
         }
         cell.label.attributedStringValue = styled
-        cell.icon.image = identifier.rawValue == "name" ? symbol.flatMap { NSImage(oshellSymbolName: $0, accessibilityDescription: nil) } : nil
+        cell.icon.style = identifier.rawValue == "name" ? iconStyle : nil
         if case .parent = rows[row] { cell.toolTip = "点击返回上一级目录" }
-        else if case .link(_, let source) = rows[row] { cell.toolTip = "快捷引用 → " + SessionDirectory.display(source.group) + "/" + source.name + "\n" + text }
-        else if case .session = rows[row] { cell.toolTip = "实际会话\n" + text }
+        else if case .link(_, let source) = rows[row] { cell.toolTip = iconStyle.label + " → " + SessionDirectory.display(source.group) + "/" + source.name + "\n" + text }
+        else if case .session = rows[row] { cell.toolTip = iconStyle.label + "\n" + text }
         else { cell.toolTip = text }
         return cell
     }

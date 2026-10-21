@@ -13,6 +13,7 @@ class DAV(BaseHTTPRequestHandler):
     bodies = {}
     collections = set()
     created = []
+    redirected_requests = 0
     guard = threading.Lock()
     def log_message(self, *_): pass
     def respond(self, status, body=b'', etag=None, length=None):
@@ -54,8 +55,11 @@ class DAV(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed(): return
         folder = self.path.split('/')[1]
+        if folder == 'slow': time.sleep(2); self.respond(200, b'{}', etag='"slow"'); return
+        if folder == 'redirect-target':
+            type(self).redirected_requests += 1; self.respond(200, b'{}', etag='"redirected"'); return
         if folder == 'redirect':
-            self.send_response(302); self.send_header('Location', 'https://must-not-follow.example.test/private'); self.send_header('Content-Length', '0'); self.end_headers(); return
+            self.send_response(302); self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/redirect-target/'); self.send_header('Content-Length', '0'); self.end_headers(); return
         if folder == 'offline': self.respond(503); return
         if folder == 'large': self.respond(200, etag='"large"', length=64 * 1024 * 1024); return
         if folder in ('noetag', 'weak'): self.respond(200, b'{}', etag=None if folder == 'noetag' else 'W/"weak"'); return
@@ -86,7 +90,7 @@ def main():
         with tempfile.TemporaryDirectory(dir=ROOT/'work', prefix='webdav-test-', ignore_cleanup_errors=True) as temp:
             base = Path(temp); interchange = base/'cross-architecture-vault.json'
             for flavor in (['arm64', 'legacy'] if args.flavor == 'both' else [args.flavor]):
-                DAV.bodies.clear(); DAV.collections.clear(); DAV.created.clear()
+                DAV.bodies.clear(); DAV.collections.clear(); DAV.created.clear(); DAV.redirected_requests = 0
                 app = base/('OShell-'+flavor+'.app'); source = ROOT/('work/test-app/OShell.app' if flavor == 'arm64' else 'work/test-release/legacy/OShell.app')
                 subprocess.run(['ditto', str(source), str(app)], check=True)
                 info_path = app/'Contents/Info.plist'; info = plistlib.loads(info_path.read_bytes()); identity = 'app.oshell.webdav-test.'+uuid.uuid4().hex
@@ -105,6 +109,7 @@ def main():
                     result = json.loads(report.read_text())
                     print(flavor, len(result['checks']), 'checks; failures:', [k for k,v in result['checks'].items() if not v], flush=True)
                     assert result['passed']
+                    assert DAV.redirected_requests == 0, 'WebDAV credentials must not follow redirects'
                     assert DAV.created.count('/protocol/oshell/') == 1
                     assert '/existing/oshell/' not in DAV.created and not any(p.startswith('/legacyroot/') for p in DAV.created)
                     assert not any('/oshell/oshell/' in p for p in DAV.created)

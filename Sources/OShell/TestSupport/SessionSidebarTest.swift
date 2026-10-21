@@ -101,6 +101,8 @@ enum SessionSidebarTest {
         edit(apply: true)
         checks["customShortcutSavedLocally"] = SessionSidebarPreferences.shortcuts(KeyboardShortcuts()).action(for: custom) == .sessionSidebar
         checks["shortcutNotInSharedConfiguration"] = workspace.configuration.preferences.keyboardShortcuts.overrides[ShortcutAction.sessionSidebar.rawValue] == nil && (try? workspace.store.load().preferences.keyboardShortcuts.overrides[ShortcutAction.sessionSidebar.rawValue]) == nil
+        // The isolated test app must own focus after closing the settings modal.
+        NSApp.activate(ignoringOtherApps: true)
         workspace.window?.makeKeyAndOrderFront(nil)
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command,.option], timestamp: 0, windowNumber: workspace.window!.windowNumber, context: nil, characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11) {
