@@ -6,10 +6,13 @@ import base64, hashlib, json, plistlib, subprocess, tempfile, threading, uuid, o
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import argparse
+from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
 class DAV(BaseHTTPRequestHandler):
     bodies = {}
+    collections = set()
+    created = []
     guard = threading.Lock()
     def log_message(self, *_): pass
     def respond(self, status, body=b'', etag=None, length=None):
@@ -27,7 +30,27 @@ class DAV(BaseHTTPRequestHandler):
         return True
     def do_PROPFIND(self):
         self.rfile.read(int(self.headers.get('Content-Length', '0')))
-        if self.allowed(): self.respond(207, b'<d:multistatus xmlns:d="DAV:"><d:response><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response></d:multistatus>')
+        if not self.allowed(): return
+        folder = self.path.split('/')[1]
+        if folder == 'denied': self.respond(403); return
+        if folder == 'badxml': self.respond(207, b'<broken'); return
+        if folder == 'race' and self.path not in self.collections: self.respond(404); return
+        if folder not in ('existing', 'file', 'propdenied', 'wronghref') and self.path not in self.collections: self.respond(404); return
+        resource = '' if folder == 'file' else '<d:collection/>'
+        status = '403 Forbidden' if folder == 'propdenied' else '200 OK'
+        href = '/unrelated/' if folder == 'wronghref' else self.path
+        self.respond(207, ('<d:multistatus xmlns:d="DAV:"><d:response><d:href>'+escape(href)+'</d:href><d:propstat><d:prop><d:resourcetype>'+resource+'</d:resourcetype></d:prop><d:status>HTTP/1.1 '+status+'</d:status></d:propstat></d:response></d:multistatus>').encode())
+    def do_MKCOL(self):
+        if not self.allowed(): return
+        folder = self.path.split('/')[1]
+        with self.guard:
+            self.created.append(self.path)
+            if folder == 'mkdenied': self.respond(403); return
+            if folder == 'missingparent': self.respond(409); return
+            if folder == 'false405': self.respond(405); return
+            existed = self.path in self.collections
+            self.collections.add(self.path)
+        self.respond(405 if existed or folder == 'race' else 201)
     def do_GET(self):
         if not self.allowed(): return
         folder = self.path.split('/')[1]
@@ -51,6 +74,7 @@ class DAV(BaseHTTPRequestHandler):
                 accepted = self.headers.get('If-Match') == '"' + hashlib.sha256(old).hexdigest() + '"'
             if not accepted: self.respond(412); return
             self.bodies[self.path] = data
+            if self.path == '/protocol/oshell/oshell-vault.json': self.bodies['/legacyroot/oshell-vault.json'] = data
         self.respond(201 if old is None else 204, etag='"' + hashlib.sha256(data).hexdigest() + '"')
 
 def main():
@@ -61,7 +85,7 @@ def main():
         with tempfile.TemporaryDirectory(dir=ROOT/'work', prefix='webdav-test-', ignore_cleanup_errors=True) as temp:
             base = Path(temp); interchange = base/'cross-architecture-vault.json'
             for flavor in (['arm64', 'legacy'] if args.flavor == 'both' else [args.flavor]):
-                DAV.bodies.clear()
+                DAV.bodies.clear(); DAV.collections.clear(); DAV.created.clear()
                 app = base/('OShell-'+flavor+'.app'); source = ROOT/('work/test-app/OShell.app' if flavor == 'arm64' else 'work/test-release/legacy/OShell.app')
                 subprocess.run(['ditto', str(source), str(app)], check=True)
                 info_path = app/'Contents/Info.plist'; info = plistlib.loads(info_path.read_bytes()); identity = 'app.oshell.webdav-test.'+uuid.uuid4().hex
@@ -80,6 +104,13 @@ def main():
                     result = json.loads(report.read_text())
                     print(flavor, len(result['checks']), 'checks; failures:', [k for k,v in result['checks'].items() if not v], flush=True)
                     assert result['passed']
+                    assert DAV.created.count('/protocol/oshell/') == 1
+                    assert '/existing/oshell/' not in DAV.created and not any(p.startswith('/legacyroot/') for p in DAV.created)
+                    assert not any('/oshell/oshell/' in p for p in DAV.created)
+                    assert '/race/oshell/' in DAV.collections
+                    assert not any(p.startswith(('/file/', '/propdenied/', '/wronghref/', '/denied/', '/badxml/')) for p in DAV.created)
+                    assert '/engine/oshell/oshell-vault.json' in DAV.bodies
+                    assert '/engine/oshell-vault.json' not in DAV.bodies
                     assert all(json.loads(data)['format'] == 'OShell.shared-vault' for data in DAV.bodies.values())
                     startup = base/('startup-'+flavor); startup.mkdir()
                     (startup/'configuration.json').write_bytes((config/'configuration.json').read_bytes())

@@ -81,10 +81,41 @@ private final class DAVRequest: NSObject, URLSessionDataDelegate {
             error = value.domain == NSURLErrorDomain && (-1206 ... -1200).contains(value.code) ? WebDAVFailure.tls : WebDAVFailure.network
         }; done.signal() }
 }
+/// Accept only a successful DAV resourcetype for the requested collection.
+private final class DAVCollectionResponse: NSObject, XMLParserDelegate {
+    let target: URL
+    var stack = [String](), text = "", href = "", status = ""
+    var collection = false, validProperty = false, matches = 0, isCollection = false
+    init(_ target: URL) { self.target = target }
+    func parser(_ parser: XMLParser, didStartElement element: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
+        stack.append(namespaceURI == "DAV:" ? element : "?"); text = ""
+        if stack == ["multistatus", "response"] { href = ""; validProperty = false }
+        if stack == ["multistatus", "response", "propstat"] { status = ""; collection = false }
+        if stack == ["multistatus", "response", "propstat", "prop", "resourcetype", "collection"] { collection = true }
+    }
+    func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
+    func parser(_ parser: XMLParser, didEndElement element: String, namespaceURI: String?, qualifiedName: String?) {
+        if stack == ["multistatus", "response", "href"] { href = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if stack == ["multistatus", "response", "propstat", "status"] { status = text }
+        if stack == ["multistatus", "response", "propstat"], status.split(separator: " ").dropFirst().first == "200", collection { validProperty = true }
+        if stack == ["multistatus", "response"], !href.isEmpty, let url = URL(string: href, relativeTo: target)?.absoluteURL,
+           url.scheme == target.scheme, url.host == target.host, url.port == target.port,
+           url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == target.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) {
+            matches += 1; isCollection = validProperty
+        }
+        stack.removeLast(); text = ""
+    }
+    static func validate(_ data: Data, at url: URL) -> Bool {
+        let delegate = DAVCollectionResponse(url), parser = XMLParser(data: data)
+        parser.shouldProcessNamespaces = true; parser.shouldResolveExternalEntities = false; parser.delegate = delegate
+        return parser.parse() && delegate.matches == 1 && delegate.isCollection
+    }
+}
 public final class WebDAVClient {
     private let settings: WebDAVSettings, directory: URL
     private let lock = NSLock()
     private var active: URLSession?, cancelled = false
+    private var resolvedDirectory: URL?
     public init(_ settings: WebDAVSettings, allowLoopbackHTTP: Bool = false) throws { self.settings = settings; directory = try settings.directory(allowLoopbackHTTP: allowLoopbackHTTP) }
     public func cancel() { lock.lock(); cancelled = true; let session = active; lock.unlock(); session?.invalidateAndCancel() }
     private func request(_ method: String, url: URL, data: Data? = nil, headers: [String: String] = [:]) throws -> (HTTPURLResponse, Data) {
@@ -107,13 +138,34 @@ public final class WebDAVClient {
         if (300...399).contains(response.statusCode) { throw WebDAVFailure.redirect }
         return (response, delegate.data)
     }
-    public func probe() throws {
+    private func collectionExists(_ url: URL) throws -> Bool {
         let body = Data("<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/></d:prop></d:propfind>".utf8)
-        let (response, _) = try request("PROPFIND", url: directory, data: body, headers: ["Depth":"0", "Content-Type":"application/xml; charset=utf-8"])
+        let (response, data) = try request("PROPFIND", url: url, data: body, headers: ["Depth":"0", "Content-Type":"application/xml; charset=utf-8"])
+        if response.statusCode == 404 { return false }
         guard response.statusCode == 207 else { throw WebDAVFailure.status(response.statusCode) }
-        _ = try fetch()
+        guard DAVCollectionResponse.validate(data, at: url) else { throw ModelError.invalid("WebDAV 的 oshell 位置不是可访问的目录，或服务器目录响应无效；未写入同步数据。") }
+        return true
     }
-    public func fetch() throws -> WebDAVObject? {
+    /// Keep old direct-file endpoints in place; new endpoints use an oshell child.
+    public func syncDirectory() throws -> URL {
+        if let resolvedDirectory { return resolvedDirectory }
+        let explicit = directory.lastPathComponent.lowercased() == "oshell"
+        if !explicit, try fetchObject(in: directory) != nil {
+            resolvedDirectory = directory; return directory
+        }
+        let target = explicit ? directory : directory.appendingPathComponent("oshell", isDirectory: true)
+        if try !collectionExists(target) {
+            let (response, _) = try request("MKCOL", url: target)
+            // Another device may create it between PROPFIND and MKCOL. Never
+            // treat 405 alone as proof of a directory (it could be a file).
+            guard [201, 405].contains(response.statusCode) else { throw WebDAVFailure.status(response.statusCode) }
+            guard try collectionExists(target) else { throw WebDAVFailure.status(404) }
+        }
+        resolvedDirectory = target; return target
+    }
+    public func probe() throws { _ = try syncDirectory(); _ = try fetch() }
+    public func fetch() throws -> WebDAVObject? { try fetchObject(in: syncDirectory()) }
+    private func fetchObject(in directory: URL) throws -> WebDAVObject? {
         let (response, data) = try request("GET", url: directory.appendingPathComponent("oshell-vault.json"))
         if response.statusCode == 404 { return nil }
         guard response.statusCode == 200 else { throw WebDAVFailure.status(response.statusCode) }
@@ -128,7 +180,7 @@ public final class WebDAVClient {
         guard data.count <= SharedVault.maximumSize else { throw WebDAVFailure.tooLarge }
         if let etag, !Self.validETag(etag) { throw WebDAVFailure.unsafeVersion }
         let headers = ["Content-Type":"application/json", etag == nil ? "If-None-Match" : "If-Match": etag ?? "*"]
-        let (response, _) = try request("PUT", url: directory.appendingPathComponent("oshell-vault.json"), data: data, headers: headers)
+        let (response, _) = try request("PUT", url: syncDirectory().appendingPathComponent("oshell-vault.json"), data: data, headers: headers)
         if response.statusCode == 412 { throw WebDAVFailure.conflict }
         guard [200, 201, 204].contains(response.statusCode) else { throw WebDAVFailure.status(response.statusCode) }
     }

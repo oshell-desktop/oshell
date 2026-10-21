@@ -39,3 +39,7 @@ OShell 的传输合并使用 `SessionSyncConfiguration` 白名单：profiles、p
 此变更仅在 OShell 实现。未修改的 Desktop 继续读取同一格式，其自身客户端设置处理不由 OShell 控制；不能宣称旧 Desktop 也实现了“设置仅本机”。
 
 除原有双向协议回归外，可运行 `python3 scripts/test-session-sync-interop.py --desktop-source /path/to/oshell-desktop`。该测试在临时 Go overlay 中使用 Desktop 的实际核心实现，不修改 Desktop 项目文件，验证会话/代理/密码/链接往返、旧包兼容、OShell 设置保留和仅设置变化不上传。
+
+### WebDAV 目录选择
+
+OShell 在用户填写的父目录下复用或创建 `oshell/`，文件名仍为 `oshell-vault.json`，共享协议不变。地址本身以 `oshell/`（含旧写法 `OShell/`）结尾时直接使用；父目录已存在旧版同步文件时保持原位置，不隐式迁移。未实现自动子目录选择的 Desktop 须填写实际同步目录地址。目录创建先检查 DAV collection，只有 404 才尝试 MKCOL；并发创建后的 405 也须重新验证目录。文件写入仍要求强 ETag 和条件请求。

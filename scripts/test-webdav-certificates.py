@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 OShell contributors
 """Real URLSession TLS tests against local synthetic certificates; no system trust changes."""
+from xml.sax.saxutils import escape
 import datetime,importlib.util,ipaddress,json,os,ssl,tempfile,threading
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -31,10 +32,10 @@ with tempfile.TemporaryDirectory(prefix='oshell-tls-fixture-') as folder:
   counts[name]=0
   class Handler(BaseHTTPRequestHandler):
    def log_message(self,*args): pass
-   def reply(self,status):
-    counts[name]+=1;self.send_response(status);self.send_header('Content-Length','0');self.end_headers()
+   def reply(self,status,body=b''):
+    counts[name]+=1;self.send_response(status);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
    def do_PROPFIND(self):
-    self.rfile.read(int(self.headers.get('Content-Length','0')));self.reply(207)
+    self.rfile.read(int(self.headers.get('Content-Length','0')));self.reply(207, ('<d:multistatus xmlns:d="DAV:"><d:response><d:href>'+escape(self.path)+'</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>').encode())
     if rotate and self.path.startswith('/rotate/'):
      context.load_cert_chain(*rotate)
    def do_GET(self): self.reply(404)

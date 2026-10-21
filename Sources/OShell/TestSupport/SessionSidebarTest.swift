@@ -23,6 +23,29 @@ enum SessionSidebarTest {
         let sidebar = workspace.sessionSidebar, outline = sidebar.outline
         func items() -> [SessionSidebar.Node] { (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? SessionSidebar.Node } }
         func filter(_ value: String) { sidebar.search.stringValue = value; sidebar.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification)) }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let expandButton = descendants(sidebar).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "sidebar.session.expandAll" }
+        let collapseButton = descendants(sidebar).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "sidebar.session.collapseAll" }
+        checks["bulkExpansionButtonsAvailable"] = expandButton != nil && collapseButton != nil
+        expandButton?.performClick(nil)
+        checks["expandAllShowsNestedSessionsAndEmptyFolders"] = items().contains { $0.directory == "empty/sub" } && items().filter { $0.profileID != nil }.count == 4
+        collapseButton?.performClick(nil)
+        checks["collapseAllHidesNestedRows"] = items().allSatisfy { $0.directory.map { SessionDirectory.parent($0).isEmpty } ?? false }
+        sidebar.reload(config)
+        checks["collapsedStateSurvivesRefresh"] = items().allSatisfy { !outline.isItemExpanded($0) }
+        filter("数据库"); collapseButton?.performClick(nil)
+        checks["collapseFilteredResults"] = !items().contains { $0.profileID != nil }
+        expandButton?.performClick(nil)
+        checks["expandFilteredResultsOnly"] = items().filter { $0.profileID != nil }.map(\.profileID) == [b.id]
+        filter("")
+        checks["filteredActionsPreserveUnfilteredExpansion"] = items().allSatisfy { !outline.isItemExpanded($0) }
+        let bulkMenu = sidebar.contextMenu(for: -1)!
+        for title in ["全部展开", "全部收缩"] {
+            if let item = bulkMenu.items.first(where: { $0.title == title }), let action = item.action {
+                checks["bulkMenuAction:"+title] = NSApp.sendAction(action, to: item.target, from: item)
+            } else { checks["bulkMenuAction:"+title] = false }
+        }
+        checks["bulkActionsKeepConfiguration"] = workspace.configuration.profiles == config.profiles && workspace.configuration.directories == config.directories
         checks["sidebarVisibleBesideTerminal"] = workspace.sidebarContainer?.isHidden == false && workspace.sidebarWidth?.constant == 250 && workspace.terminalHost.convert(.zero, to: workspace.window?.contentView).x >= 250
         outline.expandItem(nil, expandChildren: true)
         checks["treeIncludesNestedAndEmptyDirectories"] = Set(items().compactMap(\.directory)).isSuperset(of: ["prod", "prod/apps", "prod/db", "empty/sub", "Links/ops"])

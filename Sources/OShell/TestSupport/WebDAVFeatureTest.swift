@@ -51,6 +51,18 @@ final class WebDAVFeatureTest {
                     try c.put(encrypted, matching: nil)
                     let fetched = try c.fetch()!
                     results["encryptedRoundTrip"] = try SharedVault.decode(fetched.data, password: master).profiles == initial.profiles
+                    results["createdChildDirectory"] = try c.syncDirectory().path.hasSuffix("/protocol/oshell")
+                    let explicit = try client("protocol/oshell"); try explicit.probe()
+                    results["explicitDirectoryNotNested"] = try explicit.fetch()?.data == fetched.data
+                    let existing = try client("existing"); try existing.probe()
+                    results["existingDirectoryReused"] = try existing.syncDirectory().path.hasSuffix("/existing/oshell")
+                    let legacy = try client("legacyroot"); try legacy.probe()
+                    results["legacyDirectFileRetained"] = try legacy.fetch()?.data == fetched.data && legacy.syncDirectory().path.hasSuffix("/legacyroot")
+                    try client("race").probe(); results["concurrentDirectoryCreationAccepted"] = true
+                    for name in ["file", "propdenied", "wronghref", "denied", "badxml", "mkdenied", "missingparent", "false405"] {
+                        do { try client(name).probe(); results[name + "DirectoryRejected"] = false } catch { results[name + "DirectoryRejected"] = true }
+                    }
+
                     do { try c.put(encrypted, matching: nil); results["createNeverOverwrites"] = false } catch { results["createNeverOverwrites"] = true }
                     do { try c.put(encrypted, matching: "\"stale\""); results["staleETagRejected"] = false } catch { results["staleETagRejected"] = true }
                     try c.put(SharedVault.encode(initial, password: master), matching: fetched.etag); results["matchingETagWrites"] = true

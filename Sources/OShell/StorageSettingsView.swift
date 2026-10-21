@@ -50,7 +50,7 @@ final class StorageSettingsView: NSView {
         directoryFields.identifier = .init("storage.directoryFields"); davFields.identifier = .init("storage.webdavFields")
         for stack in [directoryFields, davFields] { stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10 }
         directoryFields.addArrangedSubview(label("选择所有设备共同访问的文件夹，可使用 iCloud Drive。自动识别新建或已有同步配置。")); directoryFields.addArrangedSubview(status); directoryFields.addArrangedSubview(choose)
-        address.placeholderString = "https://服务器/WebDAV/OShell/（服务器上已存在的目录）"
+        address.placeholderString = "https://服务器/WebDAV/（自动使用或创建 oshell 子目录）"
         username.placeholderString = "WebDAV 账号"; password.placeholderString = "WebDAV 密码 / 应用专用密码"
         address.identifier = .init("webdav.address"); username.identifier = .init("webdav.username"); password.identifier = .init("webdav.password")
         for field in [address, username, password] { field.delegate = self }
@@ -193,7 +193,7 @@ final class StorageSettingsView: NSView {
             _ = try ensureMaster(); let settings = try davSettings(), client = try WebDAVClient(settings)
             testing = true; pendingCertificate = nil; davStatus.stringValue = "正在测试…"; updateCertificateStatus()
             DispatchQueue.global(qos: .utility).async { [weak self] in
-                let result = Result { try client.probe() }
+                let result = Result { try client.probe(); return try client.syncDirectory().path }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.testing = false
@@ -206,7 +206,7 @@ final class StorageSettingsView: NSView {
                     }
                     self.workspace?.windowCoordinator?.webDAV.diagnostics.record(.connectionTest, backend: .webDAV, manual: true, error: { if case .failure(let error) = result { return error }; return nil }())
                     switch result {
-                    case .success: self.davStatus.stringValue = "连接正常；可点击“应用”保存。实际写入仍会校验结果。"
+                    case .success(let path): self.davStatus.stringValue = "连接正常；同步目录：\(path)。点击“应用”保存。"
                     case .failure(let error): self.davStatus.stringValue = error.localizedDescription; self.pendingCertificate = error as? WebDAVCertificateIssue
                     }
                     self.updateCertificateStatus()
