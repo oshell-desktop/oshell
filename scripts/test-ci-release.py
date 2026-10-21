@@ -50,6 +50,30 @@ class ReleaseTests(unittest.TestCase):
             self.assertNotIn('self-hosted', workflow)
             self.assertIn('defaults:\n  run:\n    shell: bash', workflow)
 
+    def test_tag_dispatch_uses_default_branch_and_no_publication_job(self):
+        _, jobs = self.workflow_jobs('release.yml')
+        dispatch = jobs['dispatch']
+        self.assertIn("github.event_name == 'push'", dispatch)
+        self.assertIn('actions: write', dispatch)
+        self.assertIn('--ref "$DEFAULT_BRANCH"', dispatch)
+        self.assertNotIn('OSHELL_UPDATE_SIGNING_KEY', dispatch)
+        self.assertNotIn('ci-release.py publish', dispatch)
+        self.assertIn("github.event_name == 'workflow_dispatch'", jobs['metadata'])
+        self.assertIn('git merge-base --is-ancestor', jobs['metadata'])
+        self.assertIn('git checkout --detach "refs/tags/$RELEASE_TAG"', jobs['metadata'])
+
+    def test_signing_dependencies_cached_and_tested_without_release_secrets(self):
+        _, jobs = self.workflow_jobs('release.yml')
+        build = jobs['build']
+        prepare = build.split('      - name: Set up cached Python signing dependencies')[1].split('      - name: Sign verified DMG update metadata')[0]
+        self.assertIn('actions/setup-python@', prepare)
+        self.assertIn("python-version: '3.12'", prepare)
+        self.assertIn('cache: pip', prepare)
+        self.assertIn('scripts/requirements-release.txt', prepare)
+        self.assertIn('scripts/test-update-pages.py', prepare)
+        self.assertNotIn('OSHELL_UPDATE_SIGNING_KEY', prepare)
+        self.assertNotIn('if:', prepare)
+
     def test_compatibility_secrets_are_scoped_before_publication(self):
         _, jobs = self.workflow_jobs('release.yml')
         release = jobs['release']

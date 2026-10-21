@@ -5,7 +5,6 @@
 import importlib.util
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -87,6 +86,16 @@ class ReleaseBuildTests(unittest.TestCase):
             manifest.write_text('changed manifest')
             self.assertNotEqual(prefix, CHECK.cache_keys('arm64')[0])
             self.assertNotEqual(CHECK.cache_keys('arm64')[0], CHECK.cache_keys('compat')[0])
+
+    def test_packaging_changes_reuse_cache_but_helper_source_updates_archive(self):
+        (self.developer/'scripts').mkdir()
+        with patch.object(CHECK, 'ROOT', self.developer), patch.object(CHECK, 'toolchain_identity', return_value={'sdk':'fixture'}):
+            prefix, key = CHECK.cache_keys('arm64')
+            (self.developer/'scripts/package-release.py').write_text('DMG metadata only')
+            self.assertEqual((prefix, key), CHECK.cache_keys('arm64'))
+            (self.developer/'scripts/release_helpers.py').write_text('helper compiler flags')
+            self.assertEqual(prefix, CHECK.cache_keys('arm64')[0])
+            self.assertNotEqual(key, CHECK.cache_keys('arm64')[1])
 
     def test_workflow_retains_all_targets_and_publication_gates(self):
         workflow = (ROOT/'.github/workflows/release.yml').read_text()

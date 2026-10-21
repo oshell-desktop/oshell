@@ -2,7 +2,7 @@
 
 ## GitHub Actions 自动发布
 
-流水线位于 [release.yml](../.github/workflows/release.yml)。将配置和源码提交到 GitHub 后，推送 `vX.Y.Z` 标签会自动构建并发布；也可在 Actions 手动运行，按所选分支的版本自动创建标签。
+流水线位于 [release.yml](../.github/workflows/release.yml)。将配置和源码提交到 GitHub 后，推送 `vX.Y.Z` 标签会先自动转发到默认分支（通常是 `main`）的发布工作流，再按该不可变标签构建并发布。也可在 Actions 从默认分支手动运行，按当前版本自动创建标签。不同版本共用默认分支的编译缓存，标签始终锁定实际源码提交。
 
 | 构建目标 | 最低系统 | 架构 | DMG 文件后缀 |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@
 发布步骤：
 
 1. 更新 `scripts/Info.plist` 的 `CFBundleShortVersionString`，递增 `CFBundleVersion`，在 `CHANGELOG.md` 中添加对应版本的变更内容，再提交所有源码和流水线文件。Release 说明会自动提取该版本章节，放在“本次变更”中；缺失、空白或重复的版本章节会阻止发布。
-2. 将提交推送到 GitHub。手动发布时进入 **Actions → Build and publish macOS DMGs → Run workflow**，选择要发布的分支（通常为 `main`），**tag 留空**。流程读取该提交的 Info.plist，例如版本 `0.2.61` 会创建 `v0.2.61`；也可明确填写匹配版本。已有同名标签必须指向所选提交，流程不会移动或覆盖它。若需重试旧版本，请选择原标签作为运行来源。标签与源码版本不匹配时，会在创建标签和编译前报错。也可以自行创建并推送匹配的 `vX.Y.Z` 标签来触发发布。
+2. 将提交推送到 GitHub。手动发布时进入 **Actions → Build and publish macOS DMGs → Run workflow**，选择默认分支（通常是 `main`）（通常为 `main`），**tag 留空**。流程读取该提交的 Info.plist，例如版本 `0.2.61` 会创建 `v0.2.61`；也可明确填写匹配版本。已有同名标签必须指向所选提交，流程不会移动或覆盖它。若需重试旧版本，请选择原标签作为运行来源。标签与源码版本不匹配时，会在创建标签和编译前报错。也可以自行创建并推送匹配的 `vX.Y.Z` 标签来触发发布。
 3. 标签确定后，Actions 会运行两个独立构建任务。两个任务全部完成核心测试、DMG 挂载检查、全部 Mach-O 的架构/最低系统检查和签名完整性检查后，才进入发布阶段。
 4. Release 先以草稿创建，上传两个 DMG 和对应源码包，并在 Release 说明中嵌入两种目标的签名更新信息。`SHA256SUMS.txt` 和 `release-manifest.json` 放在每个 DMG 内，不再单独上传为 Release 附件。确认远端附件完整后才公开发布并设为 Latest。
 
@@ -42,6 +42,10 @@ macOS 构建固定使用 `/Applications/Xcode_16.4.app/Contents/Developer`，保
 缓存按架构、最低系统版本、工具链/SDK、Package 定义、二进制依赖及编译脚本隔离。源码完全相同直接命中编译产物；源码变化时，从相同构建配置的旧缓存恢复 SwiftPM 数据库和中间文件，按源码内容校验恢复未变文件的时间戳，再按 SwiftPM 的传递产品归属选择构建范围，避免无关二进制 framework 的复制触发主程序重编；由 SwiftPM 决定这些产品中需重编译和重新链接的模块。无法可靠识别的输入会安全退回完整依赖图。新增、删除源码及归档造成的时间戳精度变化均有真实编译回归覆盖。缓存损坏或配置不匹配时退回完整编译。
 
 Release 保持整模块优化，因此一个文件的变化可能重编其所属模块以及必要的依赖者，不能保证只编译单个文件；未受影响的模块和独立的 rz/sz 辅助程序可继续复用。核心检查、固定签名、DMG 挂载、全部 Mach-O 架构与最低系统版本校验每次仍完整执行。参考 [Swift 整模块优化说明](https://www.swift.org/blog/whole-module-optimizations/)。
+
+正式构建缓存不包含 `Sources/OShell/TestSupport`，但始终包含核心检查源码；只有 Intel 兼容目标纳入 CryptoSwift。Swift 编译、lrzsz 编译和安装包组装使用独立脚本，调整版本号、DMG 组装或 UI 测试不会无故重编正式 Swift 产物。核心检查仍在每次构建执行，缓存命中也不会跳过。
+
+更新签名工具固定使用 Python 3.12，并由 setup-python 缓存 pip 下载和 wheel。当前固定的 cryptography 版本没有 macOS Intel wheel，Intel 第一次运行仍需本地构建，随后复用已构建 wheel。仅构建模式也安装依赖并执行离线签名验证测试（合成密钥），便于公平比较耗时；实际发布更新签名仍仅在发布模式读取 Secret。
 
 缓存命中状态写入任务摘要。产物缓存保留最近两代，每个目标的增量快照保留最近一次成功编译状态；GitHub 归档按仓库缓存策略保留。缓存服务不可用时可以冷构建，验证流程不依赖缓存才具备正确性。首次运行用于建立缓存；比较性能时应区分冷构建、相同源码命中和源码变化后的增量构建，并单独统计 Runner 排队时间。
 

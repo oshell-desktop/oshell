@@ -29,8 +29,25 @@ defaults:
     shell: bash
 
 jobs:
+  dispatch:
+    # Tag caches cannot be reused by the next tag. Forward tag-triggered runs
+    # to the default branch; the actual build still checks out the pinned tag.
+    if: github.event_name == 'push' && !github.event.deleted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch the tagged release from the shared cache branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" -f tag="$RELEASE_TAG" -f publish=true
+
   metadata:
-    if: github.event_name != 'push' || !github.event.deleted
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -47,6 +64,23 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Select the requested immutable source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$PUBLISH_RELEASE" = true ] && [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo '::error::Publish from the default branch so releases share validated caches.'
+            exit 1
+          fi
+          if [ -n "$RELEASE_TAG" ]; then
+            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+            if [ "$PUBLISH_RELEASE" = true ] && git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG^{commit}" >/dev/null; then
+              git merge-base --is-ancestor "refs/tags/$RELEASE_TAG^{commit}" "$GITHUB_SHA"
+              git checkout --detach "refs/tags/$RELEASE_TAG"
+            fi
+          fi
       - name: Validate release scripts and source
         run: |
           python3 scripts/check-public-source.py --history HEAD
@@ -140,6 +174,19 @@ jobs:
           options=()
           if [ "$PUBLISH_RELEASE" != true ]; then options+=(--build-only); fi
           python3 scripts/ci-release.py stage --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --flavor "$FLAVOR" --output work/ci-output "${options[@]}"
+      - name: Set up cached Python signing dependencies
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/requirements-release.txt
+      - name: Prepare and test update signing tools
+        # Also run in build-only validation, so timing does not hide dependency
+        # compilation; tests use synthetic keys and cannot publish anything.
+        run: |
+          python3 -m venv work/update-signing
+          work/update-signing/bin/python -m pip install -r scripts/requirements-release.txt
+          work/update-signing/bin/python scripts/test-update-pages.py
       - name: Sign verified DMG update metadata
         if: needs.metadata.outputs.publish == 'true'
         env:
@@ -149,8 +196,6 @@ jobs:
             echo '::error::Configure the existing OSHELL_UPDATE_SIGNING_KEY secret before publishing. Signed Release metadata is required for in-app updates.'
             exit 1
           fi
-          python3 -m venv work/update-signing
-          (unset OSHELL_UPDATE_SIGNING_KEY; work/update-signing/bin/python -m pip install -r scripts/requirements-release.txt)
           work/update-signing/bin/python scripts/sign-ci-updates.py --flavor "$FLAVOR" --tag "$RELEASE_TAG"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: needs.metadata.outputs.publish == 'true'

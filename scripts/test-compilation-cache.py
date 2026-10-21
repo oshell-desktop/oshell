@@ -69,6 +69,44 @@ class CompilationCacheTests(unittest.TestCase):
                     dict(arch='arm64', minimum='13.0', tests=True)]
         self.assertEqual(len({self.cache(**v).key for v in variants}), 4)
 
+    def production_key(self, legacy=False, tests=False):
+        return CACHE.source_key(self.root, CACHE.swift_source_inputs(self.root, legacy, tests), {}, {'swift':'fixture'})
+
+    def write_input(self, name, value):
+        path = self.root/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(value)
+
+    def test_production_excludes_ui_tests_but_test_build_includes_them(self):
+        self.write_input('Sources/OShell/App.swift', 'app')
+        self.write_input('Sources/OShell/TestSupport/Fixture.swift', 'first')
+        production, tests = self.production_key(), self.production_key(tests=True)
+        self.write_input('Sources/OShell/TestSupport/Fixture.swift', 'second')
+        self.assertEqual(production, self.production_key())
+        self.assertNotEqual(tests, self.production_key(tests=True))
+        self.write_input('Sources/OShell/Added.swift', 'new production code')
+        self.assertNotEqual(production, self.production_key())
+        (self.root/'Sources/OShell/Added.swift').unlink()
+        self.assertEqual(production, self.production_key())
+
+    def test_packaging_version_and_helper_recipe_do_not_invalidate_swift(self):
+        first = self.production_key()
+        for path in ['scripts/package-release.py', 'scripts/Info.plist', 'scripts/release_helpers.py']:
+            self.write_input(path, 'changed')
+        self.assertEqual(first, self.production_key())
+        self.write_input('scripts/release_compilation.py', 'changed flags')
+        self.assertNotEqual(first, self.production_key())
+
+    def test_core_checks_and_relevant_dependencies_still_invalidate(self):
+        first, intel = self.production_key(), self.production_key(legacy=True)
+        self.write_input('Vendor/CryptoSwift/Sources/Crypto.swift', 'legacy only')
+        self.assertEqual(first, self.production_key())
+        self.assertNotEqual(intel, self.production_key(legacy=True))
+        self.write_input('Tests/OShellCoreTests/CoreTests.swift', 'new assertion')
+        self.assertNotEqual(first, self.production_key())
+
+    def test_excluded_test_support_does_not_hide_external_source_symlink(self):
+        (self.root/'Sources/OShell').symlink_to(self.products, target_is_directory=True)
+        with self.assertRaises(ValueError): self.production_key()
+
     def test_toolchain_change_invalidates(self):
         first = self.cache().key
         with patch.object(CACHE, 'toolchain_identity', return_value={'swift': 'fixture-v2'}):

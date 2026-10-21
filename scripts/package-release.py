@@ -14,12 +14,11 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
-import tempfile
 from release_targets import TARGETS, RELEASE_FLAVORS
 import installer_metadata
 import code_signing
-from compilation_cache import CompilationCache, SWIFT_SOURCE_INPUTS, SWIFT_CONFIGURATION_INPUTS
-from incremental_cache import IncrementalCache, affected_products
+import release_compilation
+import release_helpers
 
 ROOT = Path(__file__).resolve().parent.parent
 WORK = ROOT / 'work/release'
@@ -28,9 +27,8 @@ LOG = ROOT / 'validation'
 INFO = plistlib.loads((ROOT/'scripts/Info.plist').read_bytes())
 INCLUDE_TESTS = False
 VERSION = INFO['CFBundleShortVersionString']
-PROGRAMS = {'OShell':'MacOS/OShell', 'OShell-ZOC':'MacOS/OShell-ZOC',
-    'OShell-FileZilla':'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla',
-    'OShellAskpass':'Helpers/OShellAskpass', 'OShellProxy':'Helpers/OShellProxy', 'OShellSSH':'Helpers/OShellSSH'}
+PROGRAMS = release_compilation.PROGRAMS
+
 
 def run(args, *, log=None, env=None, cwd=ROOT):
     if log:
@@ -50,72 +48,10 @@ def core_check_command(binaries, native):
     raise RuntimeError('Core checks require a native target or x86_64 via Rosetta on Apple Silicon')
 
 def build_swift(flavor, arch, minimum):
-    base = ROOT / ('work/build-legacy' if flavor == 'legacy' else f'work/build-compat-{arch}' if flavor == 'compat' else f'work/build-modern-{arch}')
-    if INCLUDE_TESTS: base = ROOT / f'work/build-test-{flavor}-{arch}'
-    variant = dict(flavor=flavor, arch=arch, minimum=minimum, tests=INCLUDE_TESTS)
-    cache = CompilationCache(ROOT, f'swift-{flavor}-{arch}-{minimum}', SWIFT_SOURCE_INPUTS, variant)
-    restored = base/'cached-products'
-    if restored.exists(): shutil.rmtree(restored)
-    products = [*PROGRAMS, 'OShellCoreChecks']
-    if cache.restore(restored, products): return restored
-    env = dict(os.environ, OSHELL_LEGACY='1' if flavor == 'legacy' else '0', OSHELL_MACOS_MINIMUM=minimum, OSHELL_TEST_HARNESS='1' if INCLUDE_TESTS else '0')
-    args = ['swift','build','--package-path',ROOT,'--scratch-path',base/'swift','--cache-path',base/'cache',
-        '--config-path',base/'config','--security-path',base/'security','--disable-sandbox','-c','release',
-        '--triple',f'{arch}-apple-macosx{minimum}', '-Xlinker','-rpath','-Xlinker','@executable_path/../Frameworks',
-        '-Xlinker','-rpath','-Xlinker','@executable_path/../../../../Frameworks']
-    args += ['-Xswiftc','-file-prefix-map','-Xswiftc',f'{ROOT}=/OShell','-Xswiftc','-debug-prefix-map','-Xswiftc',f'{ROOT}=/OShell','-Xswiftc','-file-compilation-dir','-Xswiftc','/OShell','-Xcc',f'-ffile-prefix-map={ROOT}=/OShell']
-    if flavor == 'legacy': args += ['-Xswiftc','-DOSHELL_LEGACY']
-    print('Building',flavor,arch,flush=True)
-    incremental = IncrementalCache(ROOT, f'{flavor}-{arch}-{minimum}',
-        SWIFT_CONFIGURATION_INPUTS, SWIFT_SOURCE_INPUTS, variant)
-    with incremental.workspace(base):
-        selected = None
-        if incremental.restored:
-            describe = ['swift', 'package', '--package-path', ROOT, '--scratch-path', base/'swift',
-                        '--cache-path', base/'cache', '--config-path', base/'config',
-                        '--security-path', base/'security', '--disable-sandbox', 'describe', '--type', 'json']
-            try:
-                graph = json.loads(subprocess.check_output(list(map(str, describe)), env=env, text=True))
-                selected = affected_products(ROOT, incremental.changed_inputs, graph, set(products))
-            except (ValueError, OSError, subprocess.CalledProcessError):
-                # Rebuilding the full graph is safe when product selection is unavailable.
-                pass
-        log = f'package-{flavor}-{arch}-build.log'
-        if selected is None:
-            run(args,env=env,log=log)
-        else:
-            print('SwiftPM affected products:', ', '.join(selected) or 'none', flush=True)
-            with (LOG/log).open('wb') as stream:
-                if not selected:
-                    stream.write(b'No compiled inputs changed; restored products are current.\n')
-                for product in selected:
-                    subprocess.run(list(map(str, [*args, '--product', product])), cwd=ROOT, env=env,
-                                   stdout=stream, stderr=subprocess.STDOUT, check=True)
-    binaries = base/'swift'/f'{arch}-apple-macosx'/'release'
-    cache.store(binaries, products + [p.name for p in binaries.glob('*.bundle')])
-    return binaries
+    return release_compilation.build_swift(ROOT, LOG, run, flavor, arch, minimum, INCLUDE_TESTS)
 
 def build_lrzsz(arch, minimum):
-    base = WORK/f'lrzsz-{arch}-{minimum}'
-    cache = CompilationCache(ROOT, f'lrzsz-{arch}-{minimum}',
-        ['Vendor/lrzsz-0.12.20.tar.gz', 'scripts/package-release.py', 'scripts/compilation_cache.py'],
-        dict(arch=arch, minimum=minimum))
-    restored = WORK/f'cached-lrzsz-{arch}-{minimum}'
-    if restored.exists(): shutil.rmtree(restored)
-    products = ['src/lrz', 'src/lsz', 'COPYING']
-    if cache.restore(restored, products): return restored/'src'
-    marker = base/'.built-public-paths'
-    if cache.entry is not None or not marker.exists():
-        base.mkdir(parents=True,exist_ok=True)
-        run(['tar','-xzf',ROOT/'Vendor/lrzsz-0.12.20.tar.gz','--strip-components=1','-C',base])
-        env=dict(os.environ,CC='clang',CFLAGS=f'-arch {arch} -Os -mmacosx-version-min={minimum} -std=gnu89 -Wno-error=implicit-function-declaration -Wno-error=incompatible-function-pointer-types -ffile-prefix-map={ROOT}=/OShell -fdebug-prefix-map={ROOT}=/OShell',LDFLAGS=f'-arch {arch} -mmacosx-version-min={minimum}')
-        host='arm' if arch=='arm64' else 'x86_64'
-        run(['./configure','--disable-nls','--disable-timesync',f'--host={host}-apple-darwin','--prefix=/usr'],cwd=base,env=env,log=f'package-lrzsz-{arch}-{minimum}-configure.log')
-        run(['make','clean'],cwd=base,env=env,log=f'package-lrzsz-{arch}-{minimum}-clean.log')
-        run(['make','-j4'],cwd=base,env=env,log=f'package-lrzsz-{arch}-{minimum}-build.log')
-        marker.write_text('OShell reproducible helper build\n')
-    cache.store(base, products)
-    return base/'src'
+    return release_helpers.build_lrzsz(ROOT, WORK, run, arch, minimum)
 
 def macho(path):
     if not path.is_file() or path.is_symlink(): return False

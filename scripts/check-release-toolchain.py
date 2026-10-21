@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import platform
 import subprocess
-from compilation_cache import source_key, toolchain_identity, SWIFT_SOURCE_INPUTS, SWIFT_CONFIGURATION_INPUTS
+from compilation_cache import source_key, toolchain_identity, swift_source_inputs, swift_configuration_inputs
 from release_targets import TARGETS, RELEASE_FLAVORS
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,9 +17,9 @@ def cache_keys(flavor):
     target = TARGETS[flavor]
     variant = dict(flavor=flavor, architectures=target.architectures, minimum=target.minimum, tests=False)
     tools = toolchain_identity()
-    configuration = source_key(ROOT, SWIFT_CONFIGURATION_INPUTS, variant, tools)
-    sources = source_key(ROOT, SWIFT_SOURCE_INPUTS, variant, tools)
-    prefix = f'oshell-build-v3-{platform.machine()}-{flavor}-{configuration}'
+    configuration = source_key(ROOT, swift_configuration_inputs(legacy=flavor == 'legacy'), variant, tools)
+    sources = source_key(ROOT, swift_source_inputs(ROOT, legacy=flavor == 'legacy') + ['Vendor/lrzsz-0.12.20.tar.gz', 'scripts/release_helpers.py'], variant, tools)
+    prefix = f'oshell-build-v4-{platform.machine()}-{flavor}-{configuration}'
     return prefix, f'{prefix}-{sources}'
 
 

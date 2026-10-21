@@ -15,11 +15,27 @@ import subprocess
 import tempfile
 
 SCHEMA = 1
-BUILD_RECIPE_INPUTS = ['scripts/package-release.py', 'scripts/compilation_cache.py', 'scripts/incremental_cache.py']
-SWIFT_SOURCE_INPUTS = ['Package.swift', 'Package.resolved', 'Sources', 'Tests/OShellCoreTests',
-                       'Vendor/SwiftTerm', 'Vendor/CryptoSwift', 'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS]
-SWIFT_CONFIGURATION_INPUTS = ['Package.swift', 'Package.resolved', 'Vendor/SwiftTerm/Package.swift',
-                              'Vendor/CryptoSwift/Package.swift', 'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS]
+BUILD_RECIPE_INPUTS = ['scripts/release_compilation.py', 'scripts/compilation_cache.py', 'scripts/incremental_cache.py']
+
+
+def swift_configuration_inputs(legacy=False):
+    return ['Package.swift', 'Package.resolved', 'Vendor/SwiftTerm/Package.swift',
+            'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS] + (['Vendor/CryptoSwift/Package.swift'] if legacy else [])
+
+
+def swift_source_inputs(root, legacy=False, tests=False):
+    # Enumerate app children so TestSupport is excluded exactly as Package.swift
+    # excludes it from production builds. New/deleted production files still hash.
+    inputs = ['Package.swift', 'Package.resolved', 'Tests/OShellCoreTests',
+              'Vendor/SwiftTerm', 'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS]
+    if legacy: inputs.append('Vendor/CryptoSwift')
+    source = root/'Sources'
+    if not source.is_dir() or source.is_symlink(): return inputs + ['Sources']
+    for target in sorted(source.iterdir()):
+        if target.name == 'OShell' and target.is_dir() and not target.is_symlink() and not tests:
+            inputs.extend(p.relative_to(root).as_posix() for p in sorted(target.iterdir()) if p.name != 'TestSupport')
+        else: inputs.append(target.relative_to(root).as_posix())
+    return inputs
 
 
 def digest(path):
