@@ -89,6 +89,8 @@ final class TabDropHost: NSView {
     }
     var target: ((UUID, NSPoint) -> Target?)?
     var drop: ((UUID, Target) -> Bool)?
+    var externalTarget: ((UUID, NSWindow, NSPoint) -> Target?)?
+    var externalDrop: ((UUID, NSWindow, Target) -> Bool)?
     private final class Preview: NSView {
         var title = ""
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -103,15 +105,19 @@ final class TabDropHost: NSView {
     override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([Self.pasteboardType]) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func clearPreview() { preview.removeFromSuperview() }
-    private func resolve(_ sender: NSDraggingInfo) -> (UUID, Target)? {
-        guard let source = sender.draggingSource as? TabStripView.Item, source.dragEnabled,
+    private func resolve(_ sender: NSDraggingInfo) -> (UUID, Target, NSWindow)? {
+        guard sender.draggingSourceOperationMask.contains(.move),
+              let source = sender.draggingSource as? TabStripView.Item, source.dragEnabled, let sourceWindow = source.window, let window,
               let raw = sender.draggingPasteboard.string(forType: Self.pasteboardType), let id = UUID(uuidString: raw), id == source.id,
-              let target = target?(id, convert(sender.draggingLocation, from: nil)) else { return nil }
-        return (id, target)
+              bounds.contains(convert(sender.draggingLocation, from: nil)) else { return nil }
+        let point = convert(sender.draggingLocation, from: nil)
+        let resolved = sourceWindow === window ? target?(id, point) : externalTarget?(id, sourceWindow, point)
+        guard let resolved else { return nil }
+        return (id, resolved, sourceWindow)
     }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let (_, target) = resolve(sender) else { clearPreview(); return [] }
+        guard let (_, target, _) = resolve(sender) else { clearPreview(); return [] }
         preview.frame = target.position.preview(in: target.rect).insetBy(dx: 2, dy: 2); preview.title = target.position.title
         addSubview(preview, positioned: .above, relativeTo: nil); preview.needsDisplay = true; return .move
     }
@@ -119,7 +125,8 @@ final class TabDropHost: NSView {
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { resolve(sender) != nil }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         defer { clearPreview() }
-        guard let (id, target) = resolve(sender) else { return false }
+        guard let (id, target, sourceWindow) = resolve(sender) else { return false }
+        if sourceWindow !== window { return externalDrop?(id, sourceWindow, target) ?? false }
         return drop?(id, target) ?? false
     }
     override func concludeDragOperation(_ sender: NSDraggingInfo?) { clearPreview() }

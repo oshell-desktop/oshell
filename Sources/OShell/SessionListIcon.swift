@@ -23,6 +23,15 @@ enum SessionListIcon: Hashable {
         }
     }
 
+    private var badgeText: String? {
+        switch self {
+        case .session(.ssh, false): return "SSH"
+        case .session(.sftp, false): return "SFTP"
+        case .session(.ftp, false): return "FTP"
+        default: return nil
+        }
+    }
+
     private struct Key: Hashable { let style: SessionListIcon; let dark: Bool }
     // At most 20 images, independent of the number of profiles or reused rows.
     private static var images = [Key: NSImage]()
@@ -34,13 +43,13 @@ enum SessionListIcon: Hashable {
         case .parent: rgb = dark ? (0.70, 0.72, 0.76) : (0.40, 0.42, 0.46)
         case .directory: rgb = dark ? (0.91, 0.73, 0.36) : (0.61, 0.43, 0.12)
         case .session(_, true): rgb = dark ? (0.36, 0.81, 0.88) : (0.02, 0.49, 0.57)
-        case .session(.ssh, _): rgb = dark ? (0.40, 0.69, 1.0) : (0.12, 0.40, 0.75)
+        case .session(.ssh, _): rgb = dark ? (0.5137, 0.7216, 1.0) : (0.1451, 0.4118, 0.7294)
         case .session(.local, _): rgb = dark ? (0.76, 0.61, 0.97) : (0.51, 0.32, 0.72)
-        case .session(.sftp, _): rgb = dark ? (0.39, 0.79, 0.61) : (0.12, 0.51, 0.34)
-        case .session(.ftp, _): rgb = dark ? (1.0, 0.66, 0.38) : (0.72, 0.36, 0.10)
+        case .session(.sftp, _): rgb = dark ? (0.4471, 0.8275, 0.6353) : (0.1294, 0.4627, 0.2941)
+        case .session(.ftp, _): rgb = dark ? (1.0, 0.7294, 0.4784) : (0.6392, 0.3333, 0.0784)
         }
         let color = NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
-        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
+        let image = NSImage(size: NSSize(width: badgeText == nil ? 20 : 36, height: 20), flipped: false) { _ in
             color.setStroke(); color.setFill()
             func line(_ points: [(CGFloat, CGFloat)]) {
                 let path = NSBezierPath(); path.lineWidth = 1.5; path.lineCapStyle = .round; path.lineJoinStyle = .round
@@ -79,25 +88,18 @@ enum SessionListIcon: Hashable {
                 chain.line(to: NSPoint(x: 11, y: 13)); chain.stroke()
                 line([(7, 10), (13, 10)])
                 NSGraphicsContext.restoreGraphicsState()
-            case .session(.ssh, _):
-                box(NSRect(x: 2, y: 2, width: 16, height: 16))
-                line([(2, 7), (18, 7)])
-                line([(5, 14), (8, 12), (5, 10)]); line([(11, 10), (14, 10)])
-                for x: CGFloat in [5, 8] { NSBezierPath(ovalIn: NSRect(x: x, y: 3.5, width: 1.8, height: 1.8)).fill() }
+            case .session(.ssh, false), .session(.sftp, false), .session(.ftp, false):
+                color.withAlphaComponent(dark ? 0.18 : 0.09).setFill()
+                NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 36, height: 20), xRadius: 5, yRadius: 5).fill()
+                color.withAlphaComponent(dark ? 0.35 : 0.23).setStroke()
+                let border = NSBezierPath(roundedRect: NSRect(x: 0.5, y: 0.5, width: 35, height: 19), xRadius: 4.5, yRadius: 4.5)
+                border.lineWidth = 1; border.stroke()
+                let text = NSAttributedString(string: self.badgeText!, attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: color])
+                let size = text.size()
+                text.draw(at: NSPoint(x: (36 - size.width) / 2, y: (20 - size.height) / 2))
             case .session(.local, _):
                 box(NSRect(x: 4, y: 6, width: 12, height: 10), radius: 1.5)
                 line([(4, 6), (2, 3), (18, 3), (16, 6)])
-            case .session(.sftp, _):
-                folder()
-                let shackle = NSBezierPath(); shackle.lineWidth = 1.4
-                shackle.appendArc(withCenter: NSPoint(x: 10, y: 10), radius: 2.5, startAngle: 0, endAngle: 180)
-                shackle.stroke()
-                box(NSRect(x: 6, y: 5, width: 8, height: 5), radius: 1)
-                NSBezierPath(ovalIn: NSRect(x: 9.3, y: 6.7, width: 1.4, height: 1.4)).fill()
-            case .session(.ftp, _):
-                folder()
-                line([(6, 11), (14, 11)]); line([(12, 13), (14, 11), (12, 9)])
-                line([(14, 7), (6, 7)]); line([(8, 9), (6, 7), (8, 5)])
             }
             return true
         }

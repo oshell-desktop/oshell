@@ -26,6 +26,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     private var arrangingView: TabArrangementView?
     let idleMemoryReclaimer = IdleMemoryReclaimer()
     let terminalHost = TabDropHost()
+    let windowDropHost = TabDropHost()
     let sessionSidebar = SessionSidebar(), sessionSidebarButton = NSButton()
     var sessionSidebarVisible = SessionSidebarPreferences.visible
     weak var sidebarContainer: NSView?
@@ -120,6 +121,8 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false; window.titlebarAppearsTransparent = true
         super.init(window: window)
+        window.contentView = windowDropHost
+        configureExternalTabDrop(on: windowDropHost)
         PasswordVault.shared.configureLocalStorage(directory: store.url.deletingLastPathComponent())
         // Do not discard a saved unlock record based on unreadable or
         // unauthenticated startup data; reconcile after successful unlock.
@@ -253,6 +256,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             workspace.trailingAnchor.constraint(equalTo: content.trailingAnchor), workspace.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
     }
+    func clearTabStripDragPreviews() {
+        tabStrip.clearDragPreview(); groupStrips.forEach { $0.1.clearDragPreview() }
+    }
     func configureTerminalTabStrip(_ strip: TabStripView, groupID: UUID? = nil) {
         strip.allowsTabDragging = true
         strip.canAcceptTab = { [weak self] id in self?.isSecurityUnlocked == true && self?.tabs.contains(where: { $0.id == id }) == true }
@@ -266,9 +272,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
                   source.move(tab, to: self, before: before, inGroup: groupID) else { return false }
             self.show(); return true
         }
-        strip.onDragOver = { [weak self] in self?.terminalHost.clearPreview() }
+        strip.onDragOver = { [weak self] in self?.terminalHost.clearPreview(); self?.windowDropHost.clearPreview() }
         strip.onDragEnd = { [weak self] in
-            self?.terminalHost.clearPreview(); self?.tabStrip.clearDragPreview()
+            self?.terminalHost.clearPreview(); self?.windowDropHost.clearPreview(); self?.tabStrip.clearDragPreview()
             self?.groupStrips.forEach { $0.1.clearDragPreview() }
         }
         strip.onDragCompletion = { [weak self] id, point, operation, cancelled in
@@ -294,6 +300,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     private func makeWorkspace() -> NSView {
         let workspace = NSView()
         configureTerminalTabStrip(tabStrip)
+        configureExternalTabDrop(on: terminalHost)
         terminalHost.target = { [weak self] source, point in self?.tabDropTarget(source: source, point: point) }
         terminalHost.drop = { [weak self] source, target in
             if let group = target.group { return self?.moveTab(source, toGroup: group) ?? false }
@@ -1002,7 +1009,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         guard move(tab, to: destination) else { destination.window?.close(); return nil }
         destination.show(); return destination
     }
-    private func externalTabSource(_ id: UUID, window sourceWindow: NSWindow, groupID: UUID?) -> WorkspaceController? {
+    func externalTabSource(_ id: UUID, window sourceWindow: NSWindow, groupID: UUID?) -> WorkspaceController? {
         guard isSecurityUnlocked, !loadFailed, window?.isVisible == true, window?.attachedSheet == nil, NSApp.modalWindow == nil,
               let source = windowCoordinator?.workspaces.first(where: { $0.window === sourceWindow }), source !== self,
               source.isSecurityUnlocked, !source.loadFailed, sourceWindow.attachedSheet == nil,

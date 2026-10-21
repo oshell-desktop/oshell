@@ -79,6 +79,33 @@ extension WorkspaceController {
         let minimum = NSSize(width: max(320, entries.map { $0.displayMinimumSize.width }.max() ?? 280), height: (entries.map { $0.displayMinimumSize.height }.max() ?? 140) + TabStripView.barHeight)
         view.frame = NSRect(origin: .zero, size: minimum); return (view, minimum)
     }
+    /// Foreign tabs merge into the hovered group; edges do not create splits.
+    /// The outer host also covers the sidebar, toolbar and empty welcome page.
+    func configureExternalTabDrop(on host: TabDropHost) {
+        host.externalTarget = { [weak self, weak host] id, sourceWindow, point in
+            guard let self, let host else { return nil }
+            var group: TabGroupNode?, rect = host.bounds
+            if let root = self.customTabLayout {
+                for (candidate, strip) in self.groupStrips where !candidate.isHidden {
+                    guard let view = strip.superview else { continue }
+                    let region = host.convert(view.bounds, from: view).intersection(host.bounds)
+                    if !region.isEmpty && region.contains(point) { group = candidate; rect = region; break }
+                }
+                group = group ?? root.groups.first { $0.id == self.activeTabGroupID && !$0.isHidden } ?? root.groups.first { !$0.isHidden }
+                guard group != nil else { return nil }
+            }
+            guard self.externalTabSource(id, window: sourceWindow, groupID: group?.id) != nil else { return nil }
+            if host !== self.terminalHost { self.terminalHost.clearPreview() }
+            if host !== self.windowDropHost { self.windowDropHost.clearPreview() }
+            self.clearTabStripDragPreviews()
+            return .init(group: group?.id, position: .center, rect: rect)
+        }
+        host.externalDrop = { [weak self] id, sourceWindow, target in
+            guard let self, let source = self.externalTabSource(id, window: sourceWindow, groupID: target.group),
+                  let tab = source.tabs.first(where: { $0.id == id }), source.move(tab, to: self, inGroup: target.group) else { return false }
+            self.show(); return true
+        }
+    }
     func tabDropTarget(source: UUID, point: NSPoint) -> TabDropHost.Target? {
         guard tabs.contains(where: { $0.id == source }), terminalHost.bounds.contains(point) else { return nil }
         for tab in visibleTerminalTabs {

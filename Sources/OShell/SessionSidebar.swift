@@ -185,9 +185,10 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         else {
             cell = NSTableCellView(); cell.identifier = id
             let label = NSTextField(labelWithString: ""), icon = SessionListIconView(); label.lineBreakMode = .byTruncatingTail
+            icon.imageScaling = .scaleProportionallyDown
             label.font = .systemFont(ofSize: 12); cell.textField = label; cell.imageView = icon
             for view in [label, icon] { view.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(view) }
-            NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 20), icon.heightAnchor.constraint(equalToConstant: 20), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
+            NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 36), icon.heightAnchor.constraint(equalToConstant: 20), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         }
         cell.textField?.stringValue = node.title
         let style: SessionListIcon = node.kind.map { .session($0, shortcut: node.isLink) } ?? .directory

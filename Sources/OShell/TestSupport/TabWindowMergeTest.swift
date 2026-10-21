@@ -37,6 +37,20 @@ enum TabWindowMergeTest {
         checks["insertionPreviewShown"] = strip.subviews.count == childCount + 1
         strip.draggingExited(info)
         checks["cancelPreservesBothWindows"] = source.tabs.contains { $0 === tab } && target.tabs.map(\.id) == initial && strip.subviews.count == childCount
+        let body = drag(tab.id, from: source, to: strip)
+        body.draggingLocation = target.terminalHost.convert(NSPoint(x: target.terminalHost.bounds.midX, y: target.terminalHost.bounds.midY), to: nil)
+        let bodyChildren = target.terminalHost.subviews.count
+        checks["terminalContentAcceptsForeignTab"] = target.terminalHost.draggingEntered(body) == .move && target.terminalHost.prepareForDragOperation(body)
+        checks["contentMergePreviewShown"] = target.terminalHost.subviews.count == bodyChildren + 1
+        target.terminalHost.draggingExited(body)
+        checks["contentCancelKeepsOwnership"] = target.terminalHost.subviews.count == bodyChildren && source.tabs.contains { $0 === tab } && target.tabs.map(\.id) == initial
+        checks["foreignContentEdgesMergeRatherThanSplit"] = target.terminalHost.externalTarget?(tab.id, source.window!, NSPoint(x: 1, y: target.terminalHost.bounds.midY))?.position == .center
+        body.draggingLocation = target.windowDropHost.convert(NSPoint(x: 16, y: target.windowDropHost.bounds.maxY - 16), to: nil)
+        checks["windowPageOutsideTerminalAcceptsForeignTab"] = target.windowDropHost.draggingEntered(body) == .move
+        target.windowDropHost.draggingExited(body)
+        let fakeBody = TabDragInfoFixture(); fakeBody.draggingSource = body.draggingSource; fakeBody.draggingLocation = body.draggingLocation
+        fakeBody.draggingPasteboard.setString(UUID().uuidString, forType: TabDropHost.pasteboardType)
+        checks["pageRejectsForgedIdentity"] = target.windowDropHost.draggingEntered(fakeBody).isEmpty && !target.windowDropHost.performDragOperation(fakeBody)
         source.syncTargets = Set(panes.map(\.id)); source.composerTargets = source.syncTargets; source.quickSendSelected = source.syncTargets
         let item = info.draggingSource as! TabStripView.Item
         checks["dropMovesOriginalTabAtInsertion"] = strip.performDragOperation(info) && target.tabs.map(\.id) == [tab.id] + initial && !source.tabs.contains { $0 === tab }
@@ -70,7 +84,9 @@ enum TabWindowMergeTest {
             let forged = TabDragInfoFixture(); forged.draggingSource = grouped.draggingSource; forged.draggingLocation = grouped.draggingLocation
             forged.draggingPasteboard.setString(UUID().uuidString, forType: TabDropHost.pasteboardType)
             checks["forgedIdentityRejected"] = groupStrip.draggingUpdated(forged).isEmpty && !groupStrip.performDragOperation(forged)
-            checks["emptyGroupAcceptsTransferredTab"] = groupStrip.performDragOperation(grouped) && target.customTabLayout?.group(containing: spare.id)?.id == group.id
+            let groupView = groupStrip.superview!
+            grouped.draggingLocation = groupView.convert(NSPoint(x: groupView.bounds.midX, y: 20), to: nil)
+            checks["emptyGroupContentAcceptsTransferredTab"] = target.terminalHost.draggingEntered(grouped) == .move && target.terminalHost.performDragOperation(grouped) && target.customTabLayout?.group(containing: spare.id)?.id == group.id
             checks["lastSourceTabClosesEmptyWindow"] = source.tabs.isEmpty && source.window?.isVisible == false && !windows.workspaces.contains { $0 === source }
             checks["fileOwnershipMovesWithEmptySource"] = source.fileWindows.isEmpty && target.fileWindows.contains { $0 === files }
             checks["activeFileTransferNotInterrupted"] = files.hasActiveOperation && !backend.isCancelled && !fileSession.closed && files.window?.isVisible == true
@@ -80,7 +96,9 @@ enum TabWindowMergeTest {
         } catch { checks["groupSetup"] = false }
         let empty = windows.newWindow(); layout(empty)
         let emptyDrop = drag(tab.id, from: target, to: mainStrip(empty))
-        checks["emptyWindowAcceptsTransfer"] = mainStrip(empty).performDragOperation(emptyDrop) && empty.tabs.first === tab && empty.tabs.count == 1
+        emptyDrop.draggingLocation = empty.windowDropHost.convert(NSPoint(x: empty.windowDropHost.bounds.midX, y: empty.windowDropHost.bounds.midY), to: nil)
+        checks["emptyWindowPageAcceptsTransfer"] = empty.windowDropHost.performDragOperation(emptyDrop) && empty.tabs.first === tab && empty.tabs.count == 1
+        checks["pageRejectsRepeatedDrop"] = !empty.windowDropHost.performDragOperation(emptyDrop)
         checks["splitStillAliveAfterSecondTransfer"] = panes.map { $0.terminal.process.shellPid } == pids && panes.allSatisfy { !$0.isShutdown }
         target.shutdown(); target.window?.close()
         checks["closingFormerOwnerKeepsMovedSessionsAlive"] = panes.allSatisfy { !$0.isShutdown && $0.terminal.process.shellPid > 0 }

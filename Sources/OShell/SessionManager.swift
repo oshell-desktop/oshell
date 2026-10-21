@@ -27,7 +27,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
                 NSLayoutConstraint.activate([
                     icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
                     icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-                    icon.widthAnchor.constraint(equalToConstant: 20), icon.heightAnchor.constraint(equalToConstant: 20),
+                    icon.widthAnchor.constraint(equalToConstant: 36), icon.heightAnchor.constraint(equalToConstant: 20),
                     label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8)
                 ])
             } else { label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6).isActive = true }
