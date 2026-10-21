@@ -5,7 +5,54 @@ import AppKit
 import Darwin
 import OShellCore
 
+/// Run modal authentication outside a main-dispatch block, and never nest
+/// authentication windows from different transports. Owned by the main thread.
+private final class AuthenticationQueue {
+    static let shared = AuthenticationQueue()
+    private final class Entry {
+        let owner: UUID
+        let operation: (@escaping (AuthResponse) -> Void) -> Void
+        let completion: (AuthResponse) -> Void
+        var finished = false
+        init(owner: UUID, operation: @escaping (@escaping (AuthResponse) -> Void) -> Void, completion: @escaping (AuthResponse) -> Void) {
+            self.owner = owner; self.operation = operation; self.completion = completion
+        }
+        func finish(_ response: AuthResponse) {
+            guard !finished else { return }; finished = true; completion(response)
+        }
+    }
+    private var pending = [Entry](), active: Entry?, timer: Timer?
+    func enqueue(owner: UUID, operation: @escaping (@escaping (AuthResponse) -> Void) -> Void, completion: @escaping (AuthResponse) -> Void) {
+        pending.append(Entry(owner: owner, operation: operation, completion: completion)); schedule()
+    }
+    func cancel(owner: UUID) {
+        let removed = pending.filter { $0.owner == owner }; pending.removeAll { $0.owner == owner }
+        removed.forEach { $0.finish(AuthResponse(success: false)) }
+        if let entry = active, entry.owner == owner { active = nil; entry.finish(AuthResponse(success: false)) }
+        schedule()
+    }
+    private func schedule() {
+        guard active == nil, !pending.isEmpty else { timer?.invalidate(); timer = nil; return }
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.drain() }
+        self.timer = timer; RunLoop.main.add(timer, forMode: .common); RunLoop.main.add(timer, forMode: .modalPanel)
+    }
+    private func drain() {
+        guard active == nil, NSApp.modalWindow == nil, !pending.isEmpty else { return }
+        timer?.invalidate(); timer = nil
+        let entry = pending.removeFirst(); active = entry
+        entry.operation { [weak self, weak entry] response in
+            guard let self, let entry else { return }
+            entry.finish(response)
+            if self.active === entry { self.active = nil }
+            self.schedule()
+        }
+    }
+}
+
 final class AuthBroker {
+    private let authenticationOwner = UUID()
+    private weak var promptWindow: NSWindow?
     private let directory: URL
     private let endpoint: URL
     private let token = UUID().uuidString + UUID().uuidString
@@ -44,16 +91,19 @@ final class AuthBroker {
                 let client = accept(fd, nil, nil)
                 guard client >= 0 else { break }
                 _ = fcntl(client, F_SETFD, FD_CLOEXEC); _ = fcntl(client, F_SETFL, 0)
+                var noSignal: Int32 = 1
+                _ = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
                 var uid: uid_t = 0, gid: gid_t = 0
                 guard getpeereid(client, &uid, &gid) == 0, uid == geteuid() else { close(client); continue }
                 DispatchQueue.global(qos: .userInitiated).async {
                     var timeout = timeval(tv_sec: 5, tv_usec: 0)
                     _ = setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+                    _ = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
                     do {
                         let request = try AuthIPC.read(AuthRequest.self, fd: client)
                         DispatchQueue.main.async {
                             guard let self, !self.stopped, request.token == self.token else { close(client); return }
-                            self.respond(request) { [weak self] response in
+                            self.enqueue(request, client: client) { [weak self] response in
                                 let allowedResponse = self?.stopped == false ? response : AuthResponse(success: false)
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     try? AuthIPC.write(allowedResponse, fd: client)
@@ -75,6 +125,25 @@ final class AuthBroker {
             values["DISPLAY"] = ProcessInfo.processInfo.environment["DISPLAY"] ?? "oshell:0"
         }
         return values
+    }
+    private func enqueue(_ request: AuthRequest, client: Int32, completion: @escaping (AuthResponse) -> Void) {
+        // These are protocol notifications, never prompts. In particular a ready
+        // notification must not wait behind another connection's password dialog.
+        if ["oshell-proxy-route", "oshell-session-ready", "none"].contains(request.hint), request.proxyID == nil {
+            respond(request, completion: completion); return
+        }
+        AuthenticationQueue.shared.enqueue(owner: authenticationOwner, operation: { [weak self] done in
+            guard let self, !self.stopped else { done(AuthResponse(success: false)); return }
+            var byte: UInt8 = 0
+            let count = recv(client, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
+            guard count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) else { done(AuthResponse(success: false)); return }
+            self.respond(request, completion: done)
+        }, completion: completion)
+    }
+    private func runPrompt(_ alert: PopupAlert) -> NSApplication.ModalResponse {
+        promptWindow = alert.window
+        defer { promptWindow = nil }
+        return alert.runModal()
     }
     private func respond(_ request: AuthRequest, completion: @escaping (AuthResponse) -> Void) {
         if request.hint == "oshell-proxy-route" {
@@ -102,7 +171,8 @@ final class AuthBroker {
             guard profile.proxy.supportsPassword, !profile.proxy.username.isEmpty, !proxyAttempted else { completion(AuthResponse(success: false)); return }
             proxyAttempted = true
             if profile.proxy.encryptedPassword != nil {
-                PasswordVault.shared.decrypt(profile.proxy.credentialProfile, resolve: false) { result in
+                PasswordVault.shared.decrypt(profile.proxy.credentialProfile, resolve: false) { [weak self] result in
+                    guard let self, !self.stopped else { completion(AuthResponse(success: false)); return }
                     switch result {
                     case .success(let value): completion(AuthResponse(success: true, answer: value.0))
                     case .failure(let error): Dialogs.message(error.localizedDescription); completion(AuthResponse(success: false))
@@ -114,7 +184,7 @@ final class AuthBroker {
                 alert.addButton(withTitle: "连接"); alert.addButton(withTitle: "取消")
                 let password = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 330, height: 26))
                 alert.accessoryView = password; alert.window.initialFirstResponder = password
-                let accepted = alert.runModal() == .alertFirstButtonReturn
+                let accepted = runPrompt(alert) == .alertFirstButtonReturn
                 completion(AuthResponse(success: accepted, answer: accepted ? password.stringValue : "")); password.stringValue = ""
             }
             return
@@ -147,10 +217,10 @@ final class AuthBroker {
             }
         }
         if let manualPrompt { manualPrompt(request, completion); return }
-        let alert = PopupAlert(); alert.messageText = "SSH 身份验证"; alert.informativeText = request.prompt
+        let alert = PopupAlert(); alert.messageText = "SSH 身份验证"; alert.informativeText = profile.name + "\n" + request.prompt
         if request.hint == "confirm" || request.prompt.contains("(yes/no") {
             alert.addButton(withTitle: "确认连接"); alert.addButton(withTitle: "取消")
-            completion(AuthResponse(success: true, answer: alert.runModal() == .alertFirstButtonReturn ? "yes" : "no")); return
+            completion(AuthResponse(success: true, answer: runPrompt(alert) == .alertFirstButtonReturn ? "yes" : "no")); return
         }
         alert.addButton(withTitle: "确定"); alert.addButton(withTitle: "取消")
         let field = PasswordEntryView(identifier: "ssh.auth.password")
@@ -168,7 +238,7 @@ final class AuthBroker {
         content.frame = NSRect(x: 0, y: 0, width: 440, height: CGFloat(controls.count) * 30)
         field.widthAnchor.constraint(equalToConstant: 440).isActive = true
         alert.accessoryView = content; alert.window.initialFirstResponder = field.secureField
-        let accepted = alert.runModal() == .alertFirstButtonReturn && !stopped
+        let accepted = runPrompt(alert) == .alertFirstButtonReturn && !stopped
         let answer = accepted ? field.stringValue : ""; field.clear()
         if accepted, save.state == .on, let identity = saveIdentity, !answer.isEmpty { pendingPassword = (answer, identity) }
         else if !accepted { pendingPassword = nil }
@@ -181,7 +251,8 @@ final class AuthBroker {
             guard request.hint == "oshell-proxy", proxy.supportsPassword, !routeAttempts.contains(proxy.id) else { completion(AuthResponse(success: false)); return }
             routeAttempts.insert(proxy.id)
             if credential.encryptedPassword != nil {
-                PasswordVault.shared.decrypt(credential, resolve: false) { result in
+                PasswordVault.shared.decrypt(credential, resolve: false) { [weak self] result in
+                    guard let self, !self.stopped else { completion(AuthResponse(success: false)); return }
                     switch result { case .success(let value): completion(AuthResponse(success: true, answer: value.0))
                     case .failure(let error): Dialogs.message(error.localizedDescription); completion(AuthResponse(success: false)) }
                 }; return
@@ -211,15 +282,19 @@ final class AuthBroker {
         alert.informativeText = "\(proxy.username)@\(proxy.host):\(proxy.port)\n" + (proxy.kind == .jump ? request.prompt : "请输入代理密码。")
         if request.hint == "confirm" || request.prompt.contains("(yes/no") {
             alert.addButton(withTitle: "确认连接"); alert.addButton(withTitle: "取消")
-            completion(AuthResponse(success: true, answer: alert.runModal() == .alertFirstButtonReturn ? "yes" : "no")); return
+            completion(AuthResponse(success: true, answer: runPrompt(alert) == .alertFirstButtonReturn ? "yes" : "no")); return
         }
         alert.addButton(withTitle: "连接"); alert.addButton(withTitle: "取消")
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 400, height: 26))
         alert.accessoryView = field; alert.window.initialFirstResponder = field
-        let accepted = alert.runModal() == .alertFirstButtonReturn && !stopped
+        let accepted = runPrompt(alert) == .alertFirstButtonReturn && !stopped
         completion(AuthResponse(success: accepted, answer: accepted ? field.stringValue : "")); field.stringValue = ""
     }
 
-    func stop() { stopped = true; routePolicies = [:]; routeAttempts = []; policy = nil; pendingPassword = nil; source?.cancel(); source = nil; try? FileManager.default.removeItem(at: directory) }
-    deinit { source?.cancel(); try? FileManager.default.removeItem(at: directory) }
+    func stop() {
+        guard !stopped else { return }
+        stopped = true
+        if let promptWindow, NSApp.modalWindow === promptWindow { _ = PopupKeyboard.dismiss(window: promptWindow) }
+        AuthenticationQueue.shared.cancel(owner: authenticationOwner); routePolicies = [:]; routeAttempts = []; policy = nil; pendingPassword = nil; source?.cancel(); source = nil; try? FileManager.default.removeItem(at: directory) }
+    deinit { AuthenticationQueue.shared.cancel(owner: authenticationOwner); source?.cancel(); try? FileManager.default.removeItem(at: directory) }
 }

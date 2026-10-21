@@ -5,7 +5,7 @@
 import base64, hashlib, json, plistlib, subprocess, tempfile, threading, uuid, os, re, signal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import argparse
+import argparse, time
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,6 +75,7 @@ class DAV(BaseHTTPRequestHandler):
             if not accepted: self.respond(412); return
             self.bodies[self.path] = data
             if self.path == '/protocol/oshell/oshell-vault.json': self.bodies['/legacyroot/oshell-vault.json'] = data
+        if self.path.startswith('/engine/'): time.sleep(0.6)  # Exercise edits/modal dialogs while a PUT is in flight.
         self.respond(201 if old is None else 204, etag='"' + hashlib.sha256(data).hexdigest() + '"')
 
 def main():

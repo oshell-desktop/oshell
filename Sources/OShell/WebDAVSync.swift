@@ -245,10 +245,10 @@ final class WebDAVSync {
                             }
                             guard workspace.configurationRevision == revision, PasswordVault.shared.cachedMaster == master else { throw ModelError.invalid("选择期间本机配置发生变化，请重新同步。本机修改已保留。") }
                             let needsUpload = !Self.same(resolved, remote)
-                            self.commit(resolved, compatibility: compatibility, remote: object, upload: needsUpload, client: client, baselineURL: baselineURL, backupLocal: baseline == nil && object != nil, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
+                            self.commit(resolved, localSnapshot: local, compatibility: compatibility, remote: object, upload: needsUpload, client: client, baselineURL: baselineURL, backupLocal: baseline == nil && object != nil, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
                         } else {
                             guard baseline == nil && allowCreate else { throw ModelError.invalid("远端同步文件被删除，未自动重建或覆盖。请确认远端目录后重新配置。") }
-                            self.commit(resolved, compatibility: nil, remote: nil, upload: true, client: client, baselineURL: baselineURL, backupLocal: false, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
+                            self.commit(resolved, localSnapshot: local, compatibility: nil, remote: nil, upload: true, client: client, baselineURL: baselineURL, backupLocal: false, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
                         }
                     } catch { self.fail(error, interactive: interactive) }
                 }
@@ -265,31 +265,42 @@ final class WebDAVSync {
         guard alert.runModal() == .alertFirstButtonReturn else { deferredConflict = true; status = "有待确认的会话冲突，请手动同步继续"; record(.postponed, always: true); summary.outcome = .postponed; diagnostics.saveSummary(summary); return nil }
         return view.choices
     }
-    private func commit(_ value: Configuration, compatibility: Configuration?, remote: WebDAVObject?, upload: Bool, client: SharedSyncTransport, baselineURL: URL, backupLocal: Bool, master: String, revision: Int, workspace: WorkspaceController, token: UUID, interactive: Bool) {
+    private func commit(_ value: Configuration, localSnapshot: Configuration, compatibility: Configuration?, remote: WebDAVObject?, upload: Bool, client: SharedSyncTransport, baselineURL: URL, backupLocal: Bool, master: String, revision: Int, workspace: WorkspaceController, token: UUID, interactive: Bool) {
         phase = upload ? .writing : .applying
         status = upload ? "正在加密并上传…" : "正在载入共享数据…"
         record(upload ? .uploading : .applying); notify()
         DispatchQueue.global(qos: .utility).async { [weak self, weak workspace] in
-            let result = Result { () -> Data in
+            let result = Result { () -> (Data, Data?) in
                 let wire = try SessionSyncConfiguration.wireConfiguration(value, preserving: compatibility)
                 let encrypted = try SharedVault.encode(wire, password: master)
+                // If applying is deferred, resume the merge from the local
+                // snapshot used for this transfer, not the older common base.
+                // Using the merged remote value as that base would lose remote-
+                // only additions that have not yet reached the local database.
+                let continuation = try upload ? SharedVault.encode(SessionSyncConfiguration.wireConfiguration(localSnapshot, preserving: compatibility), password: master) : nil
                 if upload { try client.put(encrypted, matching: remote?.etag) }
                 else if try client.fetch()?.etag != remote?.etag { throw WebDAVFailure.conflict }
-                return encrypted
+                return (encrypted, continuation)
             }
             DispatchQueue.main.async { [weak self, weak workspace] in
                 guard let self, self.token == token, let workspace else { return }
                 do {
-                    let encrypted = try result.get()
+                    let (encrypted, continuation) = try result.get()
                     guard PasswordVault.shared.cachedMaster == master else { self.finish(); return }
+                    let editedWhileSyncing = workspace.configurationRevision != revision
+                    if let continuation, NSApp.modalWindow != nil || editedWhileSyncing {
+                        // PUT succeeded. Checkpoint even while an editor is open;
+                        // leave the current configuration and draft untouched.
+                        try FileManager.default.createDirectory(at: baselineURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                        try PrivateFile.write(continuation, to: baselineURL)
+                    }
                     guard NSApp.modalWindow == nil else {
                         self.phase = .queued; self.status = "本次传输结束，等待关闭对话框后应用共享结果"
                         self.record(.retryNeeded, always: true); self.finish()
                         if interactive { self.queueManualSync() } else { self.schedule() }
                         return
                     }
-                    // Baseline records what was actually acknowledged by the server, not newer local edits.
-                    let editedWhileSyncing = workspace.configurationRevision != revision
+                    // With no newer edit or modal draft, apply and record the merged result.
                     if !editedWhileSyncing {
                         self.applying = true; defer { self.applying = false }
                         if backupLocal, let prior = try SharedDataFile.readIfPresent(self.store.url) {

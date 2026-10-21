@@ -156,7 +156,9 @@ final class PasswordVault {
     }
     func decrypt(_ profile: SessionProfile, resolve: Bool = true, completion: @escaping (Result<(String, SSHIdentity), Error>) -> Void) {
         let profile = currentCredential(profile)
-        guard let envelope = profile.encryptedPassword else { return }
+        guard let envelope = profile.encryptedPassword else {
+            completion(.failure(ModelError.invalid("保存的密码已变化，请重新连接并输入密码。"))); return
+        }
         let candidate: String
         do {
             guard let value = try key(for: envelope) else { completion(.failure(ModelError.invalid("已取消解锁。"))); return }

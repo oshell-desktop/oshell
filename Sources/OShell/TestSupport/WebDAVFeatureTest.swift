@@ -88,8 +88,63 @@ final class WebDAVFeatureTest {
             checks["accountSecretEncryptedLocally"] = SharedVault.isEncrypted(settings) && !String(decoding: settings, as: UTF8.self).contains("fixture-password")
             do { _ = try workspace.disableMasterProtection(master); checks["cannotClearMasterWhileSharing"] = false } catch { checks["cannotClearMasterWhileSharing"] = true }
             sync.sync(interactive: true)
-            wait("firstUploadCompletes", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in checks["manualSuccessDoesNotInterruptWithPopup"] = NSApp.modalWindow == nil; checks["toolbarShowsWebDAVSuccess"] = workspace.syncStatusButton.presentation.mark == .complete; sync.cancel(); sessionScope() }
+            wait("firstUploadCompletes", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in checks["manualSuccessDoesNotInterruptWithPopup"] = NSApp.modalWindow == nil; checks["toolbarShowsWebDAVSuccess"] = workspace.syncStatusButton.presentation.mark == .complete; sync.cancel(); copyDuringUpload(modal: false) }
         } catch { checks["enableSync"] = false; finish() }
+    }
+    private func copyDuringUpload(modal: Bool) {
+        // A remote-only addition must survive the deferred local application.
+        let remoteID = UUID()
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let result = Result { () -> Void in
+                let c = try client("engine"), object = try c.fetch()!
+                var remote = try SharedVault.decode(object.data, password: master)
+                var added = SessionProfile(name: "peer-addition", host: "peer.example.test"); added.id = remoteID
+                remote.profiles.append(added); try c.put(SharedVault.encode(remote, password: master), matching: object.etag)
+            }
+            DispatchQueue.main.async { [self] in
+                do {
+                    try result.get()
+                    guard let copy = workspace.duplicateSavedSession(workspace.configuration.profiles[0].id) else { throw ModelError.invalid("Fixture duplicate failed") }
+                    let label = modal ? "modalCopy" : "editedCopy"
+                    let before = workspace.configuration
+                    let alert = PopupAlert(); alert.messageText = "隔离会话编辑"; alert.addButton(withTitle: "保存")
+                    func editCopy() {
+                        var value = workspace.configuration
+                        if let index = value.profiles.firstIndex(where: { $0.id == copy.id }) { value.profiles[index].host = "edited-copy.example.test" }
+                        checks[label+"Saved"] = workspace.saveConfiguration(value)
+                    }
+                    wait(label+"UploadStarted", condition: { self.sync.phase == .writing }) { [self] in
+                        if !modal { editCopy() }
+                        wait(label+"TransferDeferred", condition: { !self.sync.busy && self.sync.phase == .queued }) { [self] in
+                            do {
+                                let baseline = try SharedVault.decode(Data(contentsOf: WebDAVSync.root.appendingPathComponent("webdav-baseline.json")), password: master)
+                                checks[label+"CheckpointIncludesOwnCopy"] = baseline.profiles.contains { $0.id == copy.id && $0.host == copy.host }
+                                checks[label+"CheckpointDoesNotPretendRemoteApplied"] = !baseline.profiles.contains { $0.id == remoteID }
+                            } catch { checks[label+"CheckpointReadable"] = false }
+                            if modal {
+                                checks[label+"DraftUntouched"] = workspace.configuration.profiles == before.profiles
+                                _ = PopupKeyboard.dismiss(window: alert.window)
+                            } else { finishCopyRace(label, copy: copy.id, remote: remoteID, modal: modal) }
+                        }
+                        if modal {
+                            _ = alert.runModal(); editCopy()
+                            finishCopyRace(label, copy: copy.id, remote: remoteID, modal: modal)
+                        }
+                    }
+                    sync.sync(interactive: false)
+                } catch { checks["copyRaceSetup"] = false; finish() }
+            }
+        }
+    }
+    private func finishCopyRace(_ label: String, copy: UUID, remote: UUID, modal: Bool) {
+        sync.sync(interactive: false)
+        wait(label+"SyncWithoutFalseConflict", condition: { !self.sync.busy && self.sync.phase == .success }) { [self] in
+            sync.cancel()
+            checks[label+"LatestEditKept"] = workspace.configuration.profiles.first { $0.id == copy }?.host == "edited-copy.example.test"
+            checks[label+"RemoteAdditionKept"] = workspace.configuration.profiles.contains { $0.id == remote }
+            checks[label+"NoConflictDialog"] = NSApp.modalWindow == nil
+            if modal { sessionScope() } else { copyDuringUpload(modal: true) }
+        }
     }
     private func sessionScope() {
         DispatchQueue.global(qos: .utility).async { [self] in
