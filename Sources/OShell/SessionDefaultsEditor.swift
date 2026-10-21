@@ -17,7 +17,7 @@ final class SessionDefaultsEditor {
     let idleInterval = NSTextField(), idleText = NSTextField()
     init(_ value: SessionDefaults) {
         alert.messageText = "会话默认属性"
-        alert.informativeText = "用于以后新建的会话，已有会话与复制的会话保持自己的配置。已有会话可在“保持活动”页点击“使用全局默认”。"
+        alert.informativeText = "仅用于以后新建的会话配置，不会更新已有、复制或导入的会话，也不会修改当前连接。已有会话需在属性的“保持活动”页点击“使用全局默认”并保存；SSH 协议保活需重新连接后生效。"
         alert.addButton(withTitle: "保存默认值"); alert.addButton(withTitle: "取消")
         sshPort.identifier = .init("defaults.sshPort"); interval.identifier = .init("defaults.aliveInterval")
         let tabs = NSTabView(); tabs.frame = NSRect(x: 0, y: 0, width: 620, height: 370)
@@ -38,7 +38,7 @@ final class SessionDefaultsEditor {
         tcp.state = value.keepAlive.tcp ? .on : .off; idle.state = value.keepAlive.idleEnabled ? .on : .off
         idleInterval.stringValue = String(value.keepAlive.idleInterval); idleText.stringValue = value.keepAlive.idleText
         page("SSH / SFTP", [("端口", sshPort), ("用户名", sshUser), ("私钥路径", key), ("文件初始目录", sshDirectory), ("", legacy), ("", quick)], note: "用户名可留空使用系统 SSH 默认用户。快捷连接选项也用于新 FTP 会话。主机、密码、代理和隧道按会话单独配置，可通过复制会话复用。")
-        page("保持活动", [("", alive), ("间隔（秒）", interval), ("最大未响应次数", missed), ("", tcp), ("", idle), ("空闲间隔（秒）", idleInterval), ("发送字符串", idleText)], note: "SSH / SFTP 共用协议保活默认值。空闲字符串仅用于 SSH 终端，支持 \\n、\\r、\\t、\\e、\\\\；可以执行命令，输入、输出或文件传输期间不发送。")
+        page("保持活动", [("", alive), ("间隔（秒）", interval), ("最大未响应次数", missed), ("", tcp), ("", idle), ("空闲间隔（秒）", idleInterval), ("发送字符串", idleText)], note: "SSH / SFTP 协议保活不显示在终端中；当前 SSH 连接的空闲字符串可在标签右键“当前会话属性…”即时应用。字符串支持 \\n、\\r、\\t、\\e、\\\\；可以执行命令，输入、输出或文件传输期间不发送。")
         page("FTP", [("端口", ftpPort), ("用户名", ftpUser), ("文件初始目录", ftpDirectory)], note: "普通 FTP 不应用 SSH 保持活动、私钥或旧版兼容设置。")
         alert.accessoryView = tabs; alert.window.initialFirstResponder = sshPort
     }

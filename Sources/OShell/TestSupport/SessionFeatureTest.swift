@@ -37,6 +37,7 @@ enum SessionFeatureTest {
             var duplicatePanes = [TerminalPane]()
             var secondWindow: WorkspaceController?
             var duplicated = false, results = [String: Bool]()
+            var plainTab: TerminalTab?, plainClone: TerminalPane?, duplicationTab: TerminalTab?
             func finish() {
                 pane.stopLogging()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -64,19 +65,45 @@ enum SessionFeatureTest {
                     // tab duplication, and a different workspace window.
                     var cloneProfile = profile; cloneProfile.keepAlive.idleEnabled = false
                     controller.open(cloneProfile); let source = controller.selectedTab!
-                    controller.duplicateTab(source)
-                    duplicatePanes = [source.activePane, controller.selectedTab!.activePane]
+                    duplicationTab = source
+                    duplicatePanes = [source.activePane]
                     let other = WorkspaceController(store: controller.store, configuration: controller.configuration)
                     other.completeStartupUnlock(true); other.open(cloneProfile); secondWindow = other
                     duplicatePanes.append(other.selectedTab!.activePane)
                     results["onlyFirstConnectionStartsTunnels"] = pane.opensConfiguredTunnels && duplicatePanes.allSatisfy { $0.skipsDuplicateTunnels && !$0.opensConfiguredTunnels }
                     results["tunnelConfigurationNotModified"] = duplicatePanes.allSatisfy { $0.profile.tunnels == profile.tunnels } && controller.configuration.profiles[0].tunnels == profile.tunnels
-                    results["duplicateCreatesIndependentPTY"] = source.activePane.terminal.process.shellPid != controller.selectedTab!.activePane.terminal.process.shellPid && source.activePane.profile == controller.selectedTab!.activePane.profile
+                    var defaults = SessionDefaults(); defaults.legacySSH = true; defaults.keepAlive = profile.keepAlive
+                    var plain = defaults.makeProfile(kind: .ssh, directory: "测试")
+                    plain.name = "无主机提示符"; plain.host = profile.host; plain.port = profile.port; plain.username = profile.username + "-plain"
+                    plain.proxyID = profile.proxyID; plain.proxy = profile.proxy
+                    plain.encryptedPassword = try? SessionCipher.encrypt(password, master: master, profile: plain, identity: SSHIdentity(host: plain.host, user: plain.username, port: plain.port))
+                    results["newSessionInheritsIdleDefaults"] = plain.keepAlive == defaults.keepAlive && plain.titleMode == .shellIntegration
+                    controller.open(plain); plainTab = controller.selectedTab
                     try? Data("ready".utf8).write(to: root.appendingPathComponent("client-ready"))
+                }
+                // Tab duplication intentionally accepts only connected sessions.
+                if let source = duplicationTab, duplicatePanes.count == 2, source.activePane.canDuplicateConnection {
+                    controller.duplicateTab(source)
+                    if let copy = controller.selectedTab, copy !== source {
+                        duplicatePanes.append(copy.activePane)
+                        results["duplicateCreatesIndependentPTY"] = source.activePane.terminal.process.shellPid != copy.activePane.terminal.process.shellPid && source.activePane.profile == copy.activePane.profile
+                        results["onlyFirstConnectionStartsTunnels"] = pane.opensConfiguredTunnels && duplicatePanes.allSatisfy { $0.skipsDuplicateTunnels && !$0.opensConfiguredTunnels }
+                        results["tunnelConfigurationNotModified"] = duplicatePanes.allSatisfy { $0.profile.tunnels == profile.tunnels } && controller.configuration.profiles[0].tunnels == profile.tunnels
+                    }
+                }
+                if let plainTab, plainClone == nil, controller.canCopySSHChannel(plainTab) {
+                    let item = NSMenuItem(); item.representedObject = plainTab.id; controller.copyTabSSHChannel(item)
+                    if controller.selectedTab !== plainTab { plainClone = controller.selectedTab?.activePane }
+                }
+                let plainPanes = [plainTab?.activePane, plainClone].compactMap { $0 }
+                let plainIdle = plainPanes.count == 2 && plainPanes.allSatisfy {
+                    $0.sessionReady && $0.remoteAddress == nil && !($0.hasShellIntegration) && String(decoding: $0.terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains("IDLE_RECEIVED")
                 }
                 let network = (try? JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("tunnel-result.json")))) as? [String: Bool]
                 let server = (try? JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("server-result.json")))) as? [String: Int]
-                if let network, duplicatePanes.count == 3, duplicatePanes.allSatisfy({ $0.sessionReady && !$0.ended }), text.contains("IDLE_RECEIVED"), (server?["aliveMessages"] ?? 0) > 0 {
+                if let network, plainIdle, duplicatePanes.count == 3, duplicatePanes.allSatisfy({ $0.sessionReady && !$0.ended }), text.contains("IDLE_RECEIVED"), (server?["aliveMessages"] ?? 0) > 0 {
+                    results["idleWorksWithoutHostnameOrShellIntegration"] = plainIdle
+                    results["sharedChannelStartsIdleTimer"] = plainClone?.reusesSSHConnection == true
                     results["allDuplicateConnectionsAuthenticated"] = true
                     results.merge(network) { _, b in b }; results["idleStringAfterLogin"] = true; results["sshAliveReceived"] = true
                     results["authenticatedProxy"] = (server?["proxyAuthentications"] ?? 0) >= 1

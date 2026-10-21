@@ -553,7 +553,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 broker.onSavePassword = onSaveAuthenticatedPassword
                 broker.onAuthenticated = { [weak self] in
                     self?.sshConnectionGroup?.authenticatedConnectionReady()
-                    self?.sessionReady = true; self?.observeTransportPeer(); self?.refreshHeader(); self?.onState?()
+                    self?.sessionReady = true; self?.noteActivity(); self?.startIdleTimer(); self?.observeTransportPeer(); self?.refreshHeader(); self?.onState?()
                     self?.schedulePromptScan()
                 }
                 environment.merge(broker.environment) { _, new in new }
@@ -562,7 +562,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             environment["PATH"] = ZmodemTransfer.helperDirectory.path + ":" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
             terminal.startProcess(executable: executable, args: args, environment: environment.map { "\($0.key)=\($0.value)" },
                                   currentDirectory: NSHomeDirectory())
-            if reusesSSHConnection { sessionReady = true }
+            if reusesSSHConnection { sessionReady = true; noteActivity(); startIdleTimer() }
             refreshHeader(); onState?()
         } catch { sshConnectionGroup?.connectionProcessEnded(); ended = true; refreshHeader(); beginEndedInput(); onState?(); onError?(error.localizedDescription) }
     }

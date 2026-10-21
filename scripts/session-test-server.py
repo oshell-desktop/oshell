@@ -54,10 +54,11 @@ def echo(conn):
             if not data: return
             conn.sendall(data)
 class Server(paramiko.ServerInterface):
-    def __init__(self, transport): self.transport = transport; self.destinations = {}; self.commands = {}; self.forwards = []
+    def __init__(self, transport): self.transport = transport; self.destinations = {}; self.commands = {}; self.forwards = []; self.plainPrompt = False
     def get_allowed_auths(self, username): return 'password'
     def check_auth_password(self, username, password):
-        if username == fixture['user'] and password == fixture['password']: record('authenticated'); return paramiko.AUTH_SUCCESSFUL
+        if username in (fixture['user'], fixture['user']+'-plain') and password == fixture['password']:
+            self.plainPrompt = username.endswith('-plain'); record('authenticated'); return paramiko.AUTH_SUCCESSFUL
         return paramiko.AUTH_FAILED
     def check_channel_request(self, kind, chanid): return paramiko.OPEN_SUCCEEDED if kind == 'session' else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
     def check_channel_pty_request(self, *args): return True
@@ -85,7 +86,8 @@ class Server(paramiko.ServerInterface):
 def session_channel(channel, server):
     deadline = time.time() + 10
     while channel.get_id() not in server.commands and time.time() < deadline: time.sleep(.02)
-    channel.send(b'\r\nOSHELL_SESSION_READY\r\n[root@centos6-fixture ~]# ')
+    prompt = b'> ' if server.plainPrompt else b'[root@centos6-fixture ~]# '
+    channel.send(b'\r\nOSHELL_SESSION_READY\r\n'+prompt)
     line = bytearray()
     try:
         while True:
@@ -96,7 +98,7 @@ def session_channel(channel, server):
                     command=bytes(line);line.clear()
                     token=re.search(rb'OSHELL_INFO_[0-9A-F]+:',command)
                     if token: channel.sendall(command+b'\r\n\x1b]2;'+token.group()+b'centos6-fixture|10.6.0.6|\x07[root@centos6-fixture ~]# ')
-                    elif b'OSHELL_IDLE' in command: record('idleMessages');channel.send(b'\r\nIDLE_RECEIVED\r\n[root@centos6-fixture ~]# ')
+                    elif b'OSHELL_IDLE' in command: record('idleMessages');channel.send(b'\r\nIDLE_RECEIVED\r\n'+prompt)
                     elif command:channel.sendall(command+b'\r\n[root@centos6-fixture ~]# ')
                 else:line.append(byte)
     except Exception: pass
