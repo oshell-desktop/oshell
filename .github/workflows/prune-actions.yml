@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-3.0-only
+name: Prune old Actions history
+
+on:
+  schedule:
+    - cron: '17 20 * * *' # 04:17 Asia/Shanghai; GitHub may delay scheduled runs.
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: '删除超过保留数量的已完成记录；关闭时仅预览'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actions-history-retention
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prune:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Test retention rules
+        run: python3 scripts/test-actions-retention.py
+      - name: Preview or prune completed workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY: ${{ github.event_name == 'schedule' || inputs.apply }}
+        run: |
+          args=(--repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/actions-retention.json")
+          if [ "$APPLY" = true ]; then args+=(--apply); fi
+          python3 scripts/prune-actions-runs.py "${args[@]}"

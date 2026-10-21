@@ -135,3 +135,16 @@ Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按两种平�
 `deploy-legacy-pages.py` 通过专用 `OSHELL_LEGACY_PAGES_DEPLOY_KEY` 更新旧站点的 `.nojekyll`、`oshell/index.html` 和 `oshell/updates/latest.json`。该部署密钥仅对旧 Pages 仓库有写权限；更新签名私钥不进入该仓库。旧站点由 Pages 的分支发布处理，无定时轮询。相同内容不产生额外提交；旧版本拒绝覆盖新版本。
 
 手动修复使用 **Repair legacy update entry (no builds)** 工作流。它只读取最新正式 Release、重新生成签名元数据并部署新旧 Pages；不会改动不可变 Release、追加附件、重新编译、创建版本或移动标签。若旧发布没有兼容附件，需在下一正式版本发布前加入，不能事后补传。macOS 11/12 的 Apple Silicon 已不属于新版本支持范围，不通过伪造最低系统版本提供更新。
+
+## Actions 历史记录保留
+
+[prune-actions.yml](../.github/workflows/prune-actions.yml) 每天北京时间 04:17 自动清理（GitHub 调度可能延迟），也可从默认分支手动运行 **Prune old Actions history**。手动执行默认只预览；勾选 `apply` 才会删除。
+
+- 发布工作流保留最近 15 次已完成的实际构建运行，包括失败和取消的尝试。
+- 成功的纯标签转发记录独立保留最新 1 条；失败转发独立保留 15 条，不占实际构建名额。
+- 其他工作流各保留最近 15 条已完成记录，包括清理工作流自身。
+- 正在执行、排队、等待审批的记录不删除，当前清理任务也不删除。删除前重新检查状态和运行尝试，发生变化则跳过。
+
+按记录创建时间排序，先读取全部分页再删除，避免分页位移。通过实际 job 判定纯转发；旧版直接在标签上编译的运行仍计入实际构建。删除运行会连同其日志和 Actions Artifacts 一起移除；脚本不调用 Release、Git 标签或编译缓存删除接口。
+
+本地预览：`python3 scripts/prune-actions-runs.py --repository oshell-desktop/oshell`。确认后增加 `--apply` 执行。使用 GitHub CLI 登录身份或工作流内的短期 `GITHUB_TOKEN`，仅需 Actions 写权限及源码读权限，不配置新的 Secret。
