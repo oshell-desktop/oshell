@@ -608,6 +608,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         }
         pane.onUserInput = { [weak self] pane, bytes in self?.routeKeyboard(pane, bytes: bytes) ?? false }
         pane.onPaste = { [weak self] pane, text in self?.pasteText(text, from: pane) }
+        pane.onPasteImage = { [weak self] pane, image in self?.pasteImage(image, from: pane) }
         pane.onFilesDropped = { [weak self] pane, urls in self?.openFiles(from: pane, uploading: urls) }
         pane.applyHighlights(configuration.highlightSets.first { $0.id == configuration.preferences.highlightSetID })
         pane.onError = { message in Dialogs.message(message) }

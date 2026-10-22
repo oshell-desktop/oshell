@@ -311,7 +311,6 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     /// Marked (uncommitted) text from an input source (IME, dictation, etc.).
     private var markedTextStorage: NSAttributedString?
-    private var markedSelectedRange: NSRange = NSRange(location: NSNotFound, length: 0)
     private var markedTextOverlay: DictationOverlayTextView?
     private var progressBarView: TerminalProgressBarView?
     private var progressReportTimer: Timer?
@@ -1906,7 +1905,6 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     func insertText(_ string: Any, replacementRange: NSRange, isPaste: Bool) {
         markedTextStorage = nil
-        markedSelectedRange = NSRange(location: NSNotFound, length: 0)
         updateMarkedTextOverlay()
         if let str = string as? NSString {
             if !terminal.keyboardEnhancementFlags.isEmpty {
@@ -1989,7 +1987,6 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         default:
             markedTextStorage = nil
         }
-        markedSelectedRange = selectedRange
         kittyIsComposing = true
         updateMarkedTextOverlay()
     }
@@ -2081,6 +2078,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             width: overlayWidth,
             height: overlayHeight
         )
+        overlay.needsDisplay = true
     }
 
     private func kittyEncoder() -> KittyKeyboardEncoder {
@@ -2456,7 +2454,6 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // NSTextInputClient protocol implementation
     open func unmarkText() {
         markedTextStorage = nil
-        markedSelectedRange = NSRange(location: NSNotFound, length: 0)
         kittyIsComposing = false
         updateMarkedTextOverlay()
     }
@@ -3644,8 +3641,8 @@ extension TerminalViewDelegate {
 
 /// NSTextView subclass used for the dictation / IME marked-text overlay.
 ///
-/// Fills its background only under the laid-out line fragments rather than
-/// across the full frame. Line 1 already has an exclusion path covering the
+/// Fills its background only under the used text bounds of each line, not
+/// the available line-fragment width. Line 1 has an exclusion path covering the
 /// portion occupied by pre-existing terminal text (e.g. the prompt), so this
 /// drawing strategy leaves that area untouched while still covering wrapped
 /// lines below.
@@ -3664,8 +3661,10 @@ final class DictationOverlayTextView: NSTextView {
         overlayBackgroundColor.setFill()
         let glyphRange = layoutManager.glyphRange(for: container)
         let origin = textContainerOrigin
-        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, _, _ in
-            let r = fragmentRect.offsetBy(dx: origin.x, dy: origin.y)
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, _, _ in
+            // The fragment rect extends to the container's right edge, even
+            // for a two-letter IME composition. Only the used rect covers text.
+            let r = usedRect.offsetBy(dx: origin.x, dy: origin.y)
             if r.intersects(dirtyRect) {
                 r.fill()
             }

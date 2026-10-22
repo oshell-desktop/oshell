@@ -7,6 +7,8 @@
 
 # CryptoSwift
 
+> OShell vendored subset: this checkout is used through Swift Package Manager. Upstream Xcode/CocoaPods/framework packaging and repository-maintenance files are omitted; see [OSHELL-NOTES.txt](OSHELL-NOTES.txt). Library sources, SwiftPM tests, privacy resources and license notices are retained.
+
 Pure Swift cryptographic primitives and utilities for [Swift](https://swift.org). ([#PureSwift](https://twitter.com/hashtag/pureswift))
 
 **Note**: The current release line builds with Swift 5.6 and newer toolchains. If you need an older compiler, use the matching legacy branch listed in [Swift version support](#swift-version-support). Older branches are not actively maintained.
@@ -116,7 +118,7 @@ You want to help, great! Go ahead and fork our repo, make your changes and send 
 
 ## Contribution
 
-Check out [CONTRIBUTING.md](CONTRIBUTING.md) for more information on how to help with CryptoSwift.
+Check out [upstream project](https://github.com/krzyzanowskim/CryptoSwift) for more information on how to help with CryptoSwift.
 
 - If you found a bug, [open a discussion](https://github.com/krzyzanowskim/CryptoSwift/discussions).
 - If you have a feature request, [open a discussion](https://github.com/krzyzanowskim/CryptoSwift/discussions).

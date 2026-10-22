@@ -22,8 +22,10 @@ class DevelopmentToolsTests(unittest.TestCase):
         p = self.root/name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('fixture'); return p
     def test_cleanup_keeps_app_sources_keys_and_dependency_environment(self):
         keep = [self.file(p) for p in ['dist/OShell.app/Contents/MacOS/OShell','Sources/example.swift','.release-private/key','work/test-tools/bin/python','validation/.gitkeep','validation/latest-checks.json']]
+        self.file('work/size-review/probe.dSYM/Contents/Resources/DWARF/probe')
         self.file('work/build/swift/object.o'); self.file('work/release/legacy/OShell.app/binary'); self.file('validation/old.log')
         paths = CLEAN.candidates(self.root)
+        self.assertIn(self.root/'work/size-review', paths)
         self.assertIn(self.root/'work/build', paths)
         self.assertIn(self.root/'work/release', paths)
         for p in keep: self.assertFalse(any(p == q or q in p.parents for q in paths))

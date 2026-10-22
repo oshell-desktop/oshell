@@ -271,6 +271,25 @@ final class SFTPBackend: ResumableFileBackend {
         }
         return entries
     }
+    /// Each image gets a new private directory; existing paths are never reused.
+    func uploadClipboardImage(_ local: URL, in base: String, progress: @escaping (UInt64, UInt64) -> Void) throws -> String {
+        let parent = try canonicalPath(base)
+        let folder = RemotePath.join(parent, "oshell-clipboard-" + UUID().uuidString.lowercased())
+        try RemotePath.validate(folder)
+        try status(14) { $0.string(folder); $0.u32(4); $0.u32(0o700) }
+        let path = RemotePath.join(folder, "image.png")
+        var complete = false
+        defer {
+            if !complete { try? remove(path, directory: false); try? remove(folder, directory: true) }
+        }
+        let info = try stat(folder)
+        guard info.directory, let permissions = info.permissions, permissions & 0o077 == 0 else {
+            throw ModelError.invalid("服务器未按要求创建私有图片目录，已停止上传。")
+        }
+        try upload(local, to: path, progress: progress)
+        complete = true
+        return path
+    }
     func mkdir(_ path: String) throws { try RemotePath.validate(path); try status(14) { $0.string(path); $0.u32(0) } }
     func rename(_ source: String, to destination: String) throws { try RemotePath.validate(source); try RemotePath.validate(destination); try status(18) { $0.string(source); $0.string(destination) } }
     func remove(_ path: String, directory: Bool) throws { try RemotePath.validate(path); try status(directory ? 15 : 13) { $0.string(path) } }

@@ -10,7 +10,7 @@ KEEP_REPORTS = {'.gitkeep', 'latest-build.log', 'latest-checks.json', 'latest-cl
 BUILD_NAME = re.compile(r'build(?:-tests|-legacy|-compat-(?:arm64|x86_64)|-modern-(?:arm64|x86|x86_64)|-test-[a-z]+-(?:arm64|x86_64))?')
 OLD_WORK = {
     'release','test-release','test-app','command-editor-modules','public-source-checkout',
-    'brand-preview','deep-memory-baseline','memory-baseline','settings-preview','link-drag-native',
+    'size-review','brand-preview','deep-memory-baseline','memory-baseline','settings-preview','link-drag-native',
     'private-prepublish','privacy-audit','pages-bootstrap-preview','sparkle-inspect','fonts','touch-id',
     'update-repair','update-63-probe','update-63-probe.swift','update-63-release.json',
     'update-pages-probe','public-strip-check','command-editor-probe.swift','webdav-stall-sample.txt',

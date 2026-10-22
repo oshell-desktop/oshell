@@ -14,7 +14,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             textField = label
             label.font = .systemFont(ofSize: 13)
             label.maximumNumberOfLines = 1; label.cell?.usesSingleLineMode = true
-            label.lineBreakMode = ["host", "directory"].contains(column) ? .byTruncatingMiddle : .byTruncatingTail
+            label.lineBreakMode = column == "host" ? .byTruncatingMiddle : .byTruncatingTail
             label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             label.translatesAutoresizingMaskIntoConstraints = false; addSubview(label)
             NSLayoutConstraint.activate([
@@ -205,7 +205,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         search.setContentHuggingPriority(.defaultLow, for: .horizontal)
         path.lineBreakMode = .byTruncatingMiddle
         path.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for (id, title, width, minimum) in [("name", "名称", 210.0, 160.0), ("protocol", "协议", 64.0, 56.0), ("host", "主机", 190.0, 140.0), ("user", "用户名", 100.0, 80.0), ("port", "端口", 60.0, 56.0), ("directory", "目录", 160.0, 100.0)] {
+        for (id, title, width, minimum) in [("name", "名称", 210.0, 160.0), ("protocol", "协议", 64.0, 56.0), ("host", "主机", 190.0, 140.0), ("user", "用户名", 100.0, 80.0), ("port", "端口", 60.0, 56.0)] {
             let column = NSTableColumn(identifier: .init(id)); column.title = title; column.minWidth = minimum; column.width = width
             column.resizingMask = [.autoresizingMask, .userResizingMask]
             column.headerCell.font = .systemFont(ofSize: 12, weight: .medium)
@@ -531,7 +531,6 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         case .directory(let directory):
             switch identifier.rawValue {
             case "name": text = String(directory.split(separator: "/").last ?? "")
-            case "directory": text = currentQuery.isEmpty ? "" : SessionDirectory.display(SessionDirectory.parent(directory))
             default: text = ""
             }
             iconStyle = directory == SessionLinks.rootDirectory ? .linksDirectory : .directory
@@ -546,7 +545,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             case "host": text = profile.kind == .local ? "本地终端" : profile.host
             case "user": text = profile.username
             case "port": text = profile.kind == .local ? "—" : String(profile.port)
-            default: text = SessionDirectory.display(profile.group)
+            default: text = ""
             }
         }
         let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? ListCell ?? ListCell(column: identifier.rawValue)

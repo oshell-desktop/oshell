@@ -17,10 +17,11 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
     facts={'transports':0,'authAttempts':0,'sftp':0,'sftpDenied':0,'authenticated':0,'shells':0,'rejected':0,'execRequests':0,'terms':[],'localeRequests':0};lock=threading.Lock()
     def session(channel):
         try:
-            time.sleep(.05);channel.send(b'MUX_READY\r\n\x1b]777;OShellHost=1;nested-real|10.30.0.8|\x07[root@nested-real ~]# ');line=bytearray()
+            time.sleep(.05);channel.send(b'MUX_READY\r\n\x1b[?2004h\x1b]777;OShellHost=1;nested-real|10.30.0.8|\x07[root@nested-real ~]# ');line=bytearray()
             while True:
                 data=channel.recv(1024)
                 if not data:return
+                with open(root/'terminal-input.bin','ab') as capture: capture.write(data)
                 for c in data:
                     if c in (10,13):
                         value=bytes(line);line.clear()
@@ -63,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
                 return handle
             except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
         def remove(self, path): return self.mutate(os.remove, resolve(path))
-        def mkdir(self, path, attr): return self.mutate(os.mkdir, resolve(path))
+        def mkdir(self, path, attr): return self.mutate(os.mkdir, resolve(path), attr.st_mode if attr.st_mode is not None else 0o777)
         def rmdir(self, path): return self.mutate(os.rmdir, resolve(path))
         def rename(self, old, new):
             if os.path.exists(resolve(new)): return paramiko.SFTP_FAILURE
@@ -166,10 +167,15 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
         deadline=time.time()+65
         while not (root/'app-result.json').exists() and time.time()<deadline:time.sleep(.1)
         report=json.loads((root/'app-result.json').read_text())
-        report['checks'].update(initialLaunchAccepted=result.returncode==0,oneTransportOnly=facts['transports']==1,oneAuthenticationOnly=facts['authenticated']==1 and facts['authAttempts']==1,fourSFTPChannels=facts['sftp']==4,SFTPRefusalExercised=facts['sftpDenied']==1,SCPCommandsReusedConnection=facts['execRequests']==2)
+        report['checks'].update(initialLaunchAccepted=result.returncode==0,oneTransportOnly=facts['transports']==1,oneAuthenticationOnly=facts['authenticated']==1 and facts['authAttempts']==1,imageAndFileSFTPChannels=5<=facts['sftp']<=6,SFTPRefusalExercised=facts['sftpDenied']==2,SCPCommandsReusedConnection=facts['execRequests']==2)
         report['server']=facts
         if result.returncode: report['launchError']=result.stderr.decode(errors='replace').replace(password,'<fixture-secret>').replace(user,'<fixture-user>')[:300]
         report['checks']['clientLocaleNotForwarded']=facts['localeRequests']==0
+        received=(root/'terminal-input.bin').read_bytes() if (root/'terminal-input.bin').exists() else b''
+        report['checks']['clipboardRemotePathReachedSSH']=b'/oshell-clipboard-' in received and b'/image.png' in received
+        report['checks']['clipboardUsesBracketedPaste']=(bytes([27])+b'[200~') in received and (bytes([27])+b'[201~') in received
+        report['checks']['cancelAndFailureSendNoExtraPath']=received.count(b'/image.png')==1
+        report['checks']['clipboardDidNotPasteMacPath']=b'Application\\ Support' not in received and b'clipboard-images' not in received
         report['passed']=all(report['checks'].values())
         (project/'validation/sftp-reuse-result.json').write_text(json.dumps(report,indent=2))
         print(json.dumps(report,indent=2));raise SystemExit(0 if report['passed'] else 1)

@@ -13,7 +13,12 @@ enum SFTPReuseTest {
         let monitor = Timer(timeInterval: 0.03, repeats: true) { _ in
             guard let window = NSApp.modalWindow, let content = window.contentView else { return }
             if descendants(content).contains(where: { $0 is NSSecureTextField }) { checks["noSecondCredentialPrompt"] = false; _ = PopupKeyboard.dismiss(window: window) }
-            else { NSApp.stopModal(withCode: .alertFirstButtonReturn) }
+            else if descendants(content).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "正在上传图片" }) {
+                if FileManager.default.fileExists(atPath: root.appendingPathComponent("cancel-image").path) { NSApp.stopModal(withCode: .alertFirstButtonReturn) }
+            } else {
+                descendants(content).compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "paste.image.remoteDirectory" }?.stringValue = "/"
+                NSApp.stopModal(withCode: .alertFirstButtonReturn)
+            }
         }
         RunLoop.main.add(monitor, forMode: .common); RunLoop.main.add(monitor, forMode: .modalPanel)
         checks["noSecondCredentialPrompt"] = true
@@ -28,7 +33,16 @@ enum SFTPReuseTest {
             func poll() {
                 guard !finished else { return }
                 if condition() { checks[label] = true; then() }
-                else if Date() > deadline { checks[label] = false; finish() }
+                else if Date() > deadline {
+                    checks[label] = false
+                    if label == "sshAuthenticated" {
+                        checks["diagnosticHasSelectedTab"] = workspace.selectedTab != nil
+                        checks["diagnosticSessionReady"] = workspace.selectedTab?.activePane.sessionReady == true
+                        checks["diagnosticProcessRunning"] = workspace.selectedTab?.activePane.terminal.process.running == true
+                        checks["diagnosticGroupAvailable"] = workspace.selectedTab?.activePane.sshConnectionGroup?.isAvailable == true
+                    }
+                    finish()
+                }
                 else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: poll) }
             }; poll()
         }
@@ -38,8 +52,26 @@ enum SFTPReuseTest {
             try Data(contentsOf: root.appendingPathComponent("known_hosts")).write(to: known)
             try Data((try LaunchEndpoint.directory(for: workspace.store.url.deletingLastPathComponent())).path.utf8).write(to: root.appendingPathComponent("endpoint.txt"))
             try Data(String(ProcessInfo.processInfo.processIdentifier).utf8).write(to: root.appendingPathComponent("app.pid"))
-            wait("sshAuthenticated", { workspace.selectedTab?.activePane.sessionReady == true && workspace.selectedTab?.activePane.sshConnectionGroup?.isAvailable == true }) {
+            wait("sshAuthenticated", { workspace.selectedTab?.activePane.sessionReady == true && workspace.selectedTab?.activePane.sshConnectionGroup?.isAvailable == true && workspace.selectedTab?.activePane.terminal.getTerminal().bracketedPasteMode == true }) {
                 let terminal = workspace.selectedTab!.activePane, group = terminal.sshConnectionGroup!, profile = terminal.profile
+                do {
+                    let image = try ImagePasteTest.sample()
+                    workspace.pasteImage(image, from: terminal)
+                    let folders = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("remote"), includingPropertiesForKeys: nil).filter { $0.lastPathComponent.hasPrefix("oshell-clipboard-") }
+                    checks["clipboardImageUploadedOnExistingSSH"] = folders.count == 1 && (try? Data(contentsOf: folders[0].appendingPathComponent("image.png"))) == image.png
+                    if let folder = folders.first {
+                        checks["clipboardRemoteDirectoryPrivate"] = (try FileManager.default.attributesOfItem(atPath: folder.path)[.posixPermissions] as? NSNumber)?.intValue == 0o700
+                    }
+                    checks["imageUploadKeepsOriginalSSH"] = !terminal.ended && group.isAvailable
+                    try Data().write(to: root.appendingPathComponent("cancel-image"))
+                    workspace.pasteImage(image, from: terminal)
+                    try FileManager.default.removeItem(at: root.appendingPathComponent("cancel-image"))
+                    checks["imageCancelKeepsOriginalSSH"] = !terminal.ended && group.isAvailable
+                    try Data().write(to: root.appendingPathComponent("deny-sftp"))
+                    workspace.pasteImage(image, from: terminal)
+                    try FileManager.default.removeItem(at: root.appendingPathComponent("deny-sftp"))
+                    checks["imageFailureKeepsOriginalSSH"] = !terminal.ended && group.isAvailable
+                } catch { checks["clipboardImageUpload"] = false }
                 workspace.showFiles(); files = workspace.fileWindows.first
                 guard let files, let first = files.selectedSession else { checks["fileWindowCreated"] = false; finish(); return }
                 wait("toolbarSFTPOpensWithoutPassword", { first.connected && first.listedNames.contains("seed.txt") }) {

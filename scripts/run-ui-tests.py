@@ -5,7 +5,9 @@
 import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
-CASES = {'session-catalog-presentation':'OSHELL_CATALOG_PRESENTATION_OUTPUT',
+CASES = {'marked-text':'OSHELL_MARKED_TEXT_OUTPUT',
+ 'image-paste':'OSHELL_IMAGE_PASTE_OUTPUT',
+ 'session-catalog-presentation':'OSHELL_CATALOG_PRESENTATION_OUTPUT',
  'tab-close-confirmation':'OSHELL_TAB_CLOSE_CONFIRMATION_OUTPUT',
  'session-pins':'OSHELL_SESSION_PINS_OUTPUT',
  'tab-title-settings':'OSHELL_TAB_TITLE_SETTINGS_OUTPUT',

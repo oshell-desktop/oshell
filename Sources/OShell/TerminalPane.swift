@@ -34,7 +34,13 @@ final class OShellTerminal: LocalProcessTerminalView {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
-    override func paste(_ sender: Any) { if let text = NSPasteboard.general.string(forType: .string), let owner { owner.onPaste?(owner, text) } }
+    override func paste(_ sender: Any) {
+        guard let owner else { return }
+        do {
+            if let image = try TerminalClipboardImage.read(.general) { owner.onPasteImage?(owner, image) }
+            else if let text = NSPasteboard.general.string(forType: .string) { owner.onPaste?(owner, text) }
+        } catch { Dialogs.message(error.localizedDescription) }
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func scrollWheel(with event: NSEvent) {
         wordClickSeed = nil
@@ -237,6 +243,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var onCloseRequested: ((TerminalPane) -> Void)?
     var onUserInput: ((TerminalPane, [UInt8]) -> Bool)?
     var onPaste: ((TerminalPane, String) -> Void)?
+    var onPasteImage: ((TerminalPane, TerminalClipboardImage) -> Void)?
     var credentialsForConnection: (() -> SessionProfile)?
     var onSaveAuthenticatedPassword: ((SessionProfile, String, SSHIdentity) -> Void)? { didSet { authBroker?.onSavePassword = onSaveAuthenticatedPassword } }
     var onFilesDropped: ((TerminalPane, [URL]) -> Void)?
@@ -293,7 +300,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var sessionTitleName = ""
     private(set) var titleDisplayMode: SessionTitleDisplayMode = .shellIntegration
     private var effectiveHostTitleMode: HostTitleMode { titleDisplayMode.hostMode }
-    private var remoteHostname: String?
+    private(set) var remoteHostname: String?
     private(set) var remoteAddress: String?
     private var hostAliases = Set<String>()
     private var knownLocalHostnames = Set<String>()
@@ -838,7 +845,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // keeps a closed view alive through its responder/animation machinery.
         terminal.foregroundHighlightProvider = nil
         try? terminal.setUseMetal(false)
-        onFocus = nil; onUserInput = nil; onPaste = nil; onFilesDropped = nil; onError = nil; transferSelection = nil
+        onFocus = nil; onUserInput = nil; onPaste = nil; onPasteImage = nil; onFilesDropped = nil; onError = nil; transferSelection = nil
     }
     func setHeaderHidden(_ hidden: Bool) {
         guard headerBar.isHidden != hidden else { return }
