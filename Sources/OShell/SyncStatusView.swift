@@ -5,13 +5,14 @@ import OShellCore
 
 final class SyncStatusView: NSView {
     private weak var sync: WebDAVSync?
+    private let immediate: Bool
     private var observer: NSObjectProtocol?
     var onUnlock: (() -> Void)? { didSet { refresh() } }
     var onLayoutChange: (() -> Void)?
     private var displayedMark: SyncStatusPresentation.Mark?
     private let icon = NSImageView()
     private let heading = NSTextField(labelWithString: "同步状态")
-    private let spinner = NSProgressIndicator()
+    private let progress = NSProgressIndicator()
     private let backend = NSTextField(labelWithString: "")
     private let times = NSTextField(wrappingLabelWithString: "")
     private let pending = NSTextField(labelWithString: "")
@@ -19,16 +20,14 @@ final class SyncStatusView: NSView {
     private let hint = NSTextField(wrappingLabelWithString: "")
     private let run = NSButton(title: "关闭设置后同步", target: nil, action: nil)
     private let stop = NSButton(title: "取消本次", target: nil, action: nil)
-    init(sync: WebDAVSync?) {
-        self.sync = sync
+    init(sync: WebDAVSync?, immediate: Bool = false) {
+        self.sync = sync; self.immediate = immediate
         super.init(frame: NSRect(x: 0, y: 0, width: 760, height: 258))
         identifier = .init("sync.status.card")
         heading.font = .systemFont(ofSize: 16, weight: .semibold); heading.identifier = .init("sync.status.title")
-        spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
-        spinner.widthAnchor.constraint(equalToConstant: 16).isActive = true; spinner.heightAnchor.constraint(equalToConstant: 16).isActive = true
         icon.imageScaling = .scaleProportionallyDown
         icon.widthAnchor.constraint(equalToConstant: 20).isActive = true; icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
-        let header = NSStackView(views: [icon, heading, NSView(), spinner]); header.spacing = 8
+        let header = NSStackView(views: [icon, heading, NSView()]); header.spacing = 8
         times.identifier = .init("sync.status.times"); pending.identifier = .init("sync.status.pending"); detail.identifier = .init("sync.status.detail")
         for label in [backend, times, pending, detail, hint] { label.font = .systemFont(ofSize: 12) }
         detail.maximumNumberOfLines = 3; detail.lineBreakMode = .byWordWrapping
@@ -41,12 +40,16 @@ final class SyncStatusView: NSView {
         let export = NSButton(title: "导出诊断日志…", target: self, action: #selector(exportLogs)); export.identifier = .init("sync.status.export")
         for button in [run, stop, logs, export] { button.bezelStyle = .rounded }
         let buttons = NSStackView(views: [run, stop, logs, export]); buttons.spacing = 8
-        let stack = NSStackView(views: [header, backend, times, pending, detail, buttons, hint])
+        progress.style = .bar; progress.minValue = 0; progress.maxValue = 1
+        progress.identifier = .init("sync.status.progress")
+        progress.isDisplayedWhenStopped = true
+        let stack = NSStackView(views: [header, backend, times, pending, detail, progress, buttons, hint])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 9
         stack.translatesAutoresizingMaskIntoConstraints = false; addSubview(stack)
         NSLayoutConstraint.activate([
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
             header.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            progress.widthAnchor.constraint(equalTo: stack.widthAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -70,9 +73,16 @@ final class SyncStatusView: NSView {
         heading.stringValue = presentation.title; heading.textColor = presentation.color
         if displayedMark != presentation.mark { icon.image = presentation.image; displayedMark = presentation.mark }
         guard let sync else {
+            progress.isHidden = true
             detail.stringValue = "请选择下方同步方式。"; run.isEnabled = false; stop.isEnabled = false; return
         }
-        if sync.busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        let working = sync.busy && presentation.mark == .working
+        progress.isHidden = !presentation.enabled || (!sync.busy && ![.success, .failed, .conflict, .cancelled].contains(sync.phase))
+        progress.isIndeterminate = working
+        progress.doubleValue = presentation.mark == .complete ? 1 : 0
+        progress.setAccessibilityLabel(presentation.title)
+        progress.toolTip = "显示当前同步阶段；不代表文件传输百分比或 iCloud 云端进度。"
+        if working { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
         let duration = sync.summary.durationMS.map { String(format: " · 最近耗时 %.1f 秒", Double($0) / 1000) } ?? ""
         backend.stringValue = "当前已保存配置：" + (presentation.enabled ? presentation.backendName : "未启用") + duration
         times.stringValue = "最近成功：\(date(sync.summary.lastSuccess))    最近尝试：\(date(sync.summary.lastAttempt))\n下次自动检查 / 重试：\(sync.nextCheck.map { date($0) } ?? "未安排")"
@@ -82,15 +92,15 @@ final class SyncStatusView: NSView {
         detail.toolTip = detail.stringValue; detail.textColor = error == nil ? .secondaryLabelColor : .systemOrange
         let schedule = !presentation.enabled ? "选择同步方式并应用后启用；设置草稿不会立即更改当前同步。" : sync.manualQueued ? "关闭设置后开始；若修改了连接配置，请先点击“应用”。" : "设置打开时暂停新的检查；关闭后按已保存策略执行。"
         let cloud = presentation.directory && sync.phase != .success ? "iCloud 云端进度请在 Finder 查看。" : ""
-        hint.stringValue = sync.diagnostics.writeIssue ?? sync.policyError ?? (sync.policy.summary + "\n" + schedule + cloud)
-        run.title = (presentation.mark == .locked) ? "解锁主密码…" : (sync.manualQueued ? "已安排同步" : "关闭设置后同步")
-        run.toolTip = (presentation.mark == .locked) ? "解锁主密码以继续同步。" : "关闭设置后使用已保存配置同步；未应用的修改不会保存。"
+        hint.stringValue = sync.diagnostics.writeIssue ?? sync.policyError ?? (sync.policy.summary + "\n" + (immediate ? "点击“立即同步”使用已保存的配置执行；关闭此窗口不会取消同步。" : schedule) + cloud)
+        run.title = (presentation.mark == .locked) ? "解锁主密码…" : (sync.manualQueued ? "已安排同步" : (immediate ? "立即同步" : "关闭设置后同步"))
+        run.toolTip = (presentation.mark == .locked) ? "解锁主密码以继续同步。" : (immediate ? "立即使用已保存的配置同步，支持自动和手动模式。" : "关闭设置后使用已保存配置同步；未应用的修改不会保存。")
         run.isEnabled = presentation.enabled && !sync.busy && !sync.manualQueued && (!(presentation.mark == .locked) || onUnlock != nil)
         stop.isEnabled = sync.busy || sync.manualQueued
         needsLayout = true; needsDisplay = true; onLayoutChange?()
     }
     @objc private func syncNow() {
-        if sync?.isLocked == true { onUnlock?() } else { sync?.queueManualSync() }
+        if sync?.isLocked == true { onUnlock?() } else if immediate { sync?.sync(interactive: true) } else { sync?.queueManualSync() }
         refresh()
     }
     @objc private func cancelSync() { sync?.cancelCurrent(); refresh() }

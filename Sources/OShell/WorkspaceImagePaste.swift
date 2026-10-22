@@ -33,6 +33,13 @@ extension WorkspaceController {
                 && source.remoteHostname == hostname && source.remoteAddress == address
                 && (remote ? (!source.ended && source.sshConnectionGroup === group && group?.isAvailable == true) : local)
         }
+        let settings = try? ImagePasteSettings.load()
+        let binding = ImagePasteSettings.binding(source.profile)
+        let remembered = remote ? settings?.remoteRule(for: source.profile, binding: binding) : nil
+        let skipConfirmation = remote ? remembered != nil : settings?.skipLocalConfirmation == true
+        let remember = NSButton(checkboxWithTitle: remote ? "此 SSH 会话不再提醒，并记住图片目录" : "本机所有本地终端不再提醒", target: nil, action: nil)
+        remember.identifier = .init("paste.image.remember"); remember.isEnabled = settings != nil
+        remember.toolTip = settings == nil ? "图片粘贴设置无法读取，暂时不能记住选择。" : "仅保存在当前 Mac；可在“设置 → 常规 → 图片粘贴提醒…”恢复提醒。"
         let alert = PopupAlert(); alert.messageText = "粘贴图片"
         let size = ByteCountFormatter.string(fromByteCount: Int64(image.png.count), countStyle: .file)
         alert.informativeText = "PNG · \(image.width) × \(image.height) · \(size)\n" + (remote
@@ -41,16 +48,21 @@ extension WorkspaceController {
             + "\n仅粘贴到当前终端，不广播、不自动回车。"
         alert.addButton(withTitle: remote ? "上传图片并粘贴路径" : "保存图片并粘贴路径")
         alert.addButton(withTitle: "取消")
-        let directory = NSTextField(string: "/tmp")
+        let directory = NSTextField(string: remembered?.directory ?? "/tmp")
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: remote ? 104 : 54))
         if remote {
             directory.identifier = .init("paste.image.remoteDirectory")
-            let box = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 48))
             let label = NSTextField(labelWithString: "远端存放目录（可改为项目目录）")
-            label.frame = NSRect(x: 0, y: 28, width: 400, height: 18)
-            directory.frame = NSRect(x: 0, y: 0, width: 400, height: 24)
-            box.addSubview(label); box.addSubview(directory); alert.accessoryView = box
+            label.frame = NSRect(x: 0, y: 80, width: 460, height: 18)
+            directory.frame = NSRect(x: 0, y: 52, width: 460, height: 24)
+            box.addSubview(label); box.addSubview(directory)
         }
-        guard alert.runModal() == .alertFirstButtonReturn, stillCurrent() else { return }
+        remember.frame = NSRect(x: 0, y: 26, width: 460, height: 20)
+        let hint = NSTextField(labelWithString: "可在“设置 → 常规 → 图片粘贴提醒…”恢复；成功粘贴后才记住。")
+        hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
+        hint.frame = NSRect(x: 0, y: 0, width: 460, height: 20)
+        box.addSubview(remember); box.addSubview(hint); alert.accessoryView = box
+        guard skipConfirmation || alert.runModal() == .alertFirstButtonReturn, stillCurrent() else { return }
         var localFile: URL?
         do {
             let file = try TerminalClipboardFiles.save(image); localFile = file
@@ -68,6 +80,16 @@ extension WorkspaceController {
             guard stillCurrent() else { throw ModelError.invalid("目标会话已改变或断开，未粘贴图片路径。") }
             try deliverImagePath(path, to: source)
             if remote { try? FileManager.default.removeItem(at: file) }
+            if !skipConfirmation, remember.state == .on {
+                do {
+                    var latest = try ImagePasteSettings.load()
+                    if remote {
+                        latest.remote[ImagePasteSettings.key(source.profile)] = .init(binding: binding, directory: directory.stringValue,
+                            title: source.profile.name + " · " + source.profile.username + "@" + source.profile.host + ":" + String(source.profile.port))
+                    } else { latest.skipLocalConfirmation = true }
+                    try latest.save()
+                } catch { Dialogs.message("图片已粘贴，但未能记住提醒设置：" + error.localizedDescription) }
+            }
         } catch {
             if let localFile { try? FileManager.default.removeItem(at: localFile) }
             Dialogs.message("图片粘贴失败：" + error.localizedDescription)

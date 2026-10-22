@@ -167,14 +167,14 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
         deadline=time.time()+65
         while not (root/'app-result.json').exists() and time.time()<deadline:time.sleep(.1)
         report=json.loads((root/'app-result.json').read_text())
-        report['checks'].update(initialLaunchAccepted=result.returncode==0,oneTransportOnly=facts['transports']==1,oneAuthenticationOnly=facts['authenticated']==1 and facts['authAttempts']==1,imageAndFileSFTPChannels=5<=facts['sftp']<=6,SFTPRefusalExercised=facts['sftpDenied']==2,SCPCommandsReusedConnection=facts['execRequests']==2)
+        report['checks'].update(initialLaunchAccepted=result.returncode==0,oneTransportOnly=facts['transports']==1,oneAuthenticationOnly=facts['authenticated']==1 and facts['authAttempts']==1,imageAndFileSFTPChannels=6<=facts['sftp']<=7,SFTPRefusalExercised=facts['sftpDenied']==2,SCPCommandsReusedConnection=facts['execRequests']==2)
         report['server']=facts
         if result.returncode: report['launchError']=result.stderr.decode(errors='replace').replace(password,'<fixture-secret>').replace(user,'<fixture-user>')[:300]
         report['checks']['clientLocaleNotForwarded']=facts['localeRequests']==0
         received=(root/'terminal-input.bin').read_bytes() if (root/'terminal-input.bin').exists() else b''
         report['checks']['clipboardRemotePathReachedSSH']=b'/oshell-clipboard-' in received and b'/image.png' in received
         report['checks']['clipboardUsesBracketedPaste']=(bytes([27])+b'[200~') in received and (bytes([27])+b'[201~') in received
-        report['checks']['cancelAndFailureSendNoExtraPath']=received.count(b'/image.png')==1
+        report['checks']['cancelAndFailureSendNoExtraPath']=received.count(b'/image.png')==2
         report['checks']['clipboardDidNotPasteMacPath']=b'Application\\ Support' not in received and b'clipboard-images' not in received
         report['passed']=all(report['checks'].values())
         (project/'validation/sftp-reuse-result.json').write_text(json.dumps(report,indent=2))

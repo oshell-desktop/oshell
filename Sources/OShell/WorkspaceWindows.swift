@@ -11,6 +11,16 @@ final class WorkspaceWindows {
     let store: ConfigurationStore
     let updater: AppUpdater
     lazy var webDAV = WebDAVSync(windows: self)
+    private(set) var syncStatusWindow: SyncStatusWindow?
+    func showSyncStatus() {
+        guard let active else { return }
+        if syncStatusWindow == nil {
+            syncStatusWindow = SyncStatusWindow(sync: webDAV) { [weak self] in self?.active?.showSyncPreferences() }
+        }
+        syncStatusWindow?.window?.appearance = active.window?.appearance
+        syncStatusWindow?.showWindow(nil)
+        syncStatusWindow?.window?.makeKeyAndOrderFront(nil)
+    }
     var quickMenu: NSMenu?
     var commandMenu: NSMenu?
     var onActiveChanged: ((WorkspaceController?) -> Void)?
@@ -60,6 +70,7 @@ final class WorkspaceWindows {
             active = nil
             if let next = workspaces.last { activate(next); next.show() }
             else {
+                syncStatusWindow?.close(); syncStatusWindow = nil
                 updater.useWorkspace(nil); onActiveChanged?(nil)
                 func clear(_ menu: NSMenu) {
                     for item in menu.items {
@@ -128,7 +139,7 @@ final class WorkspaceWindows {
                                   text: "全部 \(workspaces.count) 个窗口中的 \(running) 个终端连接和 \(files) 个文件操作会结束。",
                                   action: forUpdate ? "关闭会话并更新" : "退出") else { return false }
         }
-        quitting = true; webDAV.cancel()
+        quitting = true; webDAV.cancel(); syncStatusWindow?.close(); syncStatusWindow = nil
         workspaces.forEach { $0.shutdown() }
         return true
     }

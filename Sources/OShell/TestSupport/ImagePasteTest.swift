@@ -16,10 +16,11 @@ enum ImagePasteTest {
         var ownedChange = clipboard.changeCount
         func write(_ data: Data, type: NSPasteboard.PasteboardType) { clipboard.clearContents(); clipboard.setData(data, forType: type); ownedChange = clipboard.changeCount }
         func views(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(views) }
-        func answer(_ title: String) {
+        func answer(_ title: String, remember: Bool = false) {
             let timer = Timer(timeInterval: 0.05, repeats: false) { _ in
                 guard let root = NSApp.modalWindow?.contentView else { checks["pasteDialogPresented"] = false; return }
                 checks["pasteDialogPresented"] = true
+                views(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "paste.image.remember" }?.state = remember ? .on : .off
                 views(root).compactMap { $0 as? NSButton }.first { $0.title == title }?.performClick(nil)
             }
             RunLoop.main.add(timer, forMode: .common); RunLoop.main.add(timer, forMode: .modalPanel)
@@ -30,6 +31,7 @@ enum ImagePasteTest {
             workspace.shutdown(); NSApp.terminate(nil)
         }
         do {
+            checks.merge(try ImagePasteSettingsTest.run(workspace)) { _, new in new }
             let image = try sample()
             checks["normalizesImageToPNG"] = image.width == 16 && image.height == 12 && image.png.prefix(8) == Data([137,80,78,71,13,10,26,10])
             do { _ = try TerminalClipboardImage.decode(Data("invalid image".utf8)); checks["invalidRejected"] = false } catch { checks["invalidRejected"] = true }
@@ -67,10 +69,12 @@ enum ImagePasteTest {
                 workspace.syncTargets = [first.id, second.id]
                 write(image.png, type: .png)
                 let before = (try? FileManager.default.contentsOfDirectory(atPath: TerminalClipboardFiles.directory.path)) ?? []
-                answer("取消"); first.terminal.paste(first.terminal)
+                answer("取消", remember: true); first.terminal.paste(first.terminal)
+                checks["cancelDoesNotRemember"] = (try? ImagePasteSettings.load().skipLocalConfirmation) == false
                 checks["cancelDoesNotSave"] = ((try? FileManager.default.contentsOfDirectory(atPath: TerminalClipboardFiles.directory.path)) ?? []) == before
                 let otherBytes = second.receivedBytes
-                answer("保存图片并粘贴路径"); first.terminal.paste(first.terminal)
+                answer("保存图片并粘贴路径", remember: true); first.terminal.paste(first.terminal)
+                checks["successfulPasteRemembersLocal"] = (try? ImagePasteSettings.load().skipLocalConfirmation) == true
                 let after = (try? FileManager.default.contentsOfDirectory(atPath: TerminalClipboardFiles.directory.path)) ?? []
                 let created = after.filter { !before.contains($0) }
                 checks["pasteSavesOneImage"] = created.count == 1
@@ -82,6 +86,18 @@ enum ImagePasteTest {
                         checks["pathReachedSourcePTY"] = rendered.contains(name)
                         checks["imagePasteNotBroadcast"] = second.receivedBytes == otherBytes
                         checks["pasteDoesNotSubmitCommand"] = !rendered.contains("permission denied") && !rendered.contains("command not found")
+                        let count = ((try? FileManager.default.contentsOfDirectory(atPath: TerminalClipboardFiles.directory.path)) ?? []).count
+                        checks["rememberedLocalSkipsConfirmation"] = true
+                        let unexpected = Timer(timeInterval: 0.05, repeats: true) { _ in
+                            if NSApp.modalWindow != nil { checks["rememberedLocalSkipsConfirmation"] = false; NSApp.abortModal() }
+                        }
+                        RunLoop.main.add(unexpected, forMode: .modalPanel)
+                        second.terminal.paste(second.terminal)
+                        unexpected.invalidate()
+                        checks["rememberedChoiceWorksInAnotherLocalTab"] = ((try? FileManager.default.contentsOfDirectory(atPath: TerminalClipboardFiles.directory.path)) ?? []).count == count + 1
+                        try? ImagePasteSettings().save()
+                        answer("取消"); second.terminal.paste(second.terminal)
+                        checks["restoringReminderPromptsWithoutSavingImage"] = ((try? FileManager.default.contentsOfDirectory(atPath: TerminalClipboardFiles.directory.path)) ?? []).count == count + 1
                         finish()
                     }
                 } else { finish() }

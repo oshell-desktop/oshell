@@ -102,7 +102,7 @@ final class PopupWindow: NSWindow {
     }
     var onFind: (() -> Void)?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if PopupKeyboard.closeFileWindow(with: event, in: self) { return true }
+        if PopupKeyboard.closeAuxiliaryWindow(with: event, in: self) { return true }
         if attachedSheet == nil, NSApp.modalWindow == nil,
            ShortcutRuntime.matches(.find, event: event), let onFind { onFind(); return true }
         return super.performKeyEquivalent(with: event)
@@ -156,16 +156,16 @@ enum PopupKeyboard {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard let window = event.window ?? NSApp.keyWindow, window === NSApp.keyWindow else { return event }
             if let recorder = ShortcutRecorder.active, recorder.window === window, recorder.isRecording { return event }
-            if closeFileWindow(with: event, in: window) { return nil }
+            if closeAuxiliaryWindow(with: event, in: window) { return nil }
             if selectAllPassword(with: event, in: window) { return nil }
             guard isEscape(keyCode: event.keyCode, modifiers: event.modifierFlags) else { return event }
             return dismiss(window: window) ? nil : event
         }
     }
     /// Intercept before the workspace's Cmd+W menu action can close an SSH pane.
-    @discardableResult static func closeFileWindow(with event: NSEvent, in window: NSWindow) -> Bool {
+    @discardableResult static func closeAuxiliaryWindow(with event: NSEvent, in window: NSWindow) -> Bool {
         guard event.type == .keyDown, window.isKeyWindow,
-              window.windowController is RemoteFileWindow,
+              (window.windowController is RemoteFileWindow || window.windowController is SyncStatusWindow),
               event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
               event.charactersIgnoringModifiers?.lowercased() == "w",
               trackingMenus.isEmpty, window.attachedSheet == nil, NSApp.modalWindow == nil else { return false }

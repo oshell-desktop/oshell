@@ -4,23 +4,6 @@
 import AppKit
 import OShellCore
 
-private final class SessionLinkSourcePicker: NSPopUpButton {
-    let detail = NSTextField(wrappingLabelWithString: "")
-    override init(frame buttonFrame: NSRect, pullsDown flag: Bool) {
-        super.init(frame: buttonFrame, pullsDown: flag)
-        target = self; action = #selector(refreshDetail)
-        detail.identifier = .init("session.link.sourceDetail")
-        detail.font = .systemFont(ofSize: 11); detail.textColor = .secondaryLabelColor
-        detail.maximumNumberOfLines = 2; detail.lineBreakMode = .byTruncatingMiddle
-        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    @objc func refreshDetail() {
-        detail.stringValue = selectedItem?.toolTip ?? ""
-        detail.toolTip = detail.stringValue
-    }
-}
-
 extension WorkspaceController {
     func configureSessionLinkBar() {
         sessionLinkBar.onAdd = { [weak self] in
@@ -217,25 +200,7 @@ extension WorkspaceController {
             _ = saveConfiguration(value)
         } catch { Dialogs.message("无法添加快捷链接：\(error.localizedDescription)") }
     }
-    private func populateLinkSources(_ source: SessionLinkSourcePicker, profiles: [SessionProfile]) {
-        source.identifier = .init("session.link.source")
-        source.lineBreakMode = .byTruncatingMiddle
-        source.menu = NSMenu()
-        for profile in profiles {
-            let endpoint = profile.kind == .local ? "本地终端" : profile.host + ":" + String(profile.port)
-            let detail = profile.kind.title + " · " + endpoint + (profile.username.isEmpty ? "" : " · 用户：" + profile.username) + "\n目录：" + SessionDirectory.display(profile.group)
-            // NSPopUpButton.addItem(withTitle:) removes an existing same-title
-            // item. Distinct UUIDs must remain selectable even with identical labels.
-            let item = NSMenuItem(title: profile.name, action: nil, keyEquivalent: "")
-            item.image = SessionListIcon.session(profile.kind, shortcut: false).menuImage()
-            item.representedObject = profile.id
-            item.toolTip = detail
-            source.menu?.addItem(item)
-        }
-        if !profiles.isEmpty { source.selectItem(at: 0) }
-        source.refreshDetail()
-    }
-    func addSavedSessionLink(profile: SessionProfile? = nil, folder: String = "") {
+    func addSavedSessionLink(profile: SessionProfile? = nil) {
         if let profile { addLinkToRoot(profile); return }
         let catalog = SessionCatalogPresentation.visibleConfiguration(configuration)
         guard !catalog.profiles.isEmpty else { return }
@@ -278,40 +243,43 @@ extension WorkspaceController {
     func editSavedSessionLink(_ id: UUID) {
         guard let link = configuration.sessionLinks.entries.first(where: { $0.id == id }),
               let profile = configuration.profiles.first(where: { $0.id == link.profileID }) else { return }
-        presentSessionLinkEditor(profile: profile, existing: link, initialFolder: link.folder)
+        presentSessionLinkEditor(profile: profile, existing: link)
     }
-    private func presentSessionLinkEditor(profile: SessionProfile?, existing: SessionLink?, initialFolder: String) {
-        let profiles = profile.map { [$0] } ?? SessionCatalogPresentation.visibleConfiguration(configuration).profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        guard !profiles.isEmpty else { Dialogs.message("请先在会话管理中保存一个会话。"); return }
-        let alert = PopupAlert(); alert.messageText = existing == nil ? "添加到快捷链接" : "快捷引用属性"
+    private func presentSessionLinkEditor(profile: SessionProfile, existing: SessionLink) {
+        let alert = PopupAlert(); alert.messageText = "快捷引用属性"
         alert.informativeText = "快捷引用统一保存在 /Links。原会话的位置、密码和连接配置保持不变；连接时读取原会话的最新配置。"
-        alert.addButton(withTitle: existing == nil ? "添加" : "保存"); alert.addButton(withTitle: "取消")
-        let source = SessionLinkSourcePicker(frame: .zero, pullsDown: false), name = NSTextField(string: existing?.name ?? profile?.name ?? "")
+        alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消")
+        let source = NSPopUpButton(frame: .zero, pullsDown: false), name = NSTextField(string: existing.name)
         name.placeholderString = "留空使用原会话名称"; name.identifier = .init("session.link.name")
-        populateLinkSources(source, profiles: profiles)
-        source.isEnabled = profile == nil
+        source.identifier = .init("session.link.source"); source.isEnabled = false
+        source.addItem(withTitle: profile.name)
+        source.selectedItem?.image = SessionListIcon.session(profile.kind, shortcut: false).menuImage()
+        source.selectedItem?.representedObject = profile.id
+        let endpoint = profile.kind == .local ? "本地终端" : profile.host + ":" + String(profile.port)
+        let detail = NSTextField(wrappingLabelWithString: profile.kind.title + " · " + endpoint + (profile.username.isEmpty ? "" : " · 用户：" + profile.username) + "\n目录：" + SessionDirectory.display(profile.group))
+        detail.identifier = .init("session.link.sourceDetail"); detail.toolTip = detail.stringValue
+        detail.font = .systemFont(ofSize: 11); detail.textColor = .secondaryLabelColor
+        detail.maximumNumberOfLines = 2; detail.lineBreakMode = .byTruncatingMiddle
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let folder = SessionDirectoryPicker(); folder.identifier = .init("session.link.directory")
-        folder.configure(directories: [SessionLinks.rootDirectory] + configuration.sessionLinks.allFolders.map { SessionLinks.directory(for: $0) }, selected: SessionLinks.directory(for: initialFolder), rootDirectory: SessionLinks.rootDirectory)
-        let grid = NSGridView(views: [[NSTextField(labelWithString: "原会话"), source], [NSView(), source.detail], [NSTextField(labelWithString: "链接名称"), name], [NSTextField(labelWithString: "保存位置"), folder]])
+        folder.configure(directories: [SessionLinks.rootDirectory] + configuration.sessionLinks.allFolders.map { SessionLinks.directory(for: $0) }, selected: SessionLinks.directory(for: existing.folder), rootDirectory: SessionLinks.rootDirectory)
+        let grid = NSGridView(views: [[NSTextField(labelWithString: "原会话"), source], [NSView(), detail], [NSTextField(labelWithString: "链接名称"), name], [NSTextField(labelWithString: "保存位置"), folder]])
         grid.columnSpacing = 14; grid.rowSpacing = 12; grid.column(at: 0).width = 80; grid.column(at: 1).xPlacement = .fill
         source.lineBreakMode = .byTruncatingMiddle
         [source, name, folder].forEach { $0.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
-        source.detail.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        detail.heightAnchor.constraint(equalToConstant: 40).isActive = true
         grid.frame = NSRect(x: 0, y: 0, width: 520, height: 160)
         alert.accessoryView = grid; alert.window.initialFirstResponder = name
         while alert.runModal() == .alertFirstButtonReturn {
-            guard let id = source.selectedItem?.representedObject as? UUID,
-                  let selected = profile ?? configuration.profiles.first(where: { $0.id == id }),
+            guard let selected = configuration.profiles.first(where: { $0.id == profile.id }),
+                  let index = configuration.sessionLinks.entries.firstIndex(where: { $0.id == existing.id }),
                   let relative = SessionLinks.folder(for: folder.selectedDirectory) else { return }
             let entered = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let title = entered.isEmpty ? selected.name : entered
             guard title.utf8.count <= 1024, !title.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { Dialogs.message("请输入有效链接名称（最多 1 KB）。"); continue }
             var value = configuration
-            if !value.profiles.contains(where: { $0.id == selected.id }) { value.profiles.append(selected) }
-            if let existing, let index = value.sessionLinks.entries.firstIndex(where: { $0.id == existing.id }) {
-                guard !value.sessionLinks.entries.contains(where: { $0.id != existing.id && $0.profileID == selected.id && $0.folder == relative }) else { Dialogs.message("目标目录已存在此会话的快捷引用。"); continue }
-                value.sessionLinks.entries[index].name = title; value.sessionLinks.entries[index].folder = relative
-            } else { value.sessionLinks.add(profileID: selected.id, name: title, folder: relative) }
+            guard !value.sessionLinks.entries.contains(where: { $0.id != existing.id && $0.profileID == selected.id && $0.folder == relative }) else { Dialogs.message("目标目录已存在此会话的快捷引用。"); continue }
+            value.sessionLinks.entries[index].name = title; value.sessionLinks.entries[index].folder = relative
             _ = saveConfiguration(value); return
         }
     }

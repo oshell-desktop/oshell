@@ -182,7 +182,50 @@ final class DirectorySyncTest {
         checks["manualQueueShown"] = sync.manualQueued && sync.status.contains("关闭设置")
         sync.cancelCurrent()
         checks["cancelQueueUpdatesStatus"] = !sync.manualQueued && label("sync.status.title")?.stringValue == "本次同步已取消"
-        finish()
+        manualProgress()
+    }
+    private func manualProgress() {
+        do {
+            var policy = try SyncPolicy.load(); policy.automatic = false; try policy.save()
+            sync.directoryConfigurationChanged()
+        } catch { checks["manualPolicySetup"] = false; finish(); return }
+        workspace.showSyncStatus()
+        guard let monitor = workspace.windowCoordinator?.syncStatusWindow?.window, let rootView = monitor.contentView else {
+            checks["manualProgressWindowExists"] = false; finish(); return
+        }
+        let controls = descendants(rootView)
+        let run = controls.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "sync.status.run" }!
+        let cancel = controls.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "sync.status.cancel" }!
+        let progress = controls.compactMap { $0 as? NSProgressIndicator }.first { $0.identifier?.rawValue == "sync.status.progress" }!
+        let original = try? Data(contentsOf: workspace.store.url)
+        run.performClick(nil)
+        checks["manualClickStartsImmediately"] = !sync.policy.automatic && sync.busy && !sync.manualQueued && NSApp.modalWindow == nil
+        checks["toolbarRingReflectsRealSync"] = workspace.syncStatusButton.presentation.mark == .working && workspace.syncStatusButton.layer?.sublayers?.first { $0.name == "sync.progress.ring" }?.isHidden == false
+        checks["progressAnimatesDuringRead"] = !progress.isHidden && progress.isIndeterminate && sync.phase == .reading
+        checks["busyDisablesDuplicateRun"] = !run.isEnabled && cancel.isEnabled
+        cancel.performClick(nil)
+        checks["cancelStopsToolbarRing"] = workspace.syncStatusButton.layer?.sublayers?.first { $0.name == "sync.progress.ring" }?.isHidden == true
+        checks["cancelStopsProgress"] = !sync.busy && !progress.isIndeterminate && progress.doubleValue == 0 && run.isEnabled
+        checks["cancelPreservesConfiguration"] = (try? Data(contentsOf: workspace.store.url)) == original
+        // Late callbacks from the cancelled read must not complete a newer run.
+        run.performClick(nil)
+        let tabsBeforeClose = workspace.tabs.map(\.id)
+        checks["statusEscapeHandled"] = PopupKeyboard.dismiss(window: monitor)
+        checks["closingMonitorDoesNotCancel"] = sync.busy && !monitor.isVisible
+        checks["closingMonitorKeepsTerminals"] = workspace.tabs.map(\.id) == tabsBeforeClose && pane?.terminal.process.shellPid == pid
+        wait("manualButtonCompletesSync", condition: { !self.sync.busy && self.sync.phase == .success }) { [self] in
+            checks["successfulProgressIsComplete"] = !progress.isIndeterminate && progress.doubleValue == 1 && run.isEnabled && !cancel.isEnabled
+            checks["manualUnchangedPreservesData"] = (try? Data(contentsOf: workspace.store.url)) == original
+            workspace.showSyncStatus()
+            checks["reopenReusesMonitorAndShowsResult"] = workspace.windowCoordinator?.syncStatusWindow?.window === monitor && monitor.isVisible && progress.doubleValue == 1
+            monitor.contentView?.layoutSubtreeIfNeeded()
+            checks["progressFitsMonitor"] = progress.convert(progress.bounds, to: rootView).minY >= 0 && progress.convert(progress.bounds, to: rootView).maxY <= rootView.bounds.height
+            if let output = ProcessInfo.processInfo.environment["OSHELL_DIRECTORY_SYNC_OUTPUT"], let bitmap = rootView.bitmapImageRepForCachingDisplay(in: rootView.bounds) {
+                rootView.cacheDisplay(in: rootView.bounds, to: bitmap)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output).deletingPathExtension().appendingPathExtension("progress.png"))
+            }
+            finish()
+        }
     }
     private func finish() {
         guard !finished else { return }; finished = true; sync.cancel()

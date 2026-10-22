@@ -69,7 +69,7 @@ enum FileWindowKeyboardTest {
                                 var cancelledPrompt = false
                                 modal { alert in
                                     cancelledPrompt = true
-                                    checks["commandWIgnoredBehindModal"] = !PopupKeyboard.closeFileWindow(with:event(true),in:fileWindow)
+                                    checks["commandWIgnoredBehindModal"] = !PopupKeyboard.closeAuxiliaryWindow(with:event(true),in:fileWindow)
                                     _ = PopupKeyboard.dismiss(window:alert)
                                 }
                                 NSApp.postEvent(event(true),atStart:false)

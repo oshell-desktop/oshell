@@ -886,9 +886,10 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let storageView = StorageSettingsView(workspace: self)
         let securityView = SecuritySettingsView(workspace: self)
         let titleView = SessionTitleSettingsView()
+        let imagePasteView = ImagePasteSettingsControl()
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
-        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, selectionView: { autoCopy, trim in
+        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
         }, localShortcutSelection: { localShortcut = $0 }) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
@@ -898,6 +899,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             let openProfiles = (windowCoordinator?.workspaces ?? [self]).flatMap { $0.inputPanes.filter { !$0.isBlank }.map(\.profile) }
             try titleView.apply(profiles: configuration.profiles + openProfiles)
         } catch { Dialogs.message("标题设置未保存：" + error.localizedDescription) }
+        do { try imagePasteView.apply() } catch { Dialogs.message("图片粘贴设置未保存：" + error.localizedDescription) }
         if let selection = try? selectionView?.values() { selection.save() }
         SessionSidebarPreferences.saveShortcut(localShortcut)
         ShortcutRuntime.install(preferences.keyboardShortcuts); refreshSessionSidebar()
@@ -908,7 +910,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         do { try storageView.applySelection() } catch { Dialogs.message("同步设置未保存：" + error.localizedDescription) }
         do { try securityView.applySelection() } catch { Dialogs.message("Touch ID 设置未完成：" + error.localizedDescription) }
     }
-    @objc func syncWebDAVNow() { windowCoordinator?.webDAV.sync(interactive: true) }
+    @objc func syncWebDAVNow() { showSyncStatus(); windowCoordinator?.webDAV.sync(interactive: true) }
     @objc func reloadSharedConfiguration() { windowCoordinator?.reloadSharedConfiguration(interactive: true) }
     @objc func lockPasswords() { windowCoordinator?.webDAV.cancel(); store.masterPassword = nil; PasswordVault.shared.lock(); windowCoordinator?.webDAV.readinessChanged() }
     @discardableResult func selectTab(number: Int) -> Bool {
@@ -983,7 +985,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         }
         if menuItem.action == #selector(showUpdatePreferences) { return isSecurityUnlocked && NSApp.modalWindow == nil }
         if menuItem.action == #selector(clearMasterPassword) { return isSecurityUnlocked && configuration.hasMasterPassword && NSApp.modalWindow == nil }
-        if [#selector(showPreferences), #selector(showAppearancePreferences), #selector(showSyncPreferences)].contains(menuItem.action) { return NSApp.modalWindow == nil && window?.attachedSheet == nil }
+        if [#selector(showPreferences), #selector(showAppearancePreferences), #selector(showSyncPreferences), #selector(showSyncStatus)].contains(menuItem.action) { return NSApp.modalWindow == nil && window?.attachedSheet == nil }
         if menuItem.action == #selector(editCurrentSessionProfile) { return canEditCurrentSessionProfile }
         if [#selector(splitVertical), #selector(splitHorizontal)].contains(menuItem.action) { return isSecurityUnlocked && selectedTab != nil }
         if menuItem.action == #selector(showCurrentSessionProperties) { return selectedTab?.activePane.canEditLiveKeepAlive == true }

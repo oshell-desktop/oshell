@@ -28,8 +28,12 @@ enum SyncSettingsTest {
         }
         do {
             checks["toolbarAvailableWithoutSessions"] = workspace.tabs.isEmpty && workspace.syncStatusButton.isEnabled && workspace.syncStatusButton.toolTip?.contains("未启用同步") == true
-            // The toolbar must open the sync page, not the default General page, without changing configuration.
+            // A modeless monitor can sync immediately; configuration remains an explicit action.
             let revision = workspace.configurationRevision
+            workspace.syncStatusButton.performClick(nil)
+            let monitor = windows.syncStatusWindow?.window
+            checks["toolbarOpensModelessStatus"] = monitor?.isVisible == true && NSApp.modalWindow == nil
+            let configure = monitor?.contentView.flatMap { root in views(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "sync.status.configure" } }
             let dismiss = Timer(timeInterval: 0.15, repeats: false) { _ in
                 guard let root = NSApp.modalWindow?.contentView,
                       let tabs = views(root).compactMap({ $0 as? NSTabView }).first else { checks["toolbarOpensSyncPage"] = false; NSApp.abortModal(); return }
@@ -37,7 +41,8 @@ enum SyncSettingsTest {
                 _ = PopupKeyboard.dismiss(window: NSApp.modalWindow!)
             }
             RunLoop.main.add(dismiss, forMode: .common); RunLoop.main.add(dismiss, forMode: .modalPanel)
-            workspace.syncStatusButton.performClick(nil)
+            configure?.performClick(nil)
+            windows.syncStatusWindow?.close()
             checks["openingStatusDoesNotModifyConfiguration"] = workspace.configurationRevision == revision
             for phase in [WebDAVSync.Phase.reading, .writing, .applying] {
                 checks["busyPresentation.\(phase)"] = SyncStatusPresentation(enabled: true, phase: phase).mark == .working
@@ -46,7 +51,7 @@ enum SyncSettingsTest {
             checks["lockedPresentation"] = SyncStatusPresentation(enabled: true, locked: true, phase: .success).mark == .locked
             checks["certificateFailureHasAction"] = SyncStatusPresentation(enabled: true, phase: .failed, failure: .tls).guidance.contains("测试连接")
             checks["cloudSuccessDoesNotClaimUpload"] = SyncStatusPresentation(enabled: true, phase: .success, directory: true).guidance.contains("Finder")
-            checks["conflictHasNextAction"] = SyncStatusPresentation(enabled: true, phase: .conflict).guidance.contains("关闭设置后同步")
+            checks["conflictHasNextAction"] = SyncStatusPresentation(enabled: true, phase: .conflict).guidance.contains("立即同步")
             let initial = StorageSettingsView(workspace: workspace)
             checks["oneMethodSelector"] = picker(initial).numberOfItems == 3
             checks["disabledShowsNoConfigurationFields"] = hidden("storage.directoryFields", in: initial) && hidden("storage.webdavFields", in: initial)
@@ -57,6 +62,30 @@ enum SyncSettingsTest {
             checks["webDAVOnlyShowsServerConfiguration"] = hidden("storage.directoryFields", in: initial) && !hidden("storage.webdavFields", in: initial)
             checks["draftDoesNotEnableSync"] = !windows.webDAV.syncEnabled
             checks["masterEnabled"] = try workspace.enableMasterProtection(master)
+            let protectedBytes = try Data(contentsOf: workspace.store.url)
+            workspace.lockPasswords()
+            let unlockPage = StorageSettingsView(workspace: workspace)
+            let unlock = views(unlockPage).compactMap { $0 as? NSButton }.first { $0.title == "设置 / 解锁主密码…" }!
+            func attemptUnlock(_ candidate: String) {
+                let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+                    guard let content = NSApp.modalWindow?.contentView else { return }
+                    let controls = views(content)
+                    if let field = controls.compactMap({ $0 as? NSSecureTextField }).first {
+                        field.stringValue = candidate
+                        controls.compactMap { $0 as? NSButton }.first { $0.title == "确定" }?.performClick(nil)
+                    } else if controls.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.hasPrefix("解锁失败：") }) {
+                        controls.compactMap { $0 as? NSButton }.first?.performClick(nil)
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .modalPanel)
+                unlock.performClick(nil); timer.invalidate()
+            }
+            attemptUnlock("wrong-synthetic-master")
+            checks["syncUnlockRejectsWrongMaster"] = PasswordVault.shared.cachedMaster == nil && workspace.store.masterPassword == nil
+            checks["failedSyncUnlockPreservesData"] = try Data(contentsOf: workspace.store.url) == protectedBytes
+            attemptUnlock(master)
+            checks["syncUnlockRestoresVerifiedMaster"] = PasswordVault.shared.cachedMaster == master && workspace.store.masterPassword == master
+            checks["syncUnlockDoesNotRewriteData"] = try Data(contentsOf: workspace.store.url) == protectedBytes
             try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
             try location.schedule(.init(path: target.path, mode: .migrate), master: master)
             let directoryPage = StorageSettingsView(workspace: workspace)

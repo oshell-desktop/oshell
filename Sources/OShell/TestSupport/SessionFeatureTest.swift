@@ -29,7 +29,7 @@ enum SessionFeatureTest {
             try Data(contentsOf: root.appendingPathComponent("known_hosts")).write(to: controller.store.url.deletingLastPathComponent().appendingPathComponent("known_hosts"))
             PasswordVault.shared.unlockForTesting(master)
             // Control: secure defaults must not silently negotiate obsolete algorithms.
-            var control = profile; control.proxyID = nil; control.proxy = ProxySettings(); control.legacySSH = false; control.tunnels = []; control.proxy = ProxySettings(); control.encryptedPassword = nil
+            var control = profile; control.proxyID = nil; control.proxy = ProxySettings(); control.legacySSH = false; control.tunnels = []; control.encryptedPassword = nil
             controller.open(control); let controlPane = controller.selectedTab!.activePane
             controller.open(profile); let originalTab = controller.selectedTab!, pane = originalTab.activePane
             try pane.startLogging(to: root.appendingPathComponent("session.log"))
@@ -43,6 +43,10 @@ enum SessionFeatureTest {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     let config = String(decoding: (try? Data(contentsOf: controller.store.url)) ?? Data(), as: UTF8.self)
                     let log = String(decoding: (try? Data(contentsOf: root.appendingPathComponent("session.log"))) ?? Data(), as: UTF8.self)
+                    let saved = try? controller.store.load().profiles.first
+                    results["savedPasswordStillDecrypts"] = saved.flatMap { profile in
+                        profile.encryptedPassword.flatMap { try? SessionCipher.decrypt($0, master: master, profile: profile) }
+                    } == password
                     results["credentialsRemainEncrypted"] = ![password, proxyPassword, master].contains(where: { config.contains($0) || log.contains($0) })
                     results["secureDefaultsRejectLegacy"] = controlPane.ended
                     results["automaticHostname"] = (pane.title == "centos6-fixture" && pane.remoteAddress == "10.6.0.6")

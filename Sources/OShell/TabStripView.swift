@@ -45,7 +45,17 @@ final class TabStripView: InterfaceSurfaceView {
         final class TitleButton: MenuButton {
             var trackDrag: ((NSEvent) -> Bool)?
             var onDoubleClick: (() -> Void)?
+            var onHoverEnter: (() -> Void)?, onHoverExit: (() -> Void)?, onPress: (() -> Void)?
+            private var hoverTracking: NSTrackingArea?
+            override func updateTrackingAreas() {
+                if let hoverTracking { removeTrackingArea(hoverTracking) }
+                let tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+                addTrackingArea(tracking); hoverTracking = tracking; super.updateTrackingAreas()
+            }
+            override func mouseEntered(with event: NSEvent) { onHoverEnter?() }
+            override func mouseExited(with event: NSEvent) { onHoverExit?() }
             override func mouseDown(with event: NSEvent) {
+                onPress?()
                 if event.clickCount == 2, !event.modifierFlags.contains(.control) { onDoubleClick?(); return }
                 if trackDrag?(event) == true { return }; super.mouseDown(with: event)
             }
@@ -60,6 +70,39 @@ final class TabStripView: InterfaceSurfaceView {
         var dragEnabled = false
         var onDragEnd: (() -> Void)?
         var onDragCompletion: ((NSPoint, NSDragOperation, Bool) -> Void)?
+        var sessionFields = [TabSessionField]() { didSet { if oldValue != sessionFields { dismissSessionInfo() } } }
+        var hoverDetail = "" { didSet { if oldValue != hoverDetail { dismissSessionInfo() } } }
+        private(set) var sessionInfo: TabSessionInfoPanel?
+        private var hoverTimer: Timer?
+        func scheduleSessionInfo() {
+            hoverTimer?.invalidate()
+            guard !sessionFields.isEmpty else { return }
+            let timer = Timer(timeInterval: 0.5, repeats: false) { [weak self] _ in
+                guard let self, let window = self.window, NSApp.isActive, window.isKeyWindow, NSEvent.pressedMouseButtons == 0,
+                      self.selectButton.bounds.contains(self.selectButton.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)) else { return }
+                self.showSessionInfo()
+            }
+            hoverTimer = timer; RunLoop.main.add(timer, forMode: .common)
+        }
+        func delayDismissSessionInfo() {
+            hoverTimer?.invalidate()
+            let timer = Timer(timeInterval: 0.25, repeats: false) { [weak self] _ in self?.dismissSessionInfo() }
+            hoverTimer = timer; RunLoop.main.add(timer, forMode: .common)
+        }
+        func dismissSessionInfo() { hoverTimer?.invalidate(); hoverTimer = nil; sessionInfo?.close(); sessionInfo = nil }
+        func showSessionInfo() {
+            dismissSessionInfo()
+            guard !sessionFields.isEmpty, window != nil else { return }
+            let info = TabSessionInfoPanel(title: selectButton.title, fields: sessionFields, details: hoverDetail)
+            info.onEnter = { [weak self] in self?.hoverTimer?.invalidate(); self?.hoverTimer = nil }
+            info.onExit = { [weak self] in self?.delayDismissSessionInfo() }
+            info.onClose = { [weak self, weak info] in
+                if self?.sessionInfo === info { self?.sessionInfo = nil }
+            }
+            sessionInfo = info; info.show(relativeTo: selectButton)
+        }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window == nil { dismissSessionInfo() } }
+        override func viewDidHide() { super.viewDidHide(); dismissSessionInfo() }
         private var dragEventMonitor: Any?
         private var dragCancelled = false
         private var dragOriginFrame: NSRect?
@@ -67,8 +110,9 @@ final class TabStripView: InterfaceSurfaceView {
             if let dragEventMonitor { NSEvent.removeMonitor(dragEventMonitor) }
             dragEventMonitor = nil
         }
-        deinit { clearDragMonitor() }
+        deinit { clearDragMonitor(); hoverTimer?.invalidate(); sessionInfo?.close() }
         func track(_ event: NSEvent) -> Bool {
+            dismissSessionInfo()
             guard dragEnabled, !event.modifierFlags.contains(.control), event.clickCount == 1, let window else { return false }
             let start = event.locationInWindow
             while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
@@ -118,7 +162,10 @@ final class TabStripView: InterfaceSurfaceView {
             selectButton.font = .systemFont(ofSize: 12, weight: .medium)
             selectButton.alignment = .left; selectButton.lineBreakMode = .byTruncatingTail
             selectButton.target = self; selectButton.action = #selector(selectItem)
-            selectButton.makeMenu = { [weak self] in self?.makeMenu?() }
+            selectButton.makeMenu = { [weak self] in self?.dismissSessionInfo(); return self?.makeMenu?() }
+            selectButton.onHoverEnter = { [weak self] in self?.scheduleSessionInfo() }
+            selectButton.onHoverExit = { [weak self] in self?.delayDismissSessionInfo() }
+            selectButton.onPress = { [weak self] in self?.dismissSessionInfo() }
             selectButton.trackDrag = { [weak self] in self?.track($0) ?? false }
             selectButton.onDoubleClick = { [weak self] in self?.onDuplicate?() }
             closeButton.isBordered = false
@@ -227,6 +274,7 @@ final class TabStripView: InterfaceSurfaceView {
         var hasUnreadOutput = false
         var number: Int? = nil
         var connectionStatus: ConnectionStatus? = nil
+        var sessionFields = [TabSessionField]()
     }
     func setAddDescription(_ title: String) { addButton.toolTip = title; addButton.setAccessibilityLabel(title) }
     func update(tabs: [TerminalTab], selected: TerminalTab?, numbers: [UUID: Int]? = nil) {
@@ -234,7 +282,7 @@ final class TabStripView: InterfaceSurfaceView {
         update(entries: tabs.map { tab in
             let title = tab.title
             let action = tab.activePane.canDuplicateConnection ? "双击新建相同会话" : "当前状态不响应双击"
-            return Entry(id: tab.id, title: title, detail: tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus)
+            return Entry(id: tab.id, title: title, detail: tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus, sessionFields: tab.activePane.tabSessionFields)
         }, selectedID: selected?.id)
     }
     func update(entries: [Entry], selectedID: UUID?) {
@@ -277,8 +325,14 @@ final class TabStripView: InterfaceSurfaceView {
             item.selectButton.setAccessibilityValue((item.selected ? "已选中" : "未选中") + (entry.connectionStatus.map { "，" + $0.title } ?? "") + (entry.hasUnreadOutput ? "，有未读输出" : ""))
             item.toolTip = "\(number). \(entry.title)\n" + (entry.connectionStatus.map { "连接状态：" + $0.title + "\n" } ?? "") + (entry.hasUnreadOutput ? "有新输出，切换查看后清除提示\n" : "") + entry.detail
             if let number = entry.number { item.toolTip = (item.toolTip ?? "") + (number <= 9 ? "\n" + ShortcutRuntime.hint(ShortcutAction(rawValue: "tab\(number)")!) + " 跳转" : "\n" + ShortcutRuntime.hint(.tabNumber) + " 输入编号跳转") }
-            if onDragCompletion != nil { item.toolTip = (item.toolTip ?? "") + "\n拖到其他窗口的标签栏可合并；拖到窗口外空白处可新建窗口；Esc 取消拖动。" }
-            item.selectButton.toolTip = item.toolTip
+            if onDragCompletion != nil { item.toolTip = (item.toolTip ?? "") + "\n拖到其他窗口的页面或标签栏可合并；拖到窗口外空白处可新建窗口；Esc 取消拖动。" }
+            item.sessionFields = entry.sessionFields
+            item.hoverDetail = item.toolTip ?? ""
+            if entry.sessionFields.isEmpty { item.selectButton.toolTip = item.toolTip }
+            else {
+                item.toolTip = nil; item.selectButton.toolTip = nil
+                item.selectButton.setAccessibilityHelp(item.hoverDetail + "\n悬停后可复制会话字段。")
+            }
             item.closeButton.toolTip = "关闭“\(title)”"; item.closeButton.setAccessibilityLabel("关闭“\(title)”")
             item.preferredWidth = min(320, max(120, (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .bold)]).width + 48))
             let choice = rebuildMenu ? NSMenuItem(title: "", action: #selector(selectFromList(_:)), keyEquivalent: "") : menu.items[index + 1]

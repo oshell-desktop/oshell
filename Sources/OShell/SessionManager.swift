@@ -662,7 +662,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     @objc private func newSFTP() { workspace?.createSession(kind: .sftp, directory: currentDirectory, showManager: sidebar == nil) }
     @objc private func newFTP() { workspace?.createSession(kind: .ftp, directory: currentDirectory, showManager: sidebar == nil) }
     @objc private func addSavedLink() {
-        workspace?.addSavedSessionLink(profile: selectedLink == nil ? selectedProfile : nil, folder: SessionLinks.folder(for: currentDirectory) ?? "")
+        workspace?.addSavedSessionLink(profile: selectedLink == nil ? selectedProfile : nil)
     }
     @objc private func editLinkSource() { if let profile = selectedProfile { workspace?.editSavedSession(profileID: profile.id) } }
     @objc private func showSessionDefaults() { workspace?.showSessionDefaults() }

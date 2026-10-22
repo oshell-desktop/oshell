@@ -25,7 +25,7 @@ python3 scripts/run-ui-tests.py tab-window-merge tab-detach tab-reorder multi-wi
 python3 scripts/run-ui-tests.py --group sessions
 ```
 
-测试应用单独输出到 `work/test-app/OShell.app`，缓存位于 `work/build-tests/`，不会覆盖正式 app。通用 UI 运行器会复制应用、分配独立 Bundle ID 和临时数据目录，结束时清理测试副本；结果写入 `validation/ui-*.json`。可用 `--app` 指定其他带测试标记的应用。`tabs`、`sessions`、`memory` 分组替代原来重复的批量包装脚本。`stress` 输出性能采样，不代表所有负载下的性能保证。
+测试应用单独输出到 `work/test-app/OShell.app`，缓存位于 `work/build-tests/`，不会覆盖正式 app。通用 UI 运行器会复制应用、分配独立 Bundle ID 和临时数据目录，结束时清理测试副本；结果写入 `validation/ui-*.json`。图片粘贴使用 `image-paste`、`paste-scroll`，同步状态使用 `sync-settings`、`directory-sync`、`toolbar-actions`；远端图片上传另运行 `run-sftp-reuse-tests.py`。可用 `--app` 指定其他带测试标记的应用。`tabs`、`sessions`、`memory` 分组替代原来重复的批量包装脚本。`stress` 输出性能采样，不代表所有负载下的性能保证。
 
 测试入口必须显式指定独立的 `OSHELL_DATA_DIR`；正式应用会在读取数据前拒绝测试参数。不要将开发测试指向实际会话目录或真实服务器。UI 检查需要 macOS 图形会话。
 
@@ -46,12 +46,14 @@ binary_dir="$(swift build --scratch-path work/build/swift -c release --show-bin-
 python3 -m venv work/test-tools
 work/test-tools/bin/pip install -r scripts/requirements-test.txt
 work/test-tools/bin/python scripts/run-tab-actions-tests.py
+work/test-tools/bin/python scripts/run-session-tests.py
+work/test-tools/bin/python scripts/run-sftp-reuse-tests.py
 work/test-tools/bin/python scripts/run-ssh-clone-tests.py
 work/test-tools/bin/python scripts/run-local-tool-tests.py --connection-status-only
 work/test-tools/bin/python scripts/run-webdav-tests.py
 ```
 
-这些脚本默认使用测试应用和一次性本地账号。更新、文件传输、代理、隧道和内存循环等专用脚本继续保留；它们与通用 UI 检查的测试服务需求不同。加密启动测试会自行生成临时样本，不依赖维护者工作目录中的文件。
+这些脚本默认使用测试应用和一次性本地账号。保存密码认证及明文不落盘检查统一由 `run-session-tests.py` 覆盖，移除了需手工启动固定端口服务的旧密码测试入口。更新、文件传输、代理、隧道和内存循环等专用脚本继续保留；它们与通用 UI 检查的测试服务需求不同。加密启动测试会自行生成临时样本，不依赖维护者工作目录中的文件。
 
 确实需要单独调试 Intel 兼容 UI 时，可使用 `package-release.py --flavor legacy --apps-only --tests`，输出 `work/test-release/legacy/OShell.app`；测试应用禁止打包或发布。常规开发无需执行此步骤。
 

@@ -343,6 +343,19 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         if mode == .passive { hasShellIntegration = false; integratedPromptPending = false }
         refreshHeader(); onState?(); schedulePromptScan()
     }
+    var tabSessionFields: [TabSessionField] {
+        let ssh = profile.kind == .ssh
+        let user = ssh ? (profile.username.isEmpty ? nil : profile.username) : (interactiveTool == nil ? NSUserName() : nil)
+        return [
+            .init(id: "session", title: "会话名称", value: sessionTitleName.isEmpty ? title : sessionTitleName),
+            .init(id: "hostname", title: "主机名", value: remoteHostname),
+            .init(id: "hostIP", title: "主机 IP", value: remoteAddress),
+            .init(id: "connectionIP", title: "连接 IP", value: ssh ? sshConnectionGroup?.transportPeer?.address : nil, unavailable: ssh || interactiveTool != nil ? "未获取" : "不适用（本地）"),
+            .init(id: "username", title: ssh && ended ? "原登录用户名" : "登录用户名", value: user, unavailable: ssh ? "使用 SSH 默认配置（未获取）" : "未获取"),
+            .init(id: "address", title: "配置地址", value: ssh ? profile.host : nil, unavailable: "不适用（本地）"),
+            .init(id: "port", title: "配置端口", value: ssh ? String(profile.port) : nil, unavailable: "不适用（本地）")
+        ]
+    }
     var connectionDetails: String {
         func display(_ value: String) -> String {
             String(value.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : String($0) }.joined().prefix(256))

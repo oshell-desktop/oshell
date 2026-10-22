@@ -127,9 +127,20 @@ final class StorageSettingsView: NSView {
         guard let workspace else { return }
         if !workspace.configuration.hasMasterPassword { workspace.setupMasterPassword() }
         else if let master = PasswordVault.shared.masterForImport(hasSavedPasswords: true) {
-            if ConfigurationCredentials.profiles(in: workspace.configuration).contains(where: { $0.encryptedPassword?.localKeyID != nil }) {
-                do { _ = try workspace.enableMasterProtection(master) } catch { Dialogs.message(error.localizedDescription) }
-            }
+            do {
+                if ConfigurationCredentials.profiles(in: workspace.configuration).contains(where: { $0.encryptedPassword?.localKeyID != nil }) {
+                    guard try workspace.enableMasterProtection(master) else { return }
+                } else {
+                    let snapshot = workspace.configuration, revision = workspace.configurationRevision
+                    guard let result = CredentialTask.run(title: "正在验证主密码…", work: { _ in
+                        try MasterPasswordProtection.verifyStartup(snapshot, password: master)
+                    }) else { return }
+                    try result.get()
+                    guard revision == workspace.configurationRevision else { throw ModelError.invalid("验证期间配置已变化，请重新解锁。") }
+                    workspace.store.masterPassword = master
+                    PasswordVault.shared.acceptMaster(master)
+                }
+            } catch { Dialogs.message("解锁失败：" + error.localizedDescription); return }
         }
         if loadError != nil { loadSettings() }
         workspace.windowCoordinator?.webDAV.readinessChanged(); workspace.windowCoordinator?.webDAV.schedule(startup: true)

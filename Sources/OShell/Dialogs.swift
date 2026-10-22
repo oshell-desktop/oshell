@@ -10,7 +10,7 @@ enum Dialogs {
         guard let result = editor.run() else { return nil }
         titleSelection?(result.id, editor.selectedTitleMode); return result
     }
-    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
+    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, imagePasteView: ImagePasteSettingsControl? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
         let font = NSPopUpButton()
         TerminalFontCatalog.populate(font, selected: current.fontName)
         let size = NSPopUpButton(); [11, 12, 13, 14, 15, 16, 18, 20, 24, 26].forEach { size.addItem(withTitle: String($0)) }
@@ -39,7 +39,7 @@ enum Dialogs {
         let appearanceView = AppearanceSettingsView(preferences: current)
         defer { appearanceView.dispose() }
         let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 840, height: 550))
-        let basic = GeneralSettingsView(font: font, size: size, history: history, gpu: gpu, input: [zmodem, rightPaste, previewPaste])
+        let basic = GeneralSettingsView(font: font, size: size, history: history, gpu: gpu, input: [zmodem, rightPaste, previewPaste] + (imagePasteView.map { [$0] } ?? []))
         let general = NSTabViewItem(identifier: "general"); general.label = "常规"; general.view = basic; tabs.addTabViewItem(general)
         let colors = NSTabViewItem(identifier: "appearance"); colors.label = "主题与配色"; colors.view = appearanceView; tabs.addTabViewItem(colors)
         let updatesView = UpdateSettingsView(preferences: current)
@@ -65,7 +65,7 @@ enum Dialogs {
         var prefs = current
         while true {
             guard dialog.runModal() == .OK else { return nil }
-            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); _ = try selection.values(); break }
+            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); try imagePasteView?.validate(); _ = try selection.values(); break }
             catch { Dialogs.message(error.localizedDescription) }
         }
         prefs.fontName = font.selectedItem?.representedObject as? String ?? ""

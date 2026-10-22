@@ -22,6 +22,7 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--tab-close-confirmation-test") { TabCloseConfirmationTest.run(controller) }
         if CommandLine.arguments.contains("--session-catalog-presentation-test") { SessionCatalogPresentationTest.run(controller) }
         if CommandLine.arguments.contains("--marked-text-test") { MarkedTextOverlayTest.run(controller) }
+        if CommandLine.arguments.contains("--tab-session-info-test") { TabSessionInfoTest.run(controller) }
         if CommandLine.arguments.contains("--image-paste-test") { ImagePasteTest.run(controller) }
         if CommandLine.arguments.contains("--session-pins-test") { SessionPinsTest.run(controller) }
         if CommandLine.arguments.contains("--tab-title-settings-test") { SessionTitleSettingsTest.run(controller) }
@@ -106,7 +107,6 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--smoke-test") { SmokeTest.run(controller) }
         if CommandLine.arguments.contains("--integration-test") { IntegrationTest.run(controller) }
         if CommandLine.arguments.contains("--stress-test") { StressTest.run(controller) }
-        if CommandLine.arguments.contains("--password-test") { PasswordTest.run(controller) }
         if CommandLine.arguments.contains("--session-test") { SessionFeatureTest.run(controller) }
         if CommandLine.arguments.contains("--zmodem-progress-test") { ZmodemProgressUITest.run(controller) }
         if CommandLine.arguments.contains("--zmodem-regression-test") { ZmodemRegressionTest.run(controller) }

@@ -10,12 +10,16 @@ enum SFTPReuseTest {
         let root = URL(fileURLWithPath: location)
         var checks = [String: Bool](), finished = false, files: RemoteFileWindow?
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        var imageConfirmations = 0
         let monitor = Timer(timeInterval: 0.03, repeats: true) { _ in
             guard let window = NSApp.modalWindow, let content = window.contentView else { return }
             if descendants(content).contains(where: { $0 is NSSecureTextField }) { checks["noSecondCredentialPrompt"] = false; _ = PopupKeyboard.dismiss(window: window) }
             else if descendants(content).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "正在上传图片" }) {
                 if FileManager.default.fileExists(atPath: root.appendingPathComponent("cancel-image").path) { NSApp.stopModal(withCode: .alertFirstButtonReturn) }
             } else {
+                if let remember = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue == "paste.image.remember" }) {
+                    imageConfirmations += 1; remember.state = .on
+                }
                 descendants(content).compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "paste.image.remoteDirectory" }?.stringValue = "/"
                 NSApp.stopModal(withCode: .alertFirstButtonReturn)
             }
@@ -62,14 +66,22 @@ enum SFTPReuseTest {
                     if let folder = folders.first {
                         checks["clipboardRemoteDirectoryPrivate"] = (try FileManager.default.attributesOfItem(atPath: folder.path)[.posixPermissions] as? NSNumber)?.intValue == 0o700
                     }
+                    checks["remotePasteRemembersAfterSuccess"] = (try? ImagePasteSettings.load().remote[ImagePasteSettings.key(profile)]?.directory) == "/"
+                    let confirmationCount = imageConfirmations
+                    workspace.pasteImage(image, from: terminal)
+                    checks["remoteRememberedPasteSkipsConfirmation"] = imageConfirmations == confirmationCount
+                    checks["remoteRememberedPasteUsesSavedDirectory"] = (try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("remote"), includingPropertiesForKeys: nil).filter { $0.lastPathComponent.hasPrefix("oshell-clipboard-") }).count == 2
                     checks["imageUploadKeepsOriginalSSH"] = !terminal.ended && group.isAvailable
                     try Data().write(to: root.appendingPathComponent("cancel-image"))
                     workspace.pasteImage(image, from: terminal)
                     try FileManager.default.removeItem(at: root.appendingPathComponent("cancel-image"))
                     checks["imageCancelKeepsOriginalSSH"] = !terminal.ended && group.isAvailable
+                    try ImagePasteSettings().save()
                     try Data().write(to: root.appendingPathComponent("deny-sftp"))
                     workspace.pasteImage(image, from: terminal)
                     try FileManager.default.removeItem(at: root.appendingPathComponent("deny-sftp"))
+                    checks["remoteRestoredReminderAppears"] = imageConfirmations == confirmationCount + 1
+                    checks["failedUploadDoesNotRemember"] = try ImagePasteSettings.load().remote.isEmpty
                     checks["imageFailureKeepsOriginalSSH"] = !terminal.ended && group.isAvailable
                 } catch { checks["clipboardImageUpload"] = false }
                 workspace.showFiles(); files = workspace.fileWindows.first

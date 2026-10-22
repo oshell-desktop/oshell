@@ -73,7 +73,7 @@ enum ShellIntegrationTest {
         let tab = TerminalTab(pane), strip = TabStripView()
         pane.sshConnectionGroup?.transportPeer = SSHTransportPeer(address: "192.0.2.10", port: 2222)
         strip.update(tabs: [tab], selected: tab)
-        let tooltip = strip.items.first?.selectButton.toolTip ?? ""
+        let tooltip = strip.items.first?.hoverDetail ?? ""
         checks["tabOnlyShowsNumberAndHostname"] = strip.items.first?.selectButton.title == "1  outer-real"
         checks["tooltipGroupsHostAndConnection"] = tooltip.contains("当前主机\n主机名：outer-real\n主机 IP：10.20.0.1") && tooltip.contains("初始 SSH 连接\n会话：集成\n配置地址：192.0.2.1\n端口：22")
         checks["tooltipSeparatesObservedPeer"] = tooltip.contains("实际连接 IP：192.0.2.10\n实际连接端口：2222")

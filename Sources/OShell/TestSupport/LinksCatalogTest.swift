@@ -225,6 +225,14 @@ enum LinksCatalogTest {
                 press(root, "取消")
             }
             workspace.editSavedSessionLink(link.id)
+            nextModal { root in
+                var changed = workspace.configuration
+                changed.sessionLinks.entries.removeAll { $0.id == link.id }
+                workspace.receiveConfiguration(changed)
+                press(root, "保存")
+            }
+            workspace.editSavedSessionLink(link.id)
+            checks["deletedReferenceNotResurrectedByStaleEditor"] = !workspace.configuration.sessionLinks.entries.contains { $0.id == link.id }
         }
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
         if let path = ProcessInfo.processInfo.environment["OSHELL_LINKS_CATALOG_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path)) }

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 OShell contributors
 
 import AppKit
+import QuartzCore
 import OShellCore
 
 enum ToolbarActionsTest {
@@ -19,7 +20,8 @@ enum ToolbarActionsTest {
         func press(_ root: NSView, _ title: String) { descendants(root).compactMap { $0 as? NSButton }.first { $0.title == title }?.performClick(nil) }
         checks["disabledCurrentWithoutSession"] = !workspace.currentPropertiesButton.isEnabled
         checks["disabledSplitWithoutSession"] = !workspace.splitButton.isEnabled
-        checks["syncButtonAvailableWithoutSession"] = workspace.syncStatusButton.isEnabled && workspace.syncStatusButton.image != nil && workspace.syncStatusButton.action == #selector(WorkspaceController.showSyncPreferences)
+        checks["syncButtonAvailableWithoutSession"] = workspace.syncStatusButton.isEnabled && workspace.syncStatusButton.image != nil && workspace.syncStatusButton.action == #selector(WorkspaceController.showSyncStatus)
+        checks.merge(syncRingChecks(workspace)) { _, new in new }
         checks["updateButtonWired"] = workspace.updateButton.action == #selector(WorkspaceController.checkForUpdates) && workspace.updateButton.target === workspace && workspace.updateButton.image != nil
         checks["updateEnabledWithoutSession"] = workspace.updateButton.isEnabled
         checks["defaultsAvailableWithoutSession"] = workspace.defaultPropertiesButton.isEnabled
@@ -81,4 +83,40 @@ enum ToolbarActionsTest {
         if let path = ProcessInfo.processInfo.environment["OSHELL_TOOLBAR_ACTIONS_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path)) }
         print(report); workspace.shutdown(); NSApp.terminate(nil)
     }
+    private static func syncRingChecks(_ workspace: WorkspaceController) -> [String: Bool] {
+        var checks = [String: Bool]()
+        let button = workspace.syncStatusButton, saved = button.presentation
+        defer { button.presentation = saved }
+        workspace.window?.contentView?.layoutSubtreeIfNeeded()
+        guard let ring = button.layer?.sublayers?.first(where: { $0.name == "sync.progress.ring" }) as? CAShapeLayer else { return ["syncRingExists": false] }
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        button.presentation = .init(enabled: true, phase: .reading)
+        checks["syncReadingShowsOuterRing"] = !ring.isHidden && ring.strokeEnd == 0.28
+        checks["syncRingFitsButton"] = button.bounds.contains(ring.frame) && ring.bounds.width >= 16
+        checks["syncRingHonorsMotionSetting"] = (ring.animation(forKey: "sync.rotation") != nil) != reduceMotion
+        let began = ring.animation(forKey: "sync.rotation")?.beginTime
+        button.presentation = .init(enabled: true, phase: .writing)
+        button.presentation = .init(enabled: true, phase: .applying)
+        checks["syncStagesKeepContinuousAnimation"] = ring.animation(forKey: "sync.rotation")?.beginTime == began && !ring.isHidden
+        button.isHidden = true
+        checks["hiddenToolbarStopsAnimation"] = ring.animation(forKey: "sync.rotation") == nil
+        button.isHidden = false
+        checks["visibleToolbarResumesAnimation"] = (ring.animation(forKey: "sync.rotation") != nil) != reduceMotion
+        button.presentation = .init(enabled: true, phase: .success)
+        let completion = ring.animation(forKey: "sync.complete")
+        checks["syncSuccessCompletesRing"] = ring.strokeEnd == 1 && ring.animation(forKey: "sync.rotation") == nil && completion != nil
+        checks["syncSuccessRingExpires"] = (completion?.beginTime ?? 0) > CACurrentMediaTime() && (completion?.duration ?? 1) <= 0.25 && ring.opacity == 0
+        button.presentation = .init(enabled: true, phase: .success)
+        checks["syncSuccessRefreshDoesNotRestartFlash"] = ring.animation(forKey: "sync.complete")?.beginTime == completion?.beginTime
+        for phase in [WebDAVSync.Phase.failed, .conflict, .cancelled, .idle, .queued] {
+            button.presentation = .init(enabled: true, phase: phase)
+            checks["syncRingStops.\(phase)"] = ring.isHidden && (ring.animationKeys() ?? []).isEmpty
+        }
+        button.presentation = .init(enabled: true, locked: true, phase: .reading)
+        checks["lockedSyncDoesNotAnimate"] = ring.isHidden && (ring.animationKeys() ?? []).isEmpty
+        button.presentation = .init(enabled: false, phase: .reading)
+        checks["disabledSyncDoesNotAnimate"] = ring.isHidden && (ring.animationKeys() ?? []).isEmpty
+        return checks
+    }
+
 }
