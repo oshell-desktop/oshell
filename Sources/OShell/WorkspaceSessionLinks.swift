@@ -237,18 +237,41 @@ extension WorkspaceController {
     }
     func addSavedSessionLink(profile: SessionProfile? = nil, folder: String = "") {
         if let profile { addLinkToRoot(profile); return }
-        let profiles = SessionCatalogPresentation.visibleConfiguration(configuration).profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        guard !profiles.isEmpty else { return }
+        let catalog = SessionCatalogPresentation.visibleConfiguration(configuration)
+        guard !catalog.profiles.isEmpty else { return }
         let alert = PopupAlert(); alert.messageText = "选择要添加的会话"
-        alert.informativeText = "使用原会话名称直接添加到 /Links。"
+        alert.informativeText = "按目录查找或搜索会话，使用原名称添加到 /Links。"
         alert.addButton(withTitle: "添加"); alert.addButton(withTitle: "取消")
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 440, height: 82))
-        let source = SessionLinkSourcePicker(frame: NSRect(x: 0, y: 54, width: 440, height: 28), pullsDown: false)
-        populateLinkSources(source, profiles: profiles)
-        source.detail.frame = NSRect(x: 4, y: 0, width: 432, height: 42)
-        accessory.addSubview(source); accessory.addSubview(source.detail)
-        alert.accessoryView = accessory
-        guard alert.runModal() == .alertFirstButtonReturn, let id = source.selectedItem?.representedObject as? UUID,
+        alert.buttons[0].isEnabled = false
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 356))
+        let source = SessionSidebar(selectionOnly: true)
+        source.frame = NSRect(x: 0, y: 56, width: 520, height: 300)
+        let detail = NSTextField(wrappingLabelWithString: "选择会话后可查看连接信息；双击或按回车添加。")
+        detail.identifier = .init("session.link.sourceDetail")
+        detail.font = .systemFont(ofSize: 11); detail.textColor = .secondaryLabelColor
+        detail.maximumNumberOfLines = 2; detail.lineBreakMode = .byTruncatingMiddle
+        detail.frame = NSRect(x: 8, y: 0, width: 504, height: 44)
+        let profiles = Dictionary(catalog.profiles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        source.onSelection = { [weak alert, weak detail] id in
+            guard let id, let profile = profiles[id] else {
+                alert?.buttons.first?.isEnabled = false
+                detail?.stringValue = "展开目录并选择会话；目录本身不能添加为会话引用。"
+                detail?.toolTip = nil; return
+            }
+            alert?.buttons.first?.isEnabled = true
+            let endpoint = profile.kind == .local ? "本地终端" : profile.host + ":" + String(profile.port)
+            detail?.stringValue = profile.kind.title + " · " + endpoint + (profile.username.isEmpty ? "" : " · 用户：" + profile.username) + "\n目录：" + SessionDirectory.display(profile.group)
+            detail?.toolTip = detail?.stringValue
+        }
+        source.onOpen = { [weak alert] _ in
+            guard let alert, NSApp.modalWindow === alert.window, alert.buttons.first?.isEnabled == true else { return }
+            NSApp.stopModal(withCode: .alertFirstButtonReturn)
+        }
+        source.reload(catalog)
+        defer { source.dispose() }
+        accessory.addSubview(source); accessory.addSubview(detail)
+        alert.accessoryView = accessory; alert.window.initialFirstResponder = source.search
+        guard alert.runModal() == .alertFirstButtonReturn, let id = source.selectedProfileID,
               let profile = configuration.profiles.first(where: { $0.id == id }) else { return }
         addLinkToRoot(profile)
     }

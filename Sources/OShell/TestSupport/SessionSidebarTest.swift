@@ -101,29 +101,39 @@ enum SessionSidebarTest {
         edit(apply: true)
         checks["customShortcutSavedLocally"] = SessionSidebarPreferences.shortcuts(KeyboardShortcuts()).action(for: custom) == .sessionSidebar
         checks["shortcutNotInSharedConfiguration"] = workspace.configuration.preferences.keyboardShortcuts.overrides[ShortcutAction.sessionSidebar.rawValue] == nil && (try? workspace.store.load().preferences.keyboardShortcuts.overrides[ShortcutAction.sessionSidebar.rawValue]) == nil
-        // The isolated test app must own focus after closing the settings modal.
+        // Return to AppKit's event loop after the settings modal closes so
+        // activation/key-window events are delivered before testing shortcuts.
         NSApp.activate(ignoringOtherApps: true)
         workspace.window?.makeKeyAndOrderFront(nil)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command,.option], timestamp: 0, windowNumber: workspace.window!.windowNumber, context: nil, characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11) {
-            let visible = workspace.sessionSidebarVisible
-            checks["shortcutWindowIsKey"] = workspace.window!.isKeyWindow
-            checks["shortcutModalDismissed"] = NSApp.modalWindow == nil
-            checks["shortcutEffectiveBinding"] = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: KeyboardShortcut(event: event)) == .sessionSidebar
-            checks["shortcutActionAvailable"] = workspace.validateMenuItem(NSMenuItem(title: "", action: ShortcutAction.sessionSidebar.selector, keyEquivalent: ""))
-            checks["windowShortcutHandled"] = workspace.window!.performKeyEquivalent(with: event)
-            checks["windowShortcutTogglesSidebar"] = workspace.sessionSidebarVisible != visible
+        func finish() {
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command,.option], timestamp: 0, windowNumber: workspace.window!.windowNumber, context: nil, characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11) {
+                let visible = workspace.sessionSidebarVisible
+                checks["shortcutWindowIsKey"] = workspace.window!.isKeyWindow
+                checks["shortcutModalDismissed"] = NSApp.modalWindow == nil
+                checks["shortcutEffectiveBinding"] = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: KeyboardShortcut(event: event)) == .sessionSidebar
+                checks["shortcutActionAvailable"] = workspace.validateMenuItem(NSMenuItem(title: "", action: ShortcutAction.sessionSidebar.selector, keyEquivalent: ""))
+                checks["windowShortcutHandled"] = workspace.window!.performKeyEquivalent(with: event)
+                checks["windowShortcutTogglesSidebar"] = workspace.sessionSidebarVisible != visible
+            }
+            var conflicts = KeyboardShortcuts(); conflicts.overrides[ShortcutAction.newBlank.rawValue] = .init(defaultKey)
+            SessionSidebarPreferences.saveShortcut(nil)
+            checks["existingCustomKeyTakesPriority"] = SessionSidebarPreferences.shortcuts(conflicts).action(for: defaultKey) == .newBlank
+            var renamed = workspace.configuration; renamed.profiles[0].name = "Renamed fixture"; workspace.receiveConfiguration(renamed)
+            filter("Renamed"); checks["configurationRefreshIsLive"] = items().contains { $0.title == "Renamed fixture" }
+            renamed.profiles.removeAll { $0.id == a.id }; workspace.receiveConfiguration(renamed)
+            checks["deletedTargetsDisappear"] = !items().contains { $0.profileID == a.id }
+            let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "foreground": ["active": NSApp.isActive, "visible": workspace.window?.isVisible == true, "canBecomeKey": workspace.window?.canBecomeKey == true, "keyWindow": NSApp.keyWindow?.title ?? "none"]]
+            if let path = ProcessInfo.processInfo.environment["OSHELL_SIDEBAR_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted,.sortedKeys]).write(to: URL(fileURLWithPath: path)) }
+            workspace.shutdown(); NSApp.terminate(nil)
         }
-        var conflicts = KeyboardShortcuts(); conflicts.overrides[ShortcutAction.newBlank.rawValue] = .init(defaultKey)
-        SessionSidebarPreferences.saveShortcut(nil)
-        checks["existingCustomKeyTakesPriority"] = SessionSidebarPreferences.shortcuts(conflicts).action(for: defaultKey) == .newBlank
-        var renamed = workspace.configuration; renamed.profiles[0].name = "Renamed fixture"; workspace.receiveConfiguration(renamed)
-        filter("Renamed"); checks["configurationRefreshIsLive"] = items().contains { $0.title == "Renamed fixture" }
-        renamed.profiles.removeAll { $0.id == a.id }; workspace.receiveConfiguration(renamed)
-        checks["deletedTargetsDisappear"] = !items().contains { $0.profileID == a.id }
-        let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
-        if let path = ProcessInfo.processInfo.environment["OSHELL_SIDEBAR_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted,.sortedKeys]).write(to: URL(fileURLWithPath: path)) }
-        workspace.shutdown(); NSApp.terminate(nil)
+        let focusDeadline = Date().addingTimeInterval(30)
+        func awaitForeground() {
+            guard workspace.window?.isKeyWindow != true, Date() < focusDeadline else { finish(); return }
+            NSApp.activate(ignoringOtherApps: true)
+            workspace.window?.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: awaitForeground)
+        }
+        DispatchQueue.main.async(execute: awaitForeground)
     }
     private static func contextChecks(_ workspace: WorkspaceController) -> [String: Bool] {
         var checks = [String: Bool]()

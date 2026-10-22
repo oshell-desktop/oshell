@@ -184,24 +184,40 @@ enum LinksCatalogTest {
         var pickerConfig = workspace.configuration; pickerConfig.profiles += choices
         checks["pickerFixturesSaved"] = workspace.saveConfiguration(pickerConfig)
         let expectedIDs = Set(workspace.configuration.profiles.map(\.id))
+        let tabsBeforePicker = workspace.tabs.count
         for choice in choices {
             nextModal { root in
-                guard let picker = descendants(root).compactMap({ $0 as? NSPopUpButton }).first(where: { $0.identifier?.rawValue == "session.link.source" }) else { checks["pickerExists"] = false; press(root, "取消"); return }
-                checks["pickerRetainsEveryUUID"] = picker.numberOfItems == expectedIDs.count && Set(picker.itemArray.compactMap { $0.representedObject as? UUID }) == expectedIDs
-                guard let index = picker.itemArray.firstIndex(where: { $0.representedObject as? UUID == choice.id }) else { checks["pickerChoicePresent"] = false; press(root, "取消"); return }
-                let item = picker.item(at: index)!
-                checks["pickerCompactTypeAndName-" + choice.id.uuidString] = item.title == choice.name && item.image?.accessibilityDescription?.contains(choice.kind.title) == true
-                picker.selectItem(at: index)
-                if let action = picker.action { _ = NSApp.sendAction(action, to: picker.target, from: picker) }
+                guard let picker = descendants(root).compactMap({ $0 as? SessionSidebar }).first else { checks["pickerExists"] = false; press(root, "取消"); return }
+                let tree = picker.outline
+                checks["pickerInitiallyRequiresSelection"] = picker.selectedProfileID == nil && descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "添加" }?.isEnabled == false
+                tree.expandItem(nil, expandChildren: true)
+                let nodes = (0..<tree.numberOfRows).compactMap { tree.item(atRow: $0) as? SessionSidebar.Node }
+                checks["pickerRetainsEveryUUID"] = nodes.filter { $0.profileID != nil }.count == expectedIDs.count && Set(nodes.compactMap(\.profileID)) == expectedIDs
+                if let folderRow = (0..<tree.numberOfRows).first(where: { (tree.item(atRow: $0) as? SessionSidebar.Node)?.directory == "Picker" }) {
+                    tree.selectRowIndexes(IndexSet(integer: folderRow), byExtendingSelection: false)
+                    checks["folderCannotBeAdded"] = descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "添加" }?.isEnabled == false && picker.selectedProfileID == nil
+                }
+                picker.search.stringValue = "Picker duplicate"
+                picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+                checks["searchKeepsDirectoryHierarchy"] = (0..<tree.numberOfRows).contains { (tree.item(atRow: $0) as? SessionSidebar.Node)?.directory == "Picker" }
+                guard let row = (0..<tree.numberOfRows).first(where: { (tree.item(atRow: $0) as? SessionSidebar.Node)?.profileID == choice.id }) else { checks["pickerChoicePresent"] = false; press(root, "取消"); return }
+                let node = tree.item(atRow: row) as! SessionSidebar.Node
+                checks["pickerCompactTypeAndName-" + choice.id.uuidString] = node.title == choice.name && node.kind == choice.kind && !node.isLink
+                tree.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 let detail = input(root, "session.link.sourceDetail")
                 checks["pickerDetailsFollowSelection-" + choice.id.uuidString] = detail?.stringValue.contains(choice.kind.title + " · " + choice.host + ":" + String(choice.port)) == true && detail?.stringValue.contains("/Picker") == true
                 root.layoutSubtreeIfNeeded()
                 checks["pickerDetailsWithinDialog-" + choice.id.uuidString] = detail.map { root.bounds.contains($0.convert($0.bounds, to: root)) } == true
-                press(root, "添加")
+                if choice.id == pickerSFTP.id { picker.activateSelected() }
+                else { press(root, "添加") }
             }
             workspace.addSavedSessionLink()
             checks["pickerAddsCorrectUUID-" + choice.id.uuidString] = workspace.configuration.sessionLinks.entries.contains { $0.profileID == choice.id && $0.folder.isEmpty }
         }
+        checks["pickerDoesNotOpenConnection"] = workspace.tabs.count == tabsBeforePicker
+        let linksBeforeCancel = workspace.configuration.sessionLinks.entries
+        nextModal { root in press(root, "取消") }; workspace.addSavedSessionLink()
+        checks["pickerCancelDoesNotCreateReference"] = workspace.configuration.sessionLinks.entries == linksBeforeCancel
         if let link = workspace.configuration.sessionLinks.entries.first(where: { $0.profileID == pickerSFTP.id }) {
             nextModal { root in
                 let picker = descendants(root).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "session.link.source" }

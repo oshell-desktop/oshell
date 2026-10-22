@@ -46,6 +46,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             else { super.keyDown(with: event) }
         }
     }
+    private let selectionOnly: Bool
     private var actions: SessionManager?
     private let tree = Outline()
     var outline: NSOutlineView { tree }
@@ -54,7 +55,10 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     private let root = Node(key: "root", title: "", metadata: "")
     private var nodes = [String: Node](), expanded = Set<String>(), filtering = false
     var onOpen: ((UUID) -> Void)?, onHide: (() -> Void)?, onManage: (() -> Void)?
-    init() {
+    var onSelection: ((UUID?) -> Void)?
+    var selectedProfileID: UUID? { (tree.item(atRow: tree.selectedRow) as? Node)?.profileID }
+    init(selectionOnly: Bool = false) {
+        self.selectionOnly = selectionOnly
         super.init(frame: .zero)
         let heading = NSTextField(labelWithString: "会话"); heading.font = .systemFont(ofSize: 13, weight: .semibold)
         func headerButton(_ symbol: String, label: String, action: Selector, identifier: String) -> NSButton {
@@ -73,7 +77,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         let hide = headerButton("chevron.left", label: "隐藏会话列表", action: #selector(hideSidebar), identifier: "sidebar.session.hide")
         let header = NSStackView(views: [heading, NSView(), manage, hide]); header.spacing = 4
         search.placeholderString = "搜索会话、主机或目录"; search.delegate = self
-        search.identifier = .init("sidebar.session.search"); search.setAccessibilityLabel("搜索会话列表")
+        search.identifier = .init(selectionOnly ? "session.link.sourceSearch" : "sidebar.session.search"); search.setAccessibilityLabel("搜索会话列表")
         let expand = NSButton(title: "全部展开", target: self, action: #selector(expandAll))
         let collapse = NSButton(title: "全部收缩", target: self, action: #selector(collapseAll))
         for button in [expand, collapse] { button.bezelStyle = .rounded; button.controlSize = .small; button.font = .systemFont(ofSize: 11) }
@@ -82,18 +86,21 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         collapse.toolTip = "收缩所有目录；搜索时仅操作当前结果"
         let treeActions = NSStackView(views: [expand, collapse, NSView()]); treeActions.spacing = 6
         let column = NSTableColumn(identifier: .init("session")); column.width = 240
-        tree.addTableColumn(column); tree.outlineTableColumn = column; tree.headerView = nil; tree.rowHeight = 28; tree.allowsMultipleSelection = true
+        tree.addTableColumn(column); tree.outlineTableColumn = column; tree.headerView = nil; tree.rowHeight = 28; tree.allowsMultipleSelection = !selectionOnly
         tree.indentationPerLevel = 14; tree.dataSource = self; tree.delegate = self; tree.target = self; tree.doubleAction = #selector(activateClicked)
         tree.onReturn = { [weak self] in self?.activateSelected() }
         tree.makeContextMenu = { [weak self] row in self?.contextMenu(for: row) }
-        tree.setAccessibilityLabel("会话目录树"); tree.identifier = .init("sidebar.session.tree")
+        tree.setAccessibilityLabel("会话目录树"); tree.identifier = .init(selectionOnly ? "session.link.sourceTree" : "sidebar.session.tree")
         if #available(macOS 11, *) { tree.style = .plain }
         let scroll = NSScrollView(); scroll.documentView = tree; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabelColor
-        for view in [header, search, treeActions, scroll, status] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        let components: [NSView] = (selectionOnly ? [] : [header]) + [search, treeActions, scroll, status]
+        for view in components { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        if !selectionOnly {
+            NSLayoutConstraint.activate([header.topAnchor.constraint(equalTo: topAnchor, constant: 8), header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), header.heightAnchor.constraint(equalToConstant: 26)])
+        }
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 8), header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), header.heightAnchor.constraint(equalToConstant: 26),
-            search.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6), search.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), search.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), search.heightAnchor.constraint(equalToConstant: 24),
+            search.topAnchor.constraint(equalTo: selectionOnly ? topAnchor : header.bottomAnchor, constant: selectionOnly ? 8 : 6), search.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), search.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), search.heightAnchor.constraint(equalToConstant: 24),
             treeActions.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 6), treeActions.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), treeActions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), treeActions.heightAnchor.constraint(equalToConstant: 22),
             scroll.topAnchor.constraint(equalTo: treeActions.bottomAnchor, constant: 6), scroll.leadingAnchor.constraint(equalTo: leadingAnchor), scroll.trailingAnchor.constraint(equalTo: trailingAnchor), scroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
             status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8), status.heightAnchor.constraint(equalToConstant: 18)
@@ -119,7 +126,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             nodes[node.key] = node; directories[SessionDirectory.normalize(profile.group)]?.children.append(node)
         }
         let profiles = Dictionary(uniqueKeysWithValues: configuration.profiles.map { ($0.id, $0) })
-        for link in configuration.sessionLinks.entries {
+        for link in selectionOnly ? [] : configuration.sessionLinks.entries {
             guard let profile = profiles[link.profileID] else { continue }
             let path = SessionLinks.directory(for: link.folder)
             let node = Node(key: "l:"+link.id.uuidString, title: link.name, metadata: SessionSearchQuery.metadata(profile)+" "+SessionSearchQuery.normalize(link.name+" "+SessionDirectory.display(path)), profileID: profile.id, isLink: true, linkID: link.id, kind: profile.kind)
@@ -139,6 +146,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     }
     func controlTextDidChange(_ notification: Notification) { rememberExpanded(); filter(preserving: nil) }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selectionOnly && textView.hasMarkedText() { return false }
         if selector == #selector(NSResponder.moveDown(_:)) { if tree.numberOfRows > 0 { tree.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false); window?.makeFirstResponder(tree) }; return true }
         if selector == #selector(NSResponder.insertNewline(_:)) {
             if let row = (0..<tree.numberOfRows).first(where: { (tree.item(atRow: $0) as? Node)?.profileID != nil }) { tree.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false); activateSelected() }
@@ -162,8 +170,10 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         if filtering { tree.expandItem(nil, expandChildren: true) }
         else { for key in expanded.sorted(by: { $0.count < $1.count }) { if let node = nodes[key] { tree.expandItem(node) } } }
         if let selected, let node = nodes[selected], tree.row(forItem: node) >= 0 { tree.selectRowIndexes(IndexSet(integer: tree.row(forItem: node)), byExtendingSelection: false) }
-        status.stringValue = query.isValid ? (count == 0 ? "没有匹配的会话" : "\(count) 个会话 / 快捷引用") : "搜索内容过长，请缩短关键词"
+        onSelection?(selectedProfileID)
+        status.stringValue = query.isValid ? (count == 0 ? "没有匹配的会话" : (selectionOnly ? "\(count) 个会话" : "\(count) 个会话 / 快捷引用")) : "搜索内容过长，请缩短关键词"
     }
+    func outlineViewSelectionDidChange(_ notification: Notification) { onSelection?(selectedProfileID) }
     @objc private func activateClicked() {
         guard tree.clickedRow >= 0 else { return }
         tree.selectRowIndexes(IndexSet(integer: tree.clickedRow), byExtendingSelection: false); activateSelected()
@@ -224,7 +234,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             let row = tree.row(forItem: node); tree.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false); tree.scrollRowToVisible(row)
         }
     }
-    func dispose() { actions = nil; tree.makeContextMenu = nil; tree.delegate = nil; tree.dataSource = nil; tree.onReturn = nil; search.delegate = nil; onOpen = nil; onHide = nil; onManage = nil }
+    func dispose() { actions = nil; tree.makeContextMenu = nil; tree.delegate = nil; tree.dataSource = nil; tree.onReturn = nil; search.delegate = nil; onOpen = nil; onHide = nil; onManage = nil; onSelection = nil }
 }
 
 extension WorkspaceController {
