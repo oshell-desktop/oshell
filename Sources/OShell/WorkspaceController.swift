@@ -31,6 +31,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     var sessionSidebarVisible = SessionSidebarPreferences.visible
     weak var sidebarContainer: NSView?
     var sidebarWidth: NSLayoutConstraint?
+    var isDeepFocus = false
     var isFocusFullscreen = false
     var focusFullscreenRequested = false
     var fullscreenTransitionInProgress = false
@@ -208,7 +209,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         tabGroupButton.toolTip = "新建、命名和显示/隐藏标签组；隐藏不会断开连接"
         let tools = NSPopUpButton(frame: .zero, pullsDown: true); tools.bezelStyle = .texturedRounded
         let toolsMenu = NSMenu(); toolsMenu.addItem(withTitle: "工具", action: nil, keyEquivalent: "")
-        for (title, action) in [("会话列表", #selector(toggleSessionSidebar)), ("专注全屏", #selector(toggleFocusFullscreen)), ("快捷链接栏", #selector(toggleSessionLinkBar)), ("快速发送栏", #selector(toggleQuickSendBar)), ("撰写窗", #selector(toggleComposer)), ("同步输入…", #selector(configureSyncInput)), ("停止同步输入", #selector(stopSyncInput)), ("快速命令管理器…", #selector(showQuickCommands)), ("文件管理…", #selector(showFiles)), ("突出显示集…", #selector(showHighlights))] {
+        for (title, action) in [("会话列表", #selector(toggleSessionSidebar)), ("专注全屏", #selector(toggleFocusFullscreen)), ("全心专注", #selector(toggleDeepFocus)), ("快捷链接栏", #selector(toggleSessionLinkBar)), ("快速发送栏", #selector(toggleQuickSendBar)), ("撰写窗", #selector(toggleComposer)), ("同步输入…", #selector(configureSyncInput)), ("停止同步输入", #selector(stopSyncInput)), ("快速命令管理器…", #selector(showQuickCommands)), ("文件管理…", #selector(showFiles)), ("突出显示集…", #selector(showHighlights))] {
             toolsMenu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
         }
         tools.menu = toolsMenu
@@ -482,15 +483,17 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     }
     private func rebuildQuickLinks() {
         rebuildSessionLinkBar()
+        let catalog = SessionCatalogPresentation.visibleConfiguration(configuration)
         func populate(_ menu: NSMenu, directory: String) {
-            let profiles = configuration.profiles.filter(\.quickConnect)
-            for child in SessionDirectory.all(configuration) where SessionDirectory.parent(child) == directory && profiles.contains(where: { SessionDirectory.contains($0.group, in: child) }) {
+            let profiles = catalog.profiles.filter(\.quickConnect)
+            for child in SessionDirectory.all(catalog) where SessionDirectory.parent(child) == directory && profiles.contains(where: { SessionDirectory.contains($0.group, in: child) }) {
                 let item = NSMenuItem(title: String(child.split(separator: "/").last!), action: nil, keyEquivalent: "")
-                item.image = NSImage(oshellSymbolName: "folder", accessibilityDescription: nil)
+                item.image = (child == SessionLinks.rootDirectory ? SessionListIcon.linksDirectory : .directory).menuImage()
                 let submenu = NSMenu(); item.submenu = submenu; menu.addItem(item); populate(submenu, directory: child)
             }
             for profile in profiles.filter({ $0.group == directory }).sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) {
                 let item = NSMenuItem(title: profile.name + " · " + profile.kind.title, action: #selector(connectQuick(_:)), keyEquivalent: "")
+                item.image = SessionListIcon.session(profile.kind, shortcut: false).menuImage()
                 item.target = self; item.representedObject = profile.id; item.toolTip = profile.host; menu.addItem(item)
             }
         }
@@ -711,6 +714,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         for tab in tabs {
             let panes = tab.layout.panes
             for pane in panes {
+                pane.setHeaderHidden(isDeepFocus || panes.count < 2)
                 pane.closeButton.isHidden = panes.count < 2
                 pane.setSelected(tab === selectedTab && pane === tab.activePane, showFocusIndicator: visibleCount > 1)
             }
@@ -956,6 +960,11 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         } else { window?.title = tabs.isEmpty ? "OShell" : "\(tabs.count) 个标签 · \(panes.count) 个终端 · 当前无活动标签 — OShell"; recordButton.title = "记录"; recordButton.isEnabled = false }
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleDeepFocus) {
+            menuItem.title = isDeepFocus ? "退出全心专注" : "全心专注"
+            menuItem.state = isDeepFocus ? .on : .off
+            return isSecurityUnlocked && window?.attachedSheet == nil && NSApp.modalWindow == nil
+        }
         if menuItem.action == #selector(toggleFocusFullscreen) {
             menuItem.title = focusFullscreenRequested || isFocusFullscreen ? "退出专注全屏" : "专注全屏"
             menuItem.state = isFocusFullscreen ? .on : .off
@@ -979,7 +988,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         if menuItem.action == #selector(showCurrentSessionProperties) { return selectedTab?.activePane.canEditLiveKeepAlive == true }
         if menuItem.action == #selector(toggleSessionSidebar) { menuItem.state = sessionSidebarVisible ? .on : .off; return isSecurityUnlocked && !isFocusFullscreen && NSApp.modalWindow == nil }
         if menuItem.action == #selector(toggleSessionLinkBar) { menuItem.state = configuration.sessionLinks.visible ? .on : .off; return true }
-        if menuItem.action == #selector(toggleQuickSendBar) { menuItem.state = quickSendBar.isHidden ? .off : .on; return true }
+        if menuItem.action == #selector(toggleQuickSendBar) { menuItem.state = quickSendBar.isHidden ? .off : .on; return !isDeepFocus }
         if menuItem.action == #selector(changeArrangement(_:)) {
             menuItem.state = customTabLayout == nil && menuItem.tag == arrangement.rawValue ? .on : .off
             return !tabs.isEmpty || customTabLayout != nil
@@ -1093,7 +1102,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         sessionManager?.reload(); commandManager?.reload(); highlightManager?.reload(); refreshSessionSidebar()
         if preferencesChanged {
             tabs.flatMap { $0.layout.panes }.forEach { $0.apply(value.preferences) }
-            quickSendBar.isHidden = !value.preferences.quickSendBarVisible
+            quickSendBar.isHidden = isDeepFocus || !value.preferences.quickSendBarVisible
             quickSendHeight.constant = quickSendBar.isHidden ? 0 : 36
         }
         refreshQuickSendBar(); refreshSelection()

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 OShell contributors
 import AppKit
+import OShellCore
 
 struct FocusFullscreenWindowState {
     let titleVisibility: NSWindow.TitleVisibility
@@ -9,6 +10,25 @@ struct FocusFullscreenWindowState {
 }
 
 extension WorkspaceController {
+    // Native-only window action; never add an unsupported action to the shared schema.
+    static let deepFocusShortcut = KeyboardShortcut(3, KeyboardShortcut.command | KeyboardShortcut.control | KeyboardShortcut.shift)
+    @objc func toggleDeepFocus() {
+        guard isSecurityUnlocked, window?.attachedSheet == nil, NSApp.modalWindow == nil else { return }
+        isDeepFocus.toggle()
+        if isDeepFocus { requestFocusFullscreen(true) }
+        refreshFocusContentChrome()
+        selectedTab?.activePane.activate()
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+    private func refreshFocusContentChrome() {
+        for tab in tabs {
+            let panes = tab.layout.panes
+            panes.forEach { $0.setHeaderHidden(isDeepFocus || panes.count < 2) }
+        }
+        quickSendBar.isHidden = isDeepFocus || !configuration.preferences.quickSendBarVisible
+        quickSendHeight?.constant = quickSendBar.isHidden ? 0 : 36
+    }
+
     @objc func toggleFocusFullscreen() { requestFocusFullscreen(!focusFullscreenRequested) }
     func requestFocusFullscreen(_ enabled: Bool) {
         guard isSecurityUnlocked, window?.attachedSheet == nil, NSApp.modalWindow == nil else { return }
@@ -35,6 +55,8 @@ extension WorkspaceController {
                 buttons: types.map { ($0, window.standardWindowButton($0)?.isHidden ?? false) })
         }
         isFocusFullscreen = enabled
+        if !enabled { isDeepFocus = false }
+        refreshFocusContentChrome()
         refreshSessionSidebar()
         normalWorkspaceTop?.isActive = !enabled; focusWorkspaceTop?.isActive = enabled
         topToolbar?.isHidden = enabled; topDivider?.isHidden = enabled

@@ -77,6 +77,33 @@ enum SessionTitleSettingsTest {
             var defaultScope = SyncContentSelection(); defaultScope.clientSettings = true
             let projected = String(decoding: try SessionSyncConfiguration.data(workspace.configuration, selection: defaultScope), as: UTF8.self)
             checks["titlePolicyExcludedEvenWhenClientSettingsSync"] = !projected.contains("tab-title-settings") && !projected.contains("sessionName")
+            // Exercise live split/title updates through the real workspace and
+            // native tab strip, preserving the original local process.
+            let originalTitles = try SessionTitleSettings.load()
+            var noClosePrompt = originalTitles; noClosePrompt.confirmTabClose = false; try noClosePrompt.save()
+            guard let splitTab = workspace.tabs.first(where: { $0.layout.panes.contains(where: { $0 === live }) }) else { throw ModelError.invalid("Missing title test tab") }
+            workspace.select(splitTab); let singleTitle = live.title
+            workspace.splitVertical(); let second = splitTab.activePane
+            checks["sameTitleSplitsShowCount"] = splitTab.title == singleTitle + " ×2"
+            second.updateSessionTitleName("数据库"); second.applyTitleDisplayMode(.sessionName)
+            checks["differentSplitsShowBothTitles"] = splitTab.title == singleTitle + " | 数据库"
+            let stableTitle = splitTab.title
+            live.activate(); second.activate()
+            checks["focusDoesNotChangeGroupTitle"] = splitTab.title == stableTitle
+            workspace.splitHorizontal(); let third = splitTab.activePane
+            third.updateSessionTitleName("缓存"); third.applyTitleDisplayMode(.sessionName)
+            checks["manySplitsUseBoundedSummary"] = splitTab.title == stableTitle + " · +1"
+            checks["hoverListsAllSplitsAndCurrent"] = splitTab.splitTitleDetail.contains("缓存") && splitTab.splitTitleDetail.contains("3 个分屏") && splitTab.splitTitleDetail.contains("（当前分屏）")
+            let strip = views(workspace.window!.contentView!).compactMap { $0 as? TabStripView }.first { $0.items.contains { $0.id == splitTab.id } }
+            checks["nativeTabStripShowsAggregate"] = strip?.items.first { $0.id == splitTab.id }?.selectButton.title.contains(splitTab.title) == true
+            splitTab.zoom(third); workspace.rebuildWorkspace()
+            checks["zoomKeepsGroupTitle"] = splitTab.title == stableTitle + " · +1"
+            workspace.closeSessionPane(third)
+            checks["closeSplitUpdatesTitle"] = splitTab.title == stableTitle
+            workspace.closeSessionPane(second)
+            checks["lastPaneRestoresSingleTitle"] = splitTab.title == singleTitle && splitTab.layout.panes.count == 1
+            checks["splitTitleChangesKeepOriginalProcess"] = live.terminal.process.shellPid == pid && !live.isShutdown
+            try originalTitles.save()
             // Exercise the actual settings entry point without applying a draft.
             let close = Timer(timeInterval: 0.1, repeats: false) { _ in
                 guard let root = NSApp.modalWindow?.contentView, let tabs = views(root).compactMap({ $0 as? NSTabView }).first else { checks["settingsTabExists"] = false; NSApp.abortModal(); return }

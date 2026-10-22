@@ -152,6 +152,9 @@ extension WorkspaceController {
         arrangementItem.submenu = arrangements
         let fullscreen = menu.addItem(withTitle: isFocusFullscreen ? "退出专注全屏" : "专注全屏", action: #selector(toggleFocusFullscreen), keyEquivalent: "")
         fullscreen.target = self
+        let deepFocus = menu.addItem(withTitle: isDeepFocus ? "退出全心专注" : "全心专注", action: #selector(toggleDeepFocus), keyEquivalent: "")
+        deepFocus.target = self; deepFocus.state = isDeepFocus ? .on : .off
+        deepFocus.isEnabled = isSecurityUnlocked && window?.attachedSheet == nil && NSApp.modalWindow == nil
         if let tab, tab.layout.panes.count > 1 {
             menu.addItem(.separator())
             let zoom = menu.addItem(withTitle: tab.zoomedPane == nil ? "放大当前分屏" : "恢复分屏布局", action: #selector(togglePaneZoomFromTab(_:)), keyEquivalent: "")
@@ -197,15 +200,31 @@ extension WorkspaceController {
             _ = saveConfiguration(value)
         } catch { Dialogs.message("无法添加快捷链接：\(error.localizedDescription)") }
     }
+    private func populateLinkSources(_ source: NSPopUpButton, profiles: [SessionProfile]) {
+        source.identifier = .init("session.link.source")
+        source.lineBreakMode = .byTruncatingMiddle
+        source.menu = NSMenu()
+        for profile in profiles {
+            let endpoint = profile.kind == .local ? "" : " · " + profile.host + ":" + String(profile.port)
+            let title = "[" + profile.kind.title + "] " + profile.name + endpoint + " · " + SessionDirectory.display(profile.group)
+            // NSPopUpButton.addItem(withTitle:) removes an existing same-title
+            // item. Distinct UUIDs must remain selectable even with identical labels.
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = profile.id
+            item.toolTip = title + (profile.username.isEmpty ? "" : "\n用户：" + profile.username)
+            source.menu?.addItem(item)
+        }
+        if !profiles.isEmpty { source.selectItem(at: 0) }
+    }
     func addSavedSessionLink(profile: SessionProfile? = nil, folder: String = "") {
         if let profile { addLinkToRoot(profile); return }
-        let profiles = configuration.profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let profiles = SessionCatalogPresentation.visibleConfiguration(configuration).profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         guard !profiles.isEmpty else { return }
         let alert = PopupAlert(); alert.messageText = "选择要添加的会话"
         alert.informativeText = "使用原会话名称直接添加到 /Links。"
         alert.addButton(withTitle: "添加"); alert.addButton(withTitle: "取消")
         let source = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 440, height: 28))
-        for profile in profiles { source.addItem(withTitle: profile.name + " · " + profile.host); source.lastItem?.representedObject = profile.id }
+        populateLinkSources(source, profiles: profiles)
         alert.accessoryView = source
         guard alert.runModal() == .alertFirstButtonReturn, let id = source.selectedItem?.representedObject as? UUID,
               let profile = configuration.profiles.first(where: { $0.id == id }) else { return }
@@ -217,17 +236,14 @@ extension WorkspaceController {
         presentSessionLinkEditor(profile: profile, existing: link, initialFolder: link.folder)
     }
     private func presentSessionLinkEditor(profile: SessionProfile?, existing: SessionLink?, initialFolder: String) {
-        let profiles = profile.map { [$0] } ?? configuration.profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let profiles = profile.map { [$0] } ?? SessionCatalogPresentation.visibleConfiguration(configuration).profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         guard !profiles.isEmpty else { Dialogs.message("请先在会话管理中保存一个会话。"); return }
         let alert = PopupAlert(); alert.messageText = existing == nil ? "添加到快捷链接" : "快捷引用属性"
         alert.informativeText = "快捷引用统一保存在 /Links。原会话的位置、密码和连接配置保持不变；连接时读取原会话的最新配置。"
         alert.addButton(withTitle: existing == nil ? "添加" : "保存"); alert.addButton(withTitle: "取消")
         let source = NSPopUpButton(), name = NSTextField(string: existing?.name ?? profile?.name ?? "")
         name.placeholderString = "留空使用原会话名称"; name.identifier = .init("session.link.name")
-        for value in profiles {
-            source.addItem(withTitle: SessionDirectory.display(value.group) + "/" + value.name + " · " + value.host)
-            source.lastItem?.representedObject = value.id
-        }
+        populateLinkSources(source, profiles: profiles)
         source.isEnabled = profile == nil
         let folder = SessionDirectoryPicker(); folder.identifier = .init("session.link.directory")
         folder.configure(directories: [SessionLinks.rootDirectory] + configuration.sessionLinks.allFolders.map { SessionLinks.directory(for: $0) }, selected: SessionLinks.directory(for: initialFolder), rootDirectory: SessionLinks.rootDirectory)

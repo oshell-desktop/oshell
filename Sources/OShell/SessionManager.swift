@@ -408,7 +408,8 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     }
     func reload(select id: UUID? = nil) {
         cancelInlineRename()
-        guard let configuration = workspace?.configuration else { return }
+        guard let stored = workspace?.configuration else { return }
+        let configuration = SessionCatalogPresentation.visibleConfiguration(stored)
         let oldKeys = id.map { Set([$0.uuidString]) } ?? Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) ? key(rows[$0]) : nil })
         if sourceProfiles != configuration.profiles || sourceDirectories != configuration.directories || sourceLinks != configuration.sessionLinks.entries || sourceLinkFolders != configuration.sessionLinks.allFolders || metadata.count != configuration.profiles.count || allDirectories.isEmpty {
             sourceProfiles = configuration.profiles; sourceDirectories = configuration.directories
@@ -533,7 +534,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             case "directory": text = currentQuery.isEmpty ? "" : SessionDirectory.display(SessionDirectory.parent(directory))
             default: text = ""
             }
-            iconStyle = .directory
+            iconStyle = directory == SessionLinks.rootDirectory ? .linksDirectory : .directory
         case .session, .link:
             let profile = displayProfile(rows[row])!
             let shortcut: Bool

@@ -175,7 +175,7 @@ extension WorkspaceController {
             menu.addItem(.separator())
             for (index, tabID) in group.tabs.enumerated() {
                 guard let tab = tabs.first(where: { $0.id == tabID }) else { continue }
-                let item = menu.addItem(withTitle: "\(index + 1)  \(tab.activePane.title)" + (tab.hasUnreadOutput ? " ●" : ""), action: #selector(selectNamedGroupTab(_:)), keyEquivalent: "")
+                let item = menu.addItem(withTitle: "\(index + 1)  \(tab.title)" + (tab.hasUnreadOutput ? " ●" : ""), action: #selector(selectNamedGroupTab(_:)), keyEquivalent: "")
                 item.target = self; item.representedObject = tabID; item.state = tabID == group.active ? .on : .off
             }
         }

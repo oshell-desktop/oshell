@@ -91,6 +91,7 @@ extension WorkspaceController {
         refreshOperatorState(); window?.makeFirstResponder(composer.editor)
     }
     @objc func toggleQuickSendBar() {
+        guard !isDeepFocus else { return }
         var config = configuration; config.preferences.quickSendBarVisible.toggle()
         guard saveConfiguration(config) else { return }
         quickSendBar.isHidden = !configuration.preferences.quickSendBarVisible; quickSendHeight.constant = quickSendBar.isHidden ? 0 : 36
@@ -98,6 +99,7 @@ extension WorkspaceController {
         if quickSendBar.isHidden { selectedTab?.activePane.activate() } else { window?.makeFirstResponder(quickSendBar.field) }
     }
     @objc func focusQuickSendBar() {
+        guard !isDeepFocus else { return }
         if quickSendBar.isHidden { toggleQuickSendBar() }
         if !quickSendBar.isHidden { window?.makeFirstResponder(quickSendBar.field) }
     }

@@ -20,8 +20,13 @@ final class WorkspaceWindow: NSWindow {
             pane.searchPanel.hide(); return true
         }
         let shortcut = KeyboardShortcut(event: event)
-        guard workspace.isSecurityUnlocked, shortcut.isValid,
-              let action = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: shortcut) else { return false }
+        guard workspace.isSecurityUnlocked, shortcut.isValid else { return false }
+        let configured = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: shortcut)
+        if shortcut == WorkspaceController.deepFocusShortcut, configured == nil {
+            if !event.isARepeat { workspace.toggleDeepFocus() }
+            return true
+        }
+        guard let action = configured else { return false }
         if [.focusFullscreen, .sessionSidebar].contains(action) && event.isARepeat { return true }
         return workspace.dispatchShortcut(action)
     }

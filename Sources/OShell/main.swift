@@ -173,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(edit, "上一个匹配", #selector(WorkspaceController.findPreviousInTerminal), "g", [.command, .shift])
         let view = menu("视图")
         add(view, "专注全屏", #selector(WorkspaceController.toggleFocusFullscreen), "f", [.command, .control])
+        add(view, "全心专注", #selector(WorkspaceController.toggleDeepFocus), "f", [.command, .control, .shift])
         add(view, "新建标签组…", #selector(WorkspaceController.newNamedTabGroup))
         add(view, "显示全部标签组", #selector(WorkspaceController.showAllTabGroups))
         view.addItem(.separator())

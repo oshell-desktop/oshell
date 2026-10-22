@@ -174,6 +174,36 @@ enum LinksCatalogTest {
             view.layoutSubtreeIfNeeded()
             if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) { view.cacheDisplay(in: view.bounds, to: bitmap); try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path)) }
         }
+        // Same name/host used to collapse into one NSPopUpButton item. Include
+        // an entirely identical SSH label as well: identity is the UUID, not text.
+        let pickerSSH = SessionProfile(name: "Picker duplicate", group: "Picker", kind: .ssh, host: "picker.example.test", port: 22)
+        let pickerSFTP = SessionProfile(name: pickerSSH.name, group: pickerSSH.group, kind: .sftp, host: pickerSSH.host, port: 22)
+        let pickerFTP = SessionProfile(name: pickerSSH.name, group: pickerSSH.group, kind: .ftp, host: pickerSSH.host, port: 21)
+        var identicalSSH = pickerSSH; identicalSSH.id = UUID()
+        let choices = [pickerSSH, pickerSFTP, pickerFTP, identicalSSH]
+        var pickerConfig = workspace.configuration; pickerConfig.profiles += choices
+        checks["pickerFixturesSaved"] = workspace.saveConfiguration(pickerConfig)
+        let expectedIDs = Set(workspace.configuration.profiles.map(\.id))
+        for choice in choices {
+            nextModal { root in
+                guard let picker = descendants(root).compactMap({ $0 as? NSPopUpButton }).first(where: { $0.identifier?.rawValue == "session.link.source" }) else { checks["pickerExists"] = false; press(root, "取消"); return }
+                checks["pickerRetainsEveryUUID"] = picker.numberOfItems == expectedIDs.count && Set(picker.itemArray.compactMap { $0.representedObject as? UUID }) == expectedIDs
+                guard let index = picker.itemArray.firstIndex(where: { $0.representedObject as? UUID == choice.id }) else { checks["pickerChoicePresent"] = false; press(root, "取消"); return }
+                let item = picker.item(at: index)!
+                checks["pickerTypeAndLocation-" + choice.id.uuidString] = item.title.hasPrefix("[" + choice.kind.title + "] ") && item.title.contains(":" + String(choice.port)) && item.title.contains("/Picker")
+                picker.selectItem(at: index); press(root, "添加")
+            }
+            workspace.addSavedSessionLink()
+            checks["pickerAddsCorrectUUID-" + choice.id.uuidString] = workspace.configuration.sessionLinks.entries.contains { $0.profileID == choice.id && $0.folder.isEmpty }
+        }
+        if let link = workspace.configuration.sessionLinks.entries.first(where: { $0.profileID == pickerSFTP.id }) {
+            nextModal { root in
+                let picker = descendants(root).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "session.link.source" }
+                checks["editorShowsSourceProtocol"] = picker?.selectedItem?.title.hasPrefix("[SFTP]") == true && picker?.selectedItem?.representedObject as? UUID == pickerSFTP.id
+                press(root, "取消")
+            }
+            workspace.editSavedSessionLink(link.id)
+        }
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
         if let path = ProcessInfo.processInfo.environment["OSHELL_LINKS_CATALOG_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path)) }
         print("Links catalog checks: \(checks.count), failed: \(checks.filter { !$0.value }.keys.sorted())")

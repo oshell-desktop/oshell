@@ -187,6 +187,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     let terminal: OShellTerminal
     let view = NSView()
     private let header = NSTextField(labelWithString: "")
+    private let headerBar = NSView()
+    private var headerHeight: NSLayoutConstraint!
     let closeButton = PaneCloseButton()
     let focusStripe = TerminalFocusStripe()
     let transferProgress = ZmodemProgressView()
@@ -456,7 +458,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         closeButton.target = self; closeButton.action = #selector(closeAction)
         closeButton.widthAnchor.constraint(equalToConstant: 22).isActive = true
         closeButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        let headerBar = NSView()
+        headerBar.identifier = .init("terminal.pane.header")
+        headerHeight = headerBar.heightAnchor.constraint(equalToConstant: 22)
         header.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(header); headerBar.addSubview(closeButton)
         header.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(focusHeader)))
@@ -469,7 +472,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             closeButton.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             headerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
             headerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            headerBar.topAnchor.constraint(equalTo: view.topAnchor), headerBar.heightAnchor.constraint(equalToConstant: 22),
+            headerBar.topAnchor.constraint(equalTo: view.topAnchor), headerHeight,
             searchPanel.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
             searchPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor), searchPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             transferProgress.topAnchor.constraint(equalTo: terminal.topAnchor, constant: 8),
@@ -837,6 +840,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         try? terminal.setUseMetal(false)
         onFocus = nil; onUserInput = nil; onPaste = nil; onFilesDropped = nil; onError = nil; transferSelection = nil
     }
+    func setHeaderHidden(_ hidden: Bool) {
+        guard headerBar.isHidden != hidden else { return }
+        headerBar.isHidden = hidden; headerHeight.constant = hidden ? 0 : 22
+    }
     private func refreshHeader() {
         header.stringValue = title + (isRunningLocalTool ? " · 本机工具：" + (localToolName ?? "") : (ended ? " · 本机工具模式" : "")) + (isLogging ? " · 记录中" : "")
         header.toolTip = connectionDetails
@@ -1053,6 +1060,34 @@ final class TerminalTab {
         guard restoreFractionsPending, layout.view.window != nil else { return }
         layout.restoreDividers(dividerFractions)
         dividerFractions.removeAll(); restoreFractionsPending = false
+    }
+    /// A tab represents every leaf, not only whichever leaf last received focus.
+    var title: String {
+        let panes = layout.panes
+        guard panes.count > 1 else { return activePane.title }
+        var names = [String](), counts = [String: Int]()
+        for pane in panes {
+            let name = pane.title
+            if counts[name] == nil { names.append(name) }
+            counts[name, default: 0] += 1
+        }
+        let shown = names.prefix(2)
+        var result = shown.map { name -> String in
+            let label = name.count > 32 ? String(name.prefix(32)) + "…" : name
+            let count = counts[name] ?? 1
+            return label + (count > 1 ? " ×\(count)" : "")
+        }.joined(separator: " | ")
+        let remaining = panes.count - shown.reduce(0) { $0 + (counts[$1] ?? 0) }
+        if remaining > 0 { result += " · +\(remaining)" }
+        return result
+    }
+    var splitTitleDetail: String {
+        let panes = layout.panes
+        guard panes.count > 1 else { return "" }
+        let lines = panes.enumerated().map { index, pane in
+            "\(index + 1). \(pane.title) · \(pane.profile.kind.title) · \(pane.tabConnectionStatus.title)" + (pane === activePane ? "（当前分屏）" : "")
+        }
+        return "\(panes.count) 个分屏\n" + lines.joined(separator: "\n") + "\n\n状态圆点及下方连接详情对应当前分屏。\n"
     }
     var hasUnreadOutput: Bool { layout.panes.contains(where: \.hasUnreadOutput) }
     func markOutputRead() {

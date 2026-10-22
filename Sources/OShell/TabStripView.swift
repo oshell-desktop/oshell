@@ -232,9 +232,9 @@ final class TabStripView: InterfaceSurfaceView {
     func update(tabs: [TerminalTab], selected: TerminalTab?, numbers: [UUID: Int]? = nil) {
         let numbers = numbers ?? Dictionary(uniqueKeysWithValues: tabs.enumerated().map { ($0.element.id, $0.offset + 1) })
         update(entries: tabs.map { tab in
-            let title = tab.activePane.title
+            let title = tab.title
             let action = tab.activePane.canDuplicateConnection ? "双击新建相同会话" : "当前状态不响应双击"
-            return Entry(id: tab.id, title: title, detail: tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus)
+            return Entry(id: tab.id, title: title, detail: tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus)
         }, selectedID: selected?.id)
     }
     func update(entries: [Entry], selectedID: UUID?) {

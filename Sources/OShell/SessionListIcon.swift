@@ -5,12 +5,13 @@ import OShellCore
 
 /// Presentation only: session types and shared configuration stay unchanged.
 enum SessionListIcon: Hashable {
-    case parent, directory, session(SessionKind, shortcut: Bool)
+    case parent, directory, linksDirectory, session(SessionKind, shortcut: Bool)
 
     var label: String {
         switch self {
         case .parent: return "上一级目录"
         case .directory: return "目录"
+        case .linksDirectory: return "Links · 快捷链接目录"
         case .session(let kind, let shortcut):
             let title: String
             switch kind {
@@ -32,14 +33,41 @@ enum SessionListIcon: Hashable {
         }
     }
 
+    // Menus can outlive a system appearance change. Resolve their palette at
+    // draw time rather than retaining the colors from menu construction.
+    private static var menuImages = [SessionListIcon: NSImage]()
+    func menuImage() -> NSImage {
+        if let cached = Self.menuImages[self] { return cached }
+        let baseSize = image(dark: false).size
+        let size = NSSize(width: max(36, baseSize.width), height: baseSize.height)
+        let icon = NSImage(size: size, flipped: false) { _ in
+            let dark: Bool
+            if #available(macOS 10.14, *) { dark = NSAppearance.current.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+            else { dark = false }
+            let source = self.image(dark: dark)
+            source.draw(at: NSPoint(x: (size.width - source.size.width) / 2, y: 0), from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        icon.cacheMode = .never
+        icon.accessibilityDescription = label
+        Self.menuImages[self] = icon
+        return icon
+    }
+
     private struct Key: Hashable { let style: SessionListIcon; let dark: Bool }
-    // At most 20 images, independent of the number of profiles or reused rows.
+    // At most 22 images, independent of the number of profiles or reused rows.
     private static var images = [Key: NSImage]()
     func image(dark: Bool) -> NSImage {
         let key = Key(style: self, dark: dark)
         if let image = Self.images[key] { return image }
-        if case .session(let kind, true) = self {
-            let source = SessionListIcon.session(kind, shortcut: false).image(dark: dark)
+        let shortcutSource: SessionListIcon?
+        switch self {
+        case .session(let kind, true): shortcutSource = .session(kind, shortcut: false)
+        case .linksDirectory: shortcutSource = .directory
+        default: shortcutSource = nil
+        }
+        if let shortcutSource {
+            let source = shortcutSource.image(dark: dark)
             // Keep the protocol text at its original size. The corner badge sits
             // outside the text area instead of covering the final letter.
             let image = NSImage(size: NSSize(width: source.size.width + 8, height: 24), flipped: false) { _ in
@@ -68,7 +96,7 @@ enum SessionListIcon: Hashable {
         let rgb: (CGFloat, CGFloat, CGFloat)
         switch self {
         case .parent: rgb = dark ? (0.70, 0.72, 0.76) : (0.40, 0.42, 0.46)
-        case .directory: rgb = dark ? (0.91, 0.73, 0.36) : (0.61, 0.43, 0.12)
+        case .directory, .linksDirectory: rgb = dark ? (0.91, 0.73, 0.36) : (0.61, 0.43, 0.12)
         case .session(.ssh, _): rgb = dark ? (0.5137, 0.7216, 1.0) : (0.1451, 0.4118, 0.7294)
         case .session(.local, _): rgb = dark ? (0.76, 0.61, 0.97) : (0.51, 0.32, 0.72)
         case .session(.sftp, _): rgb = dark ? (0.4471, 0.8275, 0.6353) : (0.1294, 0.4627, 0.2941)
@@ -98,7 +126,7 @@ enum SessionListIcon: Hashable {
             switch self {
             case .parent:
                 line([(16, 5), (16, 11), (4, 11)]); line([(8, 15), (4, 11), (8, 7)])
-            case .directory:
+            case .directory, .linksDirectory:
                 folder()
             case .session(.ssh, _), .session(.sftp, _), .session(.ftp, _):
                 color.withAlphaComponent(dark ? 0.18 : 0.09).setFill()

@@ -104,7 +104,8 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         guard !filtering else { return }
         expanded = Set(nodes.values.filter { $0.directory != nil && tree.isItemExpanded($0) }.map(\.key))
     }
-    func reload(_ configuration: Configuration) {
+    func reload(_ stored: Configuration) {
+        let configuration = SessionCatalogPresentation.visibleConfiguration(stored)
         rememberExpanded(); let selected = (tree.item(atRow: tree.selectedRow) as? Node)?.key
         nodes.removeAll(); root.children = []
         var directories = ["": root]
@@ -193,7 +194,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 44), icon.heightAnchor.constraint(equalToConstant: 24), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         }
         cell.textField?.stringValue = node.title
-        let style: SessionListIcon = node.kind.map { .session($0, shortcut: node.isLink) } ?? .directory
+        let style: SessionListIcon = node.kind.map { .session($0, shortcut: node.isLink) } ?? (node.directory == SessionLinks.rootDirectory ? .linksDirectory : .directory)
         (cell.imageView as? SessionListIconView)?.style = style
         cell.toolTip = node.directory.map(SessionDirectory.display) ?? (style.label + "\n" + node.metadata)
         return cell

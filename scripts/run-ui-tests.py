@@ -5,7 +5,8 @@
 import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
-CASES = {'tab-close-confirmation':'OSHELL_TAB_CLOSE_CONFIRMATION_OUTPUT',
+CASES = {'session-catalog-presentation':'OSHELL_CATALOG_PRESENTATION_OUTPUT',
+ 'tab-close-confirmation':'OSHELL_TAB_CLOSE_CONFIRMATION_OUTPUT',
  'session-pins':'OSHELL_SESSION_PINS_OUTPUT',
  'tab-title-settings':'OSHELL_TAB_TITLE_SETTINGS_OUTPUT',
  'tab-window-merge':'OSHELL_TAB_WINDOW_MERGE_OUTPUT',

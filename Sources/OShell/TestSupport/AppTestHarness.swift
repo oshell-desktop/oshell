@@ -20,6 +20,7 @@ enum AppTestHarness {
             var titles = (try? SessionTitleSettings.load()) ?? .init(); titles.defaultMode = .shellIntegration; try? titles.save()
         }
         if CommandLine.arguments.contains("--tab-close-confirmation-test") { TabCloseConfirmationTest.run(controller) }
+        if CommandLine.arguments.contains("--session-catalog-presentation-test") { SessionCatalogPresentationTest.run(controller) }
         if CommandLine.arguments.contains("--session-pins-test") { SessionPinsTest.run(controller) }
         if CommandLine.arguments.contains("--tab-title-settings-test") { SessionTitleSettingsTest.run(controller) }
 

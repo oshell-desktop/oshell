@@ -347,7 +347,7 @@ public final class ConfigurationStore {
     public func load() throws -> Configuration {
         let data = try readData()
         if observed && digest != nil && data == nil { throw ModelError.invalid("数据文件已被移动或删除，已停止创建空配置。") }
-        let config = try data.map(decode) ?? Configuration()
+        let config = try data.map(decode) ?? Configuration(profiles: [])
         if !observed { digest = fingerprint(data); baseline = config; observed = true }
         return config
     }

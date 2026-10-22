@@ -43,7 +43,7 @@ extension WorkspaceController {
                     searchText: pane.title + " " + place + " " + SessionSearchQuery.metadata(pane.profile))
             }
         }
-        let saved = configuration.profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map { profile in
+        let saved = SessionCatalogPresentation.visibleConfiguration(configuration).profiles.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map { profile in
             QuickSessionEntry(paneID: nil, profileID: profile.id, title: profile.name,
                 detail: "新建连接 · " + SessionDirectory.display(profile.group) + " · " + profile.kind.title + (profile.kind == .local ? "" : " · \(profile.username)@\(profile.host):\(profile.port)"), searchText: SessionSearchQuery.metadata(profile))
         }

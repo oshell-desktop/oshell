@@ -67,12 +67,12 @@ final class SessionTitleSettingsView: NSView {
         mode.addItems(withTitles: SessionTitleDisplayMode.allCases.map(\.title))
         mode.selectItem(at: SessionTitleDisplayMode.allCases.firstIndex(of: original.defaultMode)!)
         mode.target = self; mode.action = #selector(updateDescription)
-        overwrite.state = .off
+        overwrite.state = .on
         confirmClose.identifier = .init("tabs.confirmClose")
         confirmClose.state = original.confirmTabClose ? .on : .off
         let closeHelp = NSTextField(wrappingLabelWithString: "标签或分屏中仍有连接、进程运行时，关闭前弹出确认。关闭此选项后立即结束对应会话；空白或已结束的标签直接关闭。仅本机生效，所有窗口通用；不影响关闭整个窗口或退出程序的确认。")
         closeHelp.font = .systemFont(ofSize: 12); closeHelp.textColor = .secondaryLabelColor
-        let help = NSTextField(wrappingLabelWithString: "不勾选覆盖时，已有会话保持自己的标题方式；勾选并点击“应用”后统一更新，已打开的标签立即生效，无需重连。会话属性中仍可单独选择。全局默认和本机标题选择不参与同步或导出，不修改原有共享协议字段。空白标签和命令行临时连接继续显示当前状态。")
+        let help = NSTextField(wrappingLabelWithString: "默认勾选覆盖，点击“应用”后统一更新已有会话和已打开终端的标题，无需重连。取消勾选时，仅修改新建会话的默认方式，已有会话保持自己的选择。会话属性中仍可单独选择。全局默认和本机标题选择不参与同步或导出，不修改原有共享协议字段。空白标签和命令行临时连接继续显示当前状态。")
         for text in [explanation, help] { text.font = .systemFont(ofSize: 12); text.textColor = .secondaryLabelColor }
         let row = NSStackView(views: [label, mode]); row.spacing = 16
         let stack = NSStackView(views: [heading, row, explanation, overwrite, help, confirmClose, closeHelp])

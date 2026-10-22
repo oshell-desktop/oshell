@@ -76,6 +76,45 @@ final class FocusFullscreenTest {
                 checks["terminalReceivesEscape"] = input == [27]
                 pane.searchPanel.show(prefillSelection: false, performSearch: false)
                 checks["escapeStillClosesSearch"] = window.performKeyEquivalent(with: event) && pane.searchPanel.isHidden && workspace.focusFullscreenRequested
+                let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+                let savedConfiguration = try? encoder.encode(workspace.configuration)
+                let deepToggle = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control, .command, .shift], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "F", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3)!
+                checks["deepFocusShortcutEnables"] = window.performKeyEquivalent(with: deepToggle) && workspace.isDeepFocus
+                window.contentView?.layoutSubtreeIfNeeded()
+                func headersHidden() -> Bool {
+                    workspace.inputPanes.allSatisfy { pane in
+                        // Inactive tabs are detached from the window; flush their
+                        // own layout before asserting geometry, as selection does.
+                        pane.view.layoutSubtreeIfNeeded()
+                        return views(pane.view).first { $0.identifier?.rawValue == "terminal.pane.header" }.map { $0.isHidden && $0.frame.height == 0 } == true
+                    }
+                }
+                checks["deepFocusRemovesHeaderAndSendSpace"] = headersHidden() && workspace.quickSendBar.isHidden && workspace.quickSendHeight.constant == 0
+                checks["deepFocusKeepsTabStrip"] = views(window.contentView!).compactMap { $0 as? TabStripView }.contains { !$0.isHiddenOrHasHiddenAncestor }
+                checks["deepFocusKeepsTerminalFocus"] = window.firstResponder === pane.terminal
+                checks["deepFocusDoesNotConsumeEscape"] = !window.performKeyEquivalent(with: event) && workspace.isDeepFocus
+                workspace.newBlankTab(); window.contentView?.layoutSubtreeIfNeeded()
+                checks["newPaneInheritsDeepFocus"] = headersHidden()
+                workspace.closeTab(); workspace.select(workspace.tabs.first { $0.activePane === pane }!)
+                workspace.receiveConfiguration(workspace.configuration)
+                checks["configurationRefreshDoesNotRevealSendBar"] = workspace.quickSendBar.isHidden && workspace.quickSendHeight.constant == 0
+                workspace.toggleQuickSendBar(); workspace.focusQuickSendBar()
+                checks["hiddenSendShortcutsDoNotChangePreference"] = workspace.quickSendBar.isHidden && (try? encoder.encode(workspace.configuration)) == savedConfiguration
+                checks["deepFocusShortcutRestores"] = window.performKeyEquivalent(with: deepToggle) && !workspace.isDeepFocus && workspace.isFocusFullscreen
+                window.contentView?.layoutSubtreeIfNeeded()
+                checks["deepFocusRestoresHeadersAndDraft"] = !workspace.quickSendBar.isHidden && workspace.quickSendBar.field.stringValue == "keep this draft" && workspace.inputPanes.allSatisfy { pane in
+                    pane.view.layoutSubtreeIfNeeded()
+                    let hasSplit = workspace.tabs.contains { $0.layout.panes.count > 1 && $0.layout.panes.contains { $0 === pane } }
+                    return views(pane.view).first { $0.identifier?.rawValue == "terminal.pane.header" }.map { $0.isHidden == !hasSplit && $0.frame.height == (hasSplit ? 22 : 0) } == true
+                }
+                var conflicting = workspace.configuration.preferences.keyboardShortcuts
+                conflicting.overrides[ShortcutAction.find.rawValue] = .init(WorkspaceController.deepFocusShortcut)
+                let testMenu = NSMenu(), testItem = NSMenuItem(title: "全心专注", action: #selector(WorkspaceController.toggleDeepFocus), keyEquivalent: "f")
+                testMenu.addItem(testItem); ShortcutRuntime.install(conflicting, menu: testMenu)
+                checks["existingShortcutWinsConflict"] = testItem.keyEquivalent.isEmpty
+                ShortcutRuntime.install(workspace.configuration.preferences.keyboardShortcuts)
+                workspace.toggleDeepFocus()
+                checks["menuCanReenableDeepFocus"] = workspace.isDeepFocus
                 workspace.quickSendBar.fill(.init(text: "keep this draft", appendReturn: true))
                 window.sendEvent(event)
                 window.cancelOperation(nil)
@@ -85,7 +124,7 @@ final class FocusFullscreenTest {
                 let toggle = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control, .command], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "f", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3)!
                 checks["shortcutStillExitsFocusFullscreen"] = window.performKeyEquivalent(with: toggle) && !workspace.focusFullscreenRequested
                 wait("returnedToWindowedMode", { !self.window.styleMask.contains(.fullScreen) && !self.workspace.fullscreenTransitionInProgress && !self.workspace.isFocusFullscreen }) { [self] in
-                    checks["exitRestoresChromeAndPreferences"] = workspace.topToolbar?.isHidden == false && workspace.configuration.sessionLinks.visible == initialLinks && workspace.sessionLinkBar.isHidden == !initialLinks
+                    checks["exitRestoresChromeAndPreferences"] = !workspace.isDeepFocus && !workspace.quickSendBar.isHidden && workspace.topToolbar?.isHidden == false && workspace.configuration.sessionLinks.visible == initialLinks && workspace.sessionLinkBar.isHidden == !initialLinks
                     checks["allOriginalProcessesSurviveFullscreen"] = workspace.inputPanes.filter { paneIDs.contains($0.id) }.map { $0.terminal.process.shellPid } == pids && workspace.inputPanes.filter { paneIDs.contains($0.id) }.allSatisfy { $0.terminal.process.running }
                     checks["exitRestoresWindowSize"] = abs(window.frame.width - originalFrame.width) < 2 && abs(window.frame.height - originalFrame.height) < 2
                     // Exercise an exit request while entry animation is pending.

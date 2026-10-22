@@ -67,7 +67,7 @@ enum PaneCloseTest {
                     checks[key + "-" + phase + "-usable"] = survivor.view.window === window && survivor.view.bounds.width >= 220 && survivor.terminal.bounds.height >= 140 && !survivor.terminal.visibleRect.isEmpty
                     checks[key + "-" + phase + "-renderer"] = survivor.terminal.isUsingMetalRenderer == gpu
                     if mode == 0 { checks[key + "-" + phase + "-fillsHost"] = survivor.view.frame == workspace.terminalHost.bounds }
-                    checks[key + "-" + phase + "-fillsPane"] = abs(survivor.terminal.frame.width - (survivor.view.bounds.width - 8)) < 1 && abs(survivor.terminal.frame.height - (survivor.view.bounds.height - 22)) < 1
+                    checks[key + "-" + phase + "-fillsPane"] = abs(survivor.terminal.frame.width - (survivor.view.bounds.width - 8)) < 1 && abs(survivor.terminal.frame.height - survivor.view.bounds.height) < 1
                 }
                 // Wait for the next AppKit layout pass, which exposed the old
                 // false positive: the model survived while its view collapsed.
