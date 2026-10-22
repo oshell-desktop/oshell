@@ -190,8 +190,14 @@ enum LinksCatalogTest {
                 checks["pickerRetainsEveryUUID"] = picker.numberOfItems == expectedIDs.count && Set(picker.itemArray.compactMap { $0.representedObject as? UUID }) == expectedIDs
                 guard let index = picker.itemArray.firstIndex(where: { $0.representedObject as? UUID == choice.id }) else { checks["pickerChoicePresent"] = false; press(root, "取消"); return }
                 let item = picker.item(at: index)!
-                checks["pickerTypeAndLocation-" + choice.id.uuidString] = item.title.hasPrefix("[" + choice.kind.title + "] ") && item.title.contains(":" + String(choice.port)) && item.title.contains("/Picker")
-                picker.selectItem(at: index); press(root, "添加")
+                checks["pickerCompactTypeAndName-" + choice.id.uuidString] = item.title == choice.name && item.image?.accessibilityDescription?.contains(choice.kind.title) == true
+                picker.selectItem(at: index)
+                if let action = picker.action { _ = NSApp.sendAction(action, to: picker.target, from: picker) }
+                let detail = input(root, "session.link.sourceDetail")
+                checks["pickerDetailsFollowSelection-" + choice.id.uuidString] = detail?.stringValue.contains(choice.kind.title + " · " + choice.host + ":" + String(choice.port)) == true && detail?.stringValue.contains("/Picker") == true
+                root.layoutSubtreeIfNeeded()
+                checks["pickerDetailsWithinDialog-" + choice.id.uuidString] = detail.map { root.bounds.contains($0.convert($0.bounds, to: root)) } == true
+                press(root, "添加")
             }
             workspace.addSavedSessionLink()
             checks["pickerAddsCorrectUUID-" + choice.id.uuidString] = workspace.configuration.sessionLinks.entries.contains { $0.profileID == choice.id && $0.folder.isEmpty }
@@ -199,7 +205,7 @@ enum LinksCatalogTest {
         if let link = workspace.configuration.sessionLinks.entries.first(where: { $0.profileID == pickerSFTP.id }) {
             nextModal { root in
                 let picker = descendants(root).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "session.link.source" }
-                checks["editorShowsSourceProtocol"] = picker?.selectedItem?.title.hasPrefix("[SFTP]") == true && picker?.selectedItem?.representedObject as? UUID == pickerSFTP.id
+                checks["editorShowsSourceProtocol"] = picker?.selectedItem?.title == pickerSFTP.name && picker?.selectedItem?.image?.accessibilityDescription?.contains("SFTP") == true && picker?.selectedItem?.representedObject as? UUID == pickerSFTP.id && input(root, "session.link.sourceDetail")?.stringValue.contains("SFTP") == true
                 press(root, "取消")
             }
             workspace.editSavedSessionLink(link.id)
