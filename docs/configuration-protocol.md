@@ -30,18 +30,22 @@ python3 scripts/test-sync-interop.py --native-source /path/to/OShell
 - Go 原生兼容样本及 `test-sync-interop.py` 真实双向验证通过：Swift/Go 往返、多节点目录与 WebDAV 同步、首次读取无多余改写、完整共享字段与未知字段拒绝、会话归档使用同一字段定义。
 - 本次侧栏专用快捷键、显示状态和鼠标选词偏好留在 Mac 本机，不进入共享配置；Touch ID 记录、命令历史、文件传输记录及续传检查点不加入同步。
 
-## OShell 会话范围同步（v2 兼容模式）
+## OShell 可选同步范围（v2 兼容模式）
 
-OShell 的传输合并使用 `SessionSyncConfiguration` 白名单：profiles、proxies、directories、sessionLinks 的 entries/folders/rootOrder，以及用于认证和比较的 masterPasswordVerifier。客户端 Preferences、默认会话属性、快速命令、高亮规则及 Links.visible 保留本机，不参与远端差异比较。
+`SyncContentSelection` 是本机策略，不写入共享文档。`SessionSyncConfiguration` 默认仍只选择 profiles、proxies、directories、sessionLinks 的 entries/folders/rootOrder，以及 masterPasswordVerifier；可另外选择客户端 Preferences + highlightSets + Links.visible、quickCommands、sessionDefaults。高亮规则随 Preferences 一起选择；会话、目录、引用、代理及凭据作为整体选择。
 
-编码合同与信封版本不变。已有目标的客户端设置部分作为兼容字段保留，新目标填入固定协议默认值，不导出本机客户端设置。接收旧 v1/v2 数据时仍先验证完整合同、密码和引用，未知数据继续拒绝；再仅将白名单会话内容应用到当前完整本机配置。写入仍使用强 ETag / 内容版本条件。
+比较与合并仅使用选中字段的投影。应用时保留未选中的本机字段，写入时保留完整远端文档中未选中的字段；新目标缺失的类别填协议默认值。Preferences 的 updateRepository、automaticUpdateChecks、masterWarningAcknowledged 始终保留各端原值。更改选择范围重置本机同步基准，重新执行首次接入确认；不删除共享文件。
 
-此变更仅在 OShell 实现。未修改的 Desktop 继续读取同一格式，其自身客户端设置处理不由 OShell 控制；不能宣称旧 Desktop 也实现了“设置仅本机”。
+信封版本与生成的字段合同不变，没有增加共享字段。仍先验证完整 v1/v2 合同、密码和引用，未知数据继续拒绝，写入保持强 ETag / 条件写入及多节点冲突保护。`sync-policy.json` 仅保存于本机工作目录，不随共享文档上传；目录同步和 WebDAV 共用本机策略。未修改 Desktop，其自身是否应用共享设置仍取决于其实现。
 
-除原有双向协议回归外，可运行 `python3 scripts/test-session-sync-interop.py --desktop-source /path/to/oshell-desktop`。该测试在临时 Go overlay 中使用 Desktop 的实际核心实现，不修改 Desktop 项目文件，验证会话/代理/密码/链接往返、旧包兼容、OShell 设置保留和仅设置变化不上传。
+除原有双向协议回归外，可运行 `python3 scripts/test-session-sync-interop.py --desktop-source /path/to/oshell-desktop`。该测试在临时 Go overlay 中使用 Desktop 实际核心实现，不修改对端项目文件，验证原有会话范围行为、16 种类别组合的 Swift → Go → Swift → Go 往返、凭据解密、引用保留与旧包兼容。
 
 ### WebDAV 目录选择
 
 OShell 在用户填写的父目录下复用或创建 `oshell/`，文件名仍为 `oshell-vault.json`，共享协议不变。地址本身以 `oshell/`（含旧写法 `OShell/`）结尾时直接使用；父目录已存在旧版同步文件时保持原位置，不隐式迁移。未实现自动子目录选择的 Desktop 须填写实际同步目录地址。目录创建先检查 DAV collection，只有 404 才尝试 MKCOL；并发创建后的 405 也须重新验证目录。文件写入仍要求强 ETag 和条件请求。
 
 OShell 的 WebDAV 地址支持显式 HTTP 与 HTTPS；该地址及传输选项仅保存在本机，不改变共享数据格式。HTTP 使用独立的有界请求通道，HTTPS 仍使用原有证书校验；未开启 App 全局任意网络加载。Desktop 的 HTTP 地址支持取决于其版本，本次不修改对端实现；两端的共享文件及凭据加密保持不变。
+
+### 本机标签标题偏好
+
+`tab-title-settings.json` 保存全局默认和按会话 UUID 绑定的本机标题选择。新增 `sessionName` 只属于此本机文件，不写入 `Configuration` 或共享 `titleMode`；原合同仍只有三种主机识别值。即使选择同步客户端设置，也不传输本机标题偏好；不修改 oshell-desktop 的代码或生成合同。

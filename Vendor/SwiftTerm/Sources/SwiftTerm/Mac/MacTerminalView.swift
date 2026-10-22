@@ -1165,6 +1165,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func bufferActivated(source: Terminal) {
+        // Coordinates from the previous screen cannot identify text in the
+        // newly activated/reset buffer, even when output preserves selection.
+        selection?.selectNone()
         updateScroller ()
     }
     

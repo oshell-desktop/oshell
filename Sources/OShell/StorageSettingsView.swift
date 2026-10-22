@@ -17,6 +17,7 @@ final class StorageSettingsView: NSView {
     private let selectionHint = NSTextField(wrappingLabelWithString: "")
     private let certificateControls = NSStackView()
     private let details = NSStackView()
+    private let policyView = SyncPolicySettingsView()
     private let davStatus = NSTextField(wrappingLabelWithString: "")
     private let address = NSTextField(), username = NSTextField(), password = NSSecureTextField()
     private var trustedCertificate: WebDAVCertificateTrust?
@@ -30,7 +31,7 @@ final class StorageSettingsView: NSView {
     private var loadError: String?
     private let isolated: Bool
     private var originalSettings: [String: Data] = [:]
-    private var settingsFiles: [URL] { [current.appendingPathComponent("storage-location.json"), WebDAVSync.settingsURL] }
+    private var settingsFiles: [URL] { [current.appendingPathComponent("storage-location.json"), WebDAVSync.settingsURL, SyncPolicy.url] }
     private var selectedMethod: SyncMethod { SyncMethod(rawValue: method.indexOfSelectedItem) ?? .off }
 
     init(workspace: WorkspaceController) {
@@ -63,7 +64,7 @@ final class StorageSettingsView: NSView {
         certificateStatus.font = .systemFont(ofSize: 12); certificateStatus.isSelectable = true
         certificateStatus.identifier = .init("webdav.certificateStatus")
         for v in [address, username, password, probe, davStatus, certificateStatus, certificateControls] { davFields.addArrangedSubview(v) }
-        let intro = label("先选择一种同步方式，再配置同步位置。多台设备使用同一位置和相同主密码；仅同步会话、目录、快捷链接、代理和加密密码。客户端设置保留在本机。")
+        let intro = label("先选择一种同步方式，再配置同步位置。多台设备使用同一位置和相同主密码；在下方选择同步内容，默认仅同步会话资料；未勾选类别保留本机和远端现状。")
         let help = label("点击“应用”生效，无需重启；首次接入和同步冲突仍需确认。启用时会引导设置或解锁主密码。")
         let localPath = label("本机始终使用：" + current.path); localPath.isSelectable = true; localPath.identifier = .init("storage.current")
         let localActions = NSStackView(views: [button("打开本机目录", #selector(reveal)), button("设置 / 解锁主密码…", #selector(setupMaster))]); localActions.spacing = 8
@@ -75,13 +76,13 @@ final class StorageSettingsView: NSView {
         let detailButton = button("显示本机数据与安全选项", #selector(toggleDetails(_:)))
         help.textColor = .secondaryLabelColor; localPath.textColor = .secondaryLabelColor
         let separator = NSBox(); separator.boxType = .separator
-        let stack = NSStackView(views: [syncCard, separator, label("同步配置", title: true), intro, methodRow, directoryFields, davFields, selectionHint, help, detailButton, details])
+        let stack = NSStackView(views: [syncCard, separator, label("同步配置", title: true), intro, methodRow, directoryFields, davFields, selectionHint, policyView, help, detailButton, details])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
         scroll.frame = bounds; scroll.autoresizingMask = [.width, .height]; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         document.frame = bounds; scroll.documentView = document; addSubview(scroll)
         stack.translatesAutoresizingMaskIntoConstraints = false; document.addSubview(stack); contentStack = stack
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 22), stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -22), stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 22)])
-        for view in [syncCard, intro, directoryFields, davFields, selectionHint, help, separator, details] { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        for view in [syncCard, intro, directoryFields, davFields, selectionHint, help, separator, details, policyView] { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         for view in [localPath] { view.widthAnchor.constraint(equalTo: details.widthAnchor).isActive = true }
         status.widthAnchor.constraint(equalTo: directoryFields.widthAnchor).isActive = true
         for view in [address, username, password, davStatus, certificateStatus] { view.widthAnchor.constraint(equalTo: davFields.widthAnchor).isActive = true }
@@ -98,6 +99,7 @@ final class StorageSettingsView: NSView {
         do {
             originalSettings = [:]
             for url in settingsFiles { originalSettings[url.path] = try SharedDataFile.readIfPresent(url) }
+            policyView.load(try SyncPolicy.load())
             let sync = workspace?.windowCoordinator?.webDAV
             if let pending = try location.pending() { directoryPath = pending.path }
             else { directoryPath = try location.syncDirectory()?.path }
@@ -130,12 +132,13 @@ final class StorageSettingsView: NSView {
             }
         }
         if loadError != nil { loadSettings() }
-        workspace.windowCoordinator?.webDAV.readinessChanged(); workspace.windowCoordinator?.webDAV.schedule()
+        workspace.windowCoordinator?.webDAV.readinessChanged(); workspace.windowCoordinator?.webDAV.schedule(startup: true)
         updateStatus()
     }
     private func updateStatus() {
         status.font = .systemFont(ofSize: 12); davStatus.font = .systemFont(ofSize: 12)
         status.stringValue = directoryPath ?? "尚未选择文件夹（可选 iCloud Drive 中的文件夹）"
+        policyView.isHidden = selectedMethod == .off
         directoryFields.isHidden = selectedMethod != .directory; davFields.isHidden = selectedMethod != .webDAV
         selectionHint.isHidden = selectionHint.stringValue.isEmpty
         davStatus.isHidden = davStatus.stringValue.isEmpty
@@ -227,9 +230,10 @@ final class StorageSettingsView: NSView {
         try location.validate(choice, master: master); return choice
     }
     func validateSelection() throws {
-        guard changed || davChanged else { return }
+        guard changed || davChanged || policyView.changed else { return }
+        if selectedMethod != .off { _ = try policyView.values() }
         if let loadError { throw ModelError.invalid(loadError) }
-        if selectedMethod != .off {
+        if (changed || davChanged), selectedMethod != .off {
             let master = try ensureMaster()
             _ = try selectedDirectory(master: master)
             if selectedMethod == .webDAV { _ = try davSettings() }
@@ -238,8 +242,25 @@ final class StorageSettingsView: NSView {
         for url in settingsFiles where try SharedDataFile.readIfPresent(url) != originalSettings[url.path] { throw ModelError.invalid("另一个窗口已修改同步设置，请重新打开设置。") }
     }
     func applySelection() throws {
-        guard changed || davChanged, let workspace, let windows = workspace.windowCoordinator else { return }
+        guard changed || davChanged || policyView.changed, let workspace, let windows = workspace.windowCoordinator else { return }
         try validateSelection()
+        let oldPolicy = try SyncPolicy.load()
+        let policy = selectedMethod == .off ? oldPolicy : try policyView.values()
+        let connectionChanged = changed || davChanged
+        if !connectionChanged {
+            // Policy-only edits never contact the server or ask for credentials.
+            let baselineURL = windows.webDAV.directory.map { location.baselineURL(for: $0) } ?? current.appendingPathComponent("webdav-baseline.json")
+            let before = try SharedDataFile.readIfPresent(SyncPolicy.url)
+            try policy.save()
+            do { if policy.content != oldPolicy.content, FileManager.default.fileExists(atPath: baselineURL.path) { try FileManager.default.removeItem(at: baselineURL) } }
+            catch {
+                if let before { try PrivateFile.write(before, to: SyncPolicy.url) } else { try? FileManager.default.removeItem(at: SyncPolicy.url) }
+                throw error
+            }
+            windows.webDAV.directoryConfigurationChanged()
+            windows.webDAV.schedule(startup: true)
+            loadSettings(); updateStatus(); return
+        }
         let protected = selectedMethod != .off
         let master = protected ? try master() : (PasswordVault.shared.cachedMaster ?? "")
         let choice = protected ? try selectedDirectory(master: master) : nil
@@ -251,10 +272,16 @@ final class StorageSettingsView: NSView {
         }
         // Roll back local connection settings if any step fails. No remote operation runs in this transaction.
         var files = settingsFiles + [current.appendingPathComponent("webdav-baseline.json")]
+        if let directory = windows.webDAV.directory { files.append(location.baselineURL(for: directory)) }
         if let choice { files.append(location.baselineURL(for: URL(fileURLWithPath: choice.path))) }
         let before = try files.map { ($0, try SharedDataFile.readIfPresent($0)) }
         windows.webDAV.cancel()
         do {
+            try policy.save()
+            if policy.content != oldPolicy.content {
+                let baselineURL = windows.webDAV.directory.map { location.baselineURL(for: $0) } ?? current.appendingPathComponent("webdav-baseline.json")
+                if FileManager.default.fileExists(atPath: baselineURL.path) { try FileManager.default.removeItem(at: baselineURL) }
+            }
             if selectedMethod != .directory { try location.disableSync() }
             else if try location.pending() != nil { try location.schedule(nil) }
             if selectedMethod != .webDAV, windows.webDAV.enabled { try windows.webDAV.configure(nil, master: master) }
@@ -270,11 +297,11 @@ final class StorageSettingsView: NSView {
                 }
             } catch { throw ModelError.invalid("设置未完整保存，回退时遇到错误；请重新打开设置检查，远端数据未修改。") }
             workspace.store.requiresMasterProtection = windows.webDAV.syncEnabled
-            windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule()
+            windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule(startup: true)
             throw error
         }
-        windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule()
-        if windows.webDAV.syncEnabled { windows.webDAV.queueManualSync() }
+        windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule(startup: true)
+        if windows.webDAV.syncEnabled && policy.automatic { windows.webDAV.queueManualSync() }
         changed = false; davChanged = false; loadSettings(); updateStatus()
     }
 }

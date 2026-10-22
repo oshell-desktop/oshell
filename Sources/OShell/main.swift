@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launchServer?.workspaceProvider = { [weak self] in self?.windows?.externalWorkspace() }
         buildMenu()
         windows.activate(controller)
-        if !isTestSession { windows.webDAV.schedule() }
+        if !isTestSession { windows.webDAV.schedule(startup: true) }
         if !isTestSession { do { try controller.appUpdater.configure() } catch { Dialogs.message(error.localizedDescription) } }
         if !backgroundTransferTest { controller.show(); NSApp.activate(ignoringOtherApps: true) }
         if !isTestSession, SharedConflictDrafts.exists(for: controller.store) {

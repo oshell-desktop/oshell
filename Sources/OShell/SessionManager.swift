@@ -27,7 +27,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
                 NSLayoutConstraint.activate([
                     icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
                     icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-                    icon.widthAnchor.constraint(equalToConstant: 36), icon.heightAnchor.constraint(equalToConstant: 20),
+                    icon.widthAnchor.constraint(equalToConstant: 44), icon.heightAnchor.constraint(equalToConstant: 24),
                     label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8)
                 ])
             } else { label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6).isActive = true }
@@ -296,6 +296,12 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
             item.target = self; item.isEnabled = enabled
         }
+        let pinSelection = selectedPinKeys
+        if !pinSelection.isEmpty && pinSelection.count == table.selectedRowIndexes.count {
+            let pinned = pinSelection.isSubset(of: (try? SessionPins.load().keys) ?? [])
+            add(pinned ? "取消置顶" : "置顶", #selector(togglePinned), enabled: workspace?.isSecurityUnlocked == true)
+            menu.addItem(.separator())
+        }
         add("复制会话配置", #selector(copySessionConfigurations), enabled: canCopySessionConfigurations)
         add("粘贴会话配置", #selector(pasteSessionConfigurations), enabled: canPasteSessionConfigurations)
         menu.addItem(.separator())
@@ -358,6 +364,26 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         add("导出全部会话…", #selector(exportAll))
         add("导入会话到当前目录…", #selector(importSessions))
         return menu
+    }
+    private var pins = SessionPins()
+    private func pinKey(_ row: Row) -> String? {
+        switch row {
+        case .directory(let path): return SessionDirectory.parent(path).isEmpty ? SessionPins.directory(path) : nil
+        case .session(let profile): return SessionDirectory.normalize(profile.group).isEmpty ? SessionPins.session(profile.id) : nil
+        case .parent, .link: return nil
+        }
+    }
+    private var selectedPinKeys: Set<String> {
+        Set(table.selectedRowIndexes.compactMap { rows.indices.contains($0) ? pinKey(rows[$0]) : nil })
+    }
+    @objc private func togglePinned() {
+        guard let workspace, workspace.isSecurityUnlocked else { return }
+        let selected = selectedPinKeys
+        guard selected.count == table.selectedRowIndexes.count else { return }
+        do {
+            let current = try SessionPins.load()
+            try SessionPins.set(selected, pinned: !selected.isSubset(of: current.keys), configuration: workspace.configuration)
+        } catch { Dialogs.message("无法修改置顶：" + error.localizedDescription) }
     }
     @objc private func exportSelection() {
         guard let workspace, rows.indices.contains(table.selectedRow) else { return }
@@ -422,6 +448,12 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         rows = currentDirectory.isEmpty ? [] : [.parent]
         rows += directoryRows.map(Row.directory)
         rows += (profiles.map(Row.session) + links).sorted { (displayProfile($0)?.name ?? "").localizedStandardCompare(displayProfile($1)?.name ?? "") == .orderedAscending }
+        pins = (try? SessionPins.load()) ?? .init()
+        // Stable partition keeps the existing directory/name order inside each group.
+        let isPinned: (Row) -> Bool = { self.pinKey($0).map(self.pins.keys.contains) ?? false }
+        let navigation = rows.filter { if case .parent = $0 { return true }; return false }
+        let entries = rows.filter { if case .parent = $0 { return false }; return true }
+        rows = navigation + entries.filter(isPinned) + entries.filter { !isPinned($0) }
         path.stringValue = SessionDirectory.display(currentDirectory)
         path.toolTip = path.stringValue
         table.reloadData(); table.deselectAll(nil)
@@ -534,6 +566,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         else if case .link(_, let source) = rows[row] { cell.toolTip = iconStyle.label + " → " + SessionDirectory.display(source.group) + "/" + source.name + "\n" + text }
         else if case .session = rows[row] { cell.toolTip = iconStyle.label + "\n" + text }
         else { cell.toolTip = text }
+        if let key = pinKey(rows[row]), pins.keys.contains(key) { cell.toolTip = "已置顶（仅本机）\n" + (cell.toolTip ?? text) }
         return cell
     }
     private func moveRow(at index: Int) -> DragRow? {
@@ -803,8 +836,15 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         }
         // End the shared field editor before saving can reload/reuse table cells.
         let previousDirectory = currentDirectory
+        let preserveDirectoryPin: Bool
+        if case .directory(let old) = row { preserveDirectoryPin = (try? SessionPins.load().keys.contains(SessionPins.directory(old))) == true }
+        else { preserveDirectoryPin = false }
         cancelInlineRename(); currentDirectory = nextDirectory
         guard workspace.saveConfiguration(config) else { currentDirectory = previousDirectory; reload(); return false }
+        if preserveDirectoryPin, nextKey.hasPrefix("directory:") {
+            do { try SessionPins.set([SessionPins.directory(String(nextKey.dropFirst("directory:".count)))], pinned: true, configuration: workspace.configuration) }
+            catch { Dialogs.message("目录已重命名，但置顶设置未保存：" + error.localizedDescription) }
+        }
         reload(); table.deselectAll(nil)
         if let index = rows.firstIndex(where:{ key($0) == nextKey }) { table.selectRowIndexes(IndexSet(integer:index),byExtendingSelection:false); table.scrollRowToVisible(index) }
         return true

@@ -108,7 +108,76 @@ enum SyncSettingsTest {
                 preview.cacheDisplay(in: preview.bounds, to: bitmap)
                 try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output).deletingPathExtension().appendingPathExtension("png"))
             }
+            let policyControls = ["mode", "sessions", "client", "commands", "defaults", "startup", "changes", "interval", "delay", "retry"].compactMap { id in views(preview).first { $0.identifier?.rawValue == "sync.policy." + id } }
+            let policyRects = policyControls.map { $0.convert($0.bounds, to: document) }
+            checks["allPolicyControlsVisible"] = policyControls.count == 10 && policyControls.allSatisfy { !$0.isHiddenOrHasHiddenAncestor && $0.bounds.height >= 16 }
+            checks["policyRowsDoNotOverlap"] = zip(policyRects, policyRects.dropFirst()).allSatisfy { $0.maxY <= $1.minY + 0.5 }
+            if let policyView = views(preview).first(where: { $0.identifier?.rawValue == "sync.policy" }),
+               let scroll = views(preview).compactMap({ $0 as? NSScrollView }).first,
+               let output = ProcessInfo.processInfo.environment["OSHELL_SYNC_SETTINGS_OUTPUT"] {
+                let rect = policyView.convert(policyView.bounds, to: document)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, rect.minY - 18))); scroll.reflectScrolledClipView(scroll.contentView)
+                preview.layoutSubtreeIfNeeded()
+                if let bitmap = preview.bitmapImageRepForCachingDisplay(in: preview.bounds) {
+                    preview.cacheDisplay(in: preview.bounds, to: bitmap)
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output).deletingPathExtension().appendingPathExtension("policy.png"))
+                }
+            }
             window.orderOut(nil)
+            func control<T: NSView>(_ page: StorageSettingsView, _ id: String, _: T.Type) -> T { views(page).first { $0.identifier?.rawValue == "sync.policy." + id } as! T }
+            try location.schedule(.init(path: target.path, mode: .existing), master: master)
+            let restoredDirectory = StorageSettingsView(workspace: workspace); select(restoredDirectory, 1)
+            try restoredDirectory.applySelection(); windows.webDAV.cancel()
+            let baselineURL = location.baselineURL(for: target)
+            try FileManager.default.createDirectory(at: baselineURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try PrivateFile.write(encrypted, to: baselineURL)
+            let remoteBefore = try Data(contentsOf: target.appendingPathComponent("configuration.json"))
+            let policyPage = StorageSettingsView(workspace: workspace)
+            control(policyPage, "mode", NSPopUpButton.self).selectItem(at: 1)
+            control(policyPage, "client", NSButton.self).state = .on
+            control(policyPage, "interval", NSTextField.self).stringValue = "120"
+            try policyPage.applySelection()
+            checks["policySavedOnlyLocally"] = try !SyncPolicy.load().automatic && SyncPolicy.load().content.clientSettings && Data(contentsOf: target.appendingPathComponent("configuration.json")) == remoteBefore
+            checks["selectionChangeRequiresFreshConfirmation"] = !FileManager.default.fileExists(atPath: baselineURL.path)
+            windows.webDAV.schedule(startup: true); windows.webDAV.schedule(localChanges: true)
+            checks["manualModeSchedulesNothing"] = windows.webDAV.nextCheck == nil && windows.webDAV.diagnosticTimers.refresh == nil && windows.webDAV.diagnosticTimers.retry == nil && !windows.webDAV.busy
+            windows.webDAV.sync(interactive: false)
+            checks["manualModeBlocksAutomaticEntry"] = !windows.webDAV.busy
+            windows.webDAV.queueManualSync()
+            checks["manualModeStillAllowsExplicitQueue"] = windows.webDAV.manualQueued
+            windows.webDAV.cancel()
+            let invalidPolicy = StorageSettingsView(workspace: workspace)
+            for id in ["sessions", "client", "commands", "defaults"] { control(invalidPolicy, id, NSButton.self).state = .off }
+            do { try invalidPolicy.validateSelection(); checks["emptySelectionRejected"] = false } catch { checks["emptySelectionRejected"] = true }
+            var scheduled = try SyncPolicy.load(); scheduled.automatic = true; scheduled.onStartup = false; scheduled.afterChanges = false; scheduled.checkInterval = 120; scheduled.retryInterval = 15
+            try scheduled.save(); windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule(startup: true)
+            checks["startupDisabledUsesOnlyPeriodicTimer"] = windows.webDAV.diagnosticTimers.refresh?.timeInterval == 120 && (windows.webDAV.nextCheck?.timeIntervalSinceNow ?? 0) > 110
+            windows.webDAV.schedule(localChanges: true)
+            checks["changeTriggerCanBeDisabled"] = (windows.webDAV.nextCheck?.timeIntervalSinceNow ?? 0) > 110
+            scheduled.afterChanges = true; scheduled.changeDelay = 5; try scheduled.save()
+            windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule(localChanges: true)
+            checks["changeDelayControlsNextCheck"] = (windows.webDAV.nextCheck?.timeIntervalSinceNow ?? 0) <= 5.1 && (windows.webDAV.nextCheck?.timeIntervalSinceNow ?? 0) > 3
+            windows.webDAV.cancel()
+            // Exercise retries without contacting any server.
+            try location.disableSync(); try windows.webDAV.configure(WebDAVSettings(address: "https://fixture.invalid/", username: "test", password: "synthetic"), master: master)
+            windows.webDAV.cancel(); windows.webDAV.directoryConfigurationChanged()
+            let originalFactory = windows.webDAV.makeClient; defer { windows.webDAV.makeClient = originalFactory }
+            var attempts = 0
+            windows.webDAV.makeClient = { _ in attempts += 1; throw WebDAVFailure.network }
+            windows.webDAV.sync(interactive: false)
+            checks["failureSchedulesConfiguredRetry"] = attempts == 1 && windows.webDAV.diagnosticTimers.retry?.timeInterval == 15 && windows.webDAV.diagnosticTimers.refresh == nil
+            windows.webDAV.sync(interactive: false)
+            checks["ordinaryChecksRespectRetryDelay"] = attempts == 1
+            windows.webDAV.diagnosticTimers.retry?.fire()
+            checks["retryActuallyAttemptsAgain"] = attempts == 2
+            scheduled.retryInterval = 0; try scheduled.save(); windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule()
+            windows.webDAV.sync(interactive: false)
+            checks["disabledRetryWaitsForManualAction"] = attempts == 2 && windows.webDAV.nextCheck == nil && windows.webDAV.diagnosticTimers.retry == nil
+            let firstDraft = StorageSettingsView(workspace: workspace)
+            control(firstDraft, "commands", NSButton.self).state = .on
+            scheduled.changeDelay = 7; try scheduled.save()
+            do { try firstDraft.validateSelection(); checks["stalePolicyDraftRejected"] = false } catch { checks["stalePolicyDraftRejected"] = true }
+
         } catch { checks["unexpectedError"] = false; print("Synthetic sync settings test:", error.localizedDescription) }
         windows.webDAV.cancel()
         if let output = ProcessInfo.processInfo.environment["OSHELL_SYNC_SETTINGS_OUTPUT"] { try? JSONSerialization.data(withJSONObject: ["passed": checks.values.allSatisfy { $0 }, "checks": checks], options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: output)) }

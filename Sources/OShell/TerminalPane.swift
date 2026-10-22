@@ -288,6 +288,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var transferDiagnosticState: String { transfer?.diagnosticState ?? "no helper; finishing=\(finishingTransfer)" }
     var isTransferring: Bool { selectionPending || transfer != nil || finishingTransfer }
     var isLogging: Bool { logger != nil }
+    private var sessionTitleName = ""
+    private(set) var titleDisplayMode: SessionTitleDisplayMode = .shellIntegration
+    private var effectiveHostTitleMode: HostTitleMode { titleDisplayMode.hostMode }
     private var remoteHostname: String?
     private(set) var remoteAddress: String?
     private var hostAliases = Set<String>()
@@ -302,7 +305,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var hostProbeEcho: HostProbeEcho?
     private(set) var hasShellIntegration = false
     private var integratedPromptPending = false
-    var allowsActiveHostProbe: Bool { profile.titleMode == .activeProbe && !hasShellIntegration }
+    var allowsActiveHostProbe: Bool { effectiveHostTitleMode == .activeProbe && !hasShellIntegration }
     private var userEditingLine = false
     private var initialRemoteHostname: String?
     private var canBindInitialHost = true
@@ -312,17 +315,35 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var idleTimer: DispatchSourceTimer?
     private var lastActivity = ProcessInfo.processInfo.systemUptime
     private(set) var sessionReady = false
-    var title: String { if isBlank && !isRunningLocalTool { return "空白标签页" }; return remoteHostname ?? "主机待识别" }
+    var title: String {
+        if isBlank && !isRunningLocalTool { return "空白标签页" }
+        if titleDisplayMode == .sessionName && !isBlank && interactiveTool == nil { return sessionTitleName }
+        return remoteHostname ?? "主机待识别"
+    }
+    func updateSessionTitleName(_ name: String) {
+        let clean = name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(256).map { String($0) }.joined()
+        let value = clean.isEmpty ? "未命名会话" : clean
+        guard sessionTitleName != value else { return }; sessionTitleName = value; refreshHeader(); onState?()
+    }
+    func applyTitleDisplayMode(_ mode: SessionTitleDisplayMode) {
+        guard titleDisplayMode != mode else { return }
+        titleDisplayMode = mode
+        hostProbeWork?.cancel(); hostProbeWork = nil; hostProbeTimeout?.cancel(); hostProbeTimeout = nil; hostProbeToken = nil
+        let remainder = hostProbeEcho?.flush() ?? Data(); hostProbeEcho = nil; display(remainder)
+        attemptedHostEpoch = nil
+        if mode == .passive { hasShellIntegration = false; integratedPromptPending = false }
+        refreshHeader(); onState?(); schedulePromptScan()
+    }
     var connectionDetails: String {
         func display(_ value: String) -> String {
             String(value.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : String($0) }.joined().prefix(256))
         }
-        var lines = ["当前主机", "主机名：" + title, "主机 IP：" + (remoteAddress ?? "未获取"), "识别方式：" + profile.titleMode.title]
+        var lines = ["当前主机", "主机名：" + (remoteHostname ?? "未获取"), "主机 IP：" + (remoteAddress ?? "未获取"), "标题方式：" + titleDisplayMode.title]
         if let tool = interactiveTool {
             lines += ["", "命令行连接", "协议：" + tool.command.name.uppercased(), "状态：连接命令运行中，退出后返回 OShell >"]
         }
         if profile.kind == .ssh {
-            lines += ["", ended ? "原 SSH 连接（已结束）" : "初始 SSH 连接", "会话：" + display(profile.name),
+            lines += ["", ended ? "原 SSH 连接（已结束）" : "初始 SSH 连接", "会话：" + display(sessionTitleName),
                       "配置地址：" + display(profile.host), "端口：\(profile.port)", "用户名：" + (profile.username.isEmpty ? "使用 SSH 默认配置" : display(profile.username))]
             if let peer = sshConnectionGroup?.transportPeer {
                 lines += ["实际连接 IP：" + peer.address, "实际连接端口：\(peer.port)"]
@@ -337,7 +358,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 lines.append("隧道策略：" + (reusesSSHConnection ? "复用原 SSH 连接，不重复开启" : skipsDuplicateTunnels ? "同一会话配置已有隧道连接，本连接不重复开启" : "由首次连接启用"))
             }
             lines.append("状态：" + (ended ? "原连接已结束" : (sessionReady ? "已连接" : "连接中")))
-        } else if interactiveTool == nil { lines += ["", "本地终端", "会话：" + display(profile.name)] }
+        } else if interactiveTool == nil { lines += ["", "本地终端", "会话：" + display(sessionTitleName)] }
         return lines.joined(separator: "\n")
     }
     private func observeTransportPeer() {
@@ -404,6 +425,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var renderDescription: String { terminal.isUsingMetalRenderer ? "Metal" : "CoreGraphics" }
     init(profile: SessionProfile, preferences: Preferences, knownHostsFile: URL? = nil, oneTimePassword: String? = nil, terminalType: String? = nil, connectionGroup: SSHConnectionGroup? = nil, reuseConnection: Bool = false, blank: Bool = false) {
         self.profile = profile; self.preferences = preferences; self.isBlank = blank
+        sessionTitleName = profile.name
+        titleDisplayMode = ((try? SessionTitleSettings.load()) ?? .init()).mode(for: profile)
         self.oneTimePassword = oneTimePassword; self.externalTerminalType = terminalType
         self.sshConnectionGroup = connectionGroup ?? (profile.kind == .ssh ? try? SSHConnectionGroup(profile: profile) : nil); self.reusesSSHConnection = reuseConnection
         self.knownHostsFile = knownHostsFile
@@ -470,6 +493,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         apply(preferences)
         if profile.kind == .local { useLocalHostIdentity() }
         if blank { ended = true; beginEndedInput() }
+        updateSessionTitleName(profile.name)
         refreshHeader()
     }
     func apply(_ prefs: Preferences) {
@@ -936,7 +960,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         hostProbeTimeout = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timeout)
     }
     private func receiveShellIdentity(_ bytes: ArraySlice<UInt8>) {
-        guard profile.titleMode != .passive, observesHostIdentity, !terminal.getTerminal().isCurrentBufferAlternate,
+        guard effectiveHostTitleMode != .passive, observesHostIdentity, !terminal.getTerminal().isCurrentBufferAlternate,
               let identity = RemoteHostIdentity.integrationReport(bytes) else { return }
         hasShellIntegration = true; integratedPromptPending = true
         currentHostHint = nil

@@ -90,7 +90,8 @@ final class DirectorySyncTest {
                     let client = DirectorySyncClient(directory: shared), object = try client.fetch()!
                     var remote = try SharedVault.decode(object.data, password: master); remote.profiles[1].port = 2222
                     try client.put(SharedVault.encode(remote, password: master), matching: object.etag)
-                    sync.sync(interactive: false)
+                    checks["offlineRetryTimerInstalled"] = sync.diagnosticTimers.retry != nil
+                    sync.diagnosticTimers.retry?.fire()
                     wait("reconnectMerges", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in
                         sync.cancel()
                         checks["independentChangesKept"] = workspace.configuration.profiles[0].username == "offline-user" && workspace.configuration.profiles[1].port == 2222
@@ -149,10 +150,10 @@ final class DirectorySyncTest {
                     descendants(NSApp.modalWindow!.contentView!).compactMap { $0 as? NSButton }.first { $0.title == title }?.performClick(nil)
                 }
             }
-            answer("取消"); sync.sync(interactive: false)
+            answer("取消"); sync.sync(interactive: true)
             wait("cancelInitialSync", condition: { !self.sync.busy && self.sync.status.contains("待确认") }) { [self] in
                 checks["cancelInitialKeepsLocal"] = (try? Data(contentsOf: workspace.store.url)) == localBefore
-                sync.cancel(); answer("使用共享版本"); sync.sync(interactive: false)
+                sync.cancel(); answer("使用共享版本"); sync.sync(interactive: true)
                 wait("initialAdoptionConfirmed", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in
                     sync.cancel()
                     checks["firstAdoptionKeepsClientSettings"] = workspace.configuration.preferences.fontSize == ownSettings.fontSize && workspace.configuration.sessionDefaults == ownDefaults && workspace.configuration.sessionLinks.visible == ownVisibility

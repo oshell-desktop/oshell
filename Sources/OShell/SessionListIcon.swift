@@ -38,11 +38,37 @@ enum SessionListIcon: Hashable {
     func image(dark: Bool) -> NSImage {
         let key = Key(style: self, dark: dark)
         if let image = Self.images[key] { return image }
+        if case .session(let kind, true) = self {
+            let source = SessionListIcon.session(kind, shortcut: false).image(dark: dark)
+            // Keep the protocol text at its original size. The corner badge sits
+            // outside the text area instead of covering the final letter.
+            let image = NSImage(size: NSSize(width: source.size.width + 8, height: 24), flipped: false) { _ in
+                source.draw(at: NSPoint(x: 0, y: 4), from: .zero, operation: .sourceOver, fraction: 1)
+                let x = source.size.width - 4
+                let badge = NSBezierPath(ovalIn: NSRect(x: x, y: 0, width: 12, height: 12))
+                NSColor(srgbRed: 0.04, green: dark ? 0.40 : 0.46, blue: dark ? 0.45 : 0.51, alpha: 1).setFill(); badge.fill()
+                NSColor(white: dark ? 0.16 : 1, alpha: 1).setStroke(); badge.lineWidth = 1; badge.stroke()
+                NSGraphicsContext.saveGraphicsState()
+                let transform = NSAffineTransform()
+                transform.translateX(by: x + 6, yBy: 6); transform.rotate(byDegrees: 45); transform.concat()
+                NSColor.white.setStroke()
+                let chain = NSBezierPath(); chain.lineWidth = 1; chain.lineCapStyle = .round
+                chain.move(to: NSPoint(x: -0.5, y: 1.6)); chain.line(to: NSPoint(x: -2, y: 1.6))
+                chain.appendArc(withCenter: NSPoint(x: -2, y: 0), radius: 1.6, startAngle: 90, endAngle: 270)
+                chain.line(to: NSPoint(x: -0.5, y: -1.6))
+                chain.move(to: NSPoint(x: 0.5, y: -1.6)); chain.line(to: NSPoint(x: 2, y: -1.6))
+                chain.appendArc(withCenter: NSPoint(x: 2, y: 0), radius: 1.6, startAngle: 270, endAngle: 90)
+                chain.line(to: NSPoint(x: 0.5, y: 1.6))
+                chain.move(to: NSPoint(x: -1.5, y: 0)); chain.line(to: NSPoint(x: 1.5, y: 0)); chain.stroke()
+                NSGraphicsContext.restoreGraphicsState()
+                return true
+            }
+            image.accessibilityDescription = label; Self.images[key] = image; return image
+        }
         let rgb: (CGFloat, CGFloat, CGFloat)
         switch self {
         case .parent: rgb = dark ? (0.70, 0.72, 0.76) : (0.40, 0.42, 0.46)
         case .directory: rgb = dark ? (0.91, 0.73, 0.36) : (0.61, 0.43, 0.12)
-        case .session(_, true): rgb = dark ? (0.36, 0.81, 0.88) : (0.02, 0.49, 0.57)
         case .session(.ssh, _): rgb = dark ? (0.5137, 0.7216, 1.0) : (0.1451, 0.4118, 0.7294)
         case .session(.local, _): rgb = dark ? (0.76, 0.61, 0.97) : (0.51, 0.32, 0.72)
         case .session(.sftp, _): rgb = dark ? (0.4471, 0.8275, 0.6353) : (0.1294, 0.4627, 0.2941)
@@ -74,21 +100,7 @@ enum SessionListIcon: Hashable {
                 line([(16, 5), (16, 11), (4, 11)]); line([(8, 15), (4, 11), (8, 7)])
             case .directory:
                 folder()
-            case .session(_, true):
-                NSGraphicsContext.saveGraphicsState()
-                let transform = NSAffineTransform()
-                transform.translateX(by: 10, yBy: 10); transform.rotate(byDegrees: 45)
-                transform.translateX(by: -10, yBy: -10); transform.concat()
-                let chain = NSBezierPath(); chain.lineWidth = 1.7; chain.lineCapStyle = .round
-                chain.move(to: NSPoint(x: 9, y: 13)); chain.line(to: NSPoint(x: 5, y: 13))
-                chain.appendArc(withCenter: NSPoint(x: 5, y: 10), radius: 3, startAngle: 90, endAngle: 270)
-                chain.line(to: NSPoint(x: 9, y: 7))
-                chain.move(to: NSPoint(x: 11, y: 7)); chain.line(to: NSPoint(x: 15, y: 7))
-                chain.appendArc(withCenter: NSPoint(x: 15, y: 10), radius: 3, startAngle: 270, endAngle: 90)
-                chain.line(to: NSPoint(x: 11, y: 13)); chain.stroke()
-                line([(7, 10), (13, 10)])
-                NSGraphicsContext.restoreGraphicsState()
-            case .session(.ssh, false), .session(.sftp, false), .session(.ftp, false):
+            case .session(.ssh, _), .session(.sftp, _), .session(.ftp, _):
                 color.withAlphaComponent(dark ? 0.18 : 0.09).setFill()
                 NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 36, height: 20), xRadius: 5, yRadius: 5).fill()
                 color.withAlphaComponent(dark ? 0.35 : 0.23).setStroke()

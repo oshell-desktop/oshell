@@ -5,10 +5,12 @@ import AppKit
 import OShellCore
 
 enum Dialogs {
-    static func session(_ existing: SessionProfile? = nil, profiles: [SessionProfile] = [], directories: [String] = [], initialDirectory: String = "服务器", kind: SessionKind = .ssh, defaults: SessionDefaults = SessionDefaults(), proxies: [ProxyProfile] = [], manageProxies: (() -> [ProxyProfile])? = nil) -> SessionProfile? {
-        SessionEditor(existing, profiles: profiles, directories: directories, initialDirectory: initialDirectory, kind: kind, defaults: defaults, proxies: proxies, manageProxies: manageProxies).run()
+    static func session(_ existing: SessionProfile? = nil, profiles: [SessionProfile] = [], directories: [String] = [], initialDirectory: String = "服务器", kind: SessionKind = .ssh, defaults: SessionDefaults = SessionDefaults(), proxies: [ProxyProfile] = [], manageProxies: (() -> [ProxyProfile])? = nil, titleSelection: ((UUID, SessionTitleDisplayMode) -> Void)? = nil) -> SessionProfile? {
+        let editor = SessionEditor(existing, profiles: profiles, directories: directories, initialDirectory: initialDirectory, kind: kind, defaults: defaults, proxies: proxies, manageProxies: manageProxies)
+        guard let result = editor.run() else { return nil }
+        titleSelection?(result.id, editor.selectedTitleMode); return result
     }
-    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
+    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
         let font = NSPopUpButton()
         TerminalFontCatalog.populate(font, selected: current.fontName)
         let size = NSPopUpButton(); [11, 12, 13, 14, 15, 16, 18, 20, 24, 26].forEach { size.addItem(withTitle: String($0)) }
@@ -52,6 +54,9 @@ enum Dialogs {
         let clockTab = NSTabViewItem(identifier: "clock"); clockTab.label = "时钟"; clockTab.view = clock; tabs.addTabViewItem(clockTab)
         if let securityView {
             let security = NSTabViewItem(identifier: "security"); security.label = "安全"; security.view = securityView; tabs.addTabViewItem(security)
+        }
+        if let titleView {
+            let item = NSTabViewItem(identifier: "titles"); item.label = "标签"; item.view = titleView; tabs.addTabViewItem(item)
         }
         let about = NSTabViewItem(identifier: "about"); about.label = "关于"; about.view = AboutSettingsView(preferences: current); tabs.addTabViewItem(about)
         if storageSelected, storageView != nil { tabs.selectTabViewItem(withIdentifier: "storage") }

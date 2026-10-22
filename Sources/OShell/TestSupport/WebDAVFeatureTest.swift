@@ -232,10 +232,54 @@ final class WebDAVFeatureTest {
                 wait("remoteOnlyDownloaded", condition: { !self.sync.busy && self.sync.status == "同步完成" }) { [self] in
                     sync.cancel(); checks["remoteOnlyUpdateApplied"] = workspace.configuration.profiles[1].name == "remote-only"
                     checks["sessionDownloadKeepsClientSettings"] = workspace.configuration.preferences.fontSize == 25 && workspace.configuration.sessionDefaults.sshPort == 2201 && !workspace.configuration.sessionLinks.visible
-                    offline()
+                    selectedContent()
                 }
             }
         }
+    }
+    private func selectedContent() {
+        let originalLocalName = workspace.configuration.profiles[0].name
+        do {
+            let transport = try client("engine"), object = try transport.fetch()!
+            var remote = try SharedVault.decode(object.data, password: master)
+            remote.preferences.fontSize = 19; remote.sessionDefaults.sshPort = 2299
+            remote.quickCommands = [QuickCommand(name: "Peer command", text: "echo peer")]
+            try transport.put(SharedVault.encode(remote, password: master), matching: object.etag)
+            let remoteProfiles = remote.profiles
+            var local = workspace.configuration; local.profiles[0].name = "keep-only-on-this-device"
+            checks["unselectedLocalSessionSaved"] = workspace.saveConfiguration(local); sync.cancel()
+            let page = StorageSettingsView(workspace: workspace)
+            let controls = descendants(page)
+            (controls.first { $0.identifier?.rawValue == "sync.policy.mode" } as? NSPopUpButton)?.selectItem(at: 1)
+            for (id, enabled) in [("sessions", false), ("client", true), ("commands", true), ("defaults", true)] {
+                (controls.first { $0.identifier?.rawValue == "sync.policy." + id } as? NSButton)?.state = enabled ? .on : .off
+            }
+            try page.applySelection()
+            checks["manualPolicyDoesNotStartHTTPAutomatically"] = !sync.busy && sync.nextCheck == nil
+            wait("selectedCategoriesRequireConfirmation", condition: { NSApp.modalWindow?.contentView.map { self.descendants($0).compactMap { $0 as? NSButton }.contains { $0.title == "使用共享版本" } } == true }) { [self] in
+                descendants(NSApp.modalWindow!.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "使用共享版本" }?.performClick(nil)
+            }
+            sync.sync(interactive: true)
+            wait("selectedSettingsDownloaded", condition: { !self.sync.busy && self.sync.phase == .success }) { [self] in
+                checks["selectedSettingsAppliedAtRuntime"] = workspace.configuration.preferences.fontSize == 19 && workspace.configuration.sessionDefaults.sshPort == 2299 && workspace.configuration.quickCommands.first?.name == "Peer command"
+                checks["unselectedLocalSessionsRetained"] = workspace.configuration.profiles[0].name == "keep-only-on-this-device"
+                checks["manualHTTPSuccessSchedulesNothing"] = sync.nextCheck == nil
+                var updated = workspace.configuration; updated.preferences.fontSize = 26; updated.profiles[0].name = "still-only-on-this-device"
+                checks["selectedClientEditSaved"] = workspace.saveConfiguration(updated)
+                sync.sync(interactive: true)
+                wait("selectedSettingsUploaded", condition: { !self.sync.busy && self.sync.phase == .success }) { [self] in
+                    do {
+                        let after = try SharedVault.decode(transport.fetch()!.data, password: master)
+                        checks["selectedClientSettingsUploaded"] = after.preferences.fontSize == 26
+                        checks["unselectedRemoteSessionsRetained"] = after.profiles == remoteProfiles
+                        var restored = workspace.configuration; restored.profiles[0].name = originalLocalName
+                        checks["restoredEncryptedStartupFixture"] = workspace.saveConfiguration(restored)
+                        var policy = try SyncPolicy.load(); policy.automatic = true; try policy.save()
+                        sync.directoryConfigurationChanged(); offline()
+                    } catch { checks["selectedUploadVerification"] = false; finish() }
+                }
+            }
+        } catch { checks["selectedSyncSetup"] = false; finish() }
     }
     private func offline() {
         let before = try? Data(contentsOf: workspace.store.url)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -110,6 +111,51 @@ func TestOShellSessionScopeCompatibility(t *testing.T) {
 	unchangedData, e := os.ReadFile(unchanged)
 	if e != nil || !bytes.Equal(unchangedData, remote.Data) {
 		t.Fatal("client-only edit rewrote remote data", e)
+	}
+	// Every selection combination remains a complete v2 document readable by Desktop.
+	for bits := 0; bits < 16; bits++ {
+		selected := filepath.Join(dir, "selected-"+strconv.Itoa(bits)+".json")
+		goBack := filepath.Join(dir, "selected-go-"+strconv.Itoa(bits)+".json")
+		swiftBack := filepath.Join(dir, "selected-swift-"+strconv.Itoa(bits)+".json")
+		run("publish-selected", local, goFile, selected, strconv.Itoa(bits))
+		data, err := os.ReadFile(selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeSharedDocument(data, master)
+		if err != nil {
+			t.Fatal(bits, err)
+		}
+		expectedFont := "19"
+		if bits&2 != 0 {
+			expectedFont = "23"
+		}
+		expectedPort := 2217
+		if bits&8 != 0 {
+			expectedPort = 2201
+		}
+		expectedCommands := 0
+		if bits&4 != 0 {
+			expectedCommands = 1
+		}
+		if string(decoded.Preferences["fontSize"]) != expectedFont || decoded.Defaults.SSHPort != expectedPort || len(decoded.QuickCommands) != expectedCommands {
+			t.Fatal("incorrect selected fields", bits)
+		}
+		encoded, err := decoded.Encode(master)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(goBack, encoded, 0600); err != nil {
+			t.Fatal(err)
+		}
+		run("check-selected-roundtrip", selected, goBack, swiftBack)
+		again, err := os.ReadFile(swiftBack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = DecodeSharedDocument(again, master); err != nil {
+			t.Fatal("Go-Swift-Go selected round trip", bits, err)
+		}
 	}
 	// A legacy v1 full document is accepted; unknown full-document fields still fail closed.
 	full, e := DecodeSharedDocument(remote.Data, master)

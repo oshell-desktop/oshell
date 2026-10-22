@@ -32,7 +32,7 @@ final class SyncStatusView: NSView {
         times.identifier = .init("sync.status.times"); pending.identifier = .init("sync.status.pending"); detail.identifier = .init("sync.status.detail")
         for label in [backend, times, pending, detail, hint] { label.font = .systemFont(ofSize: 12) }
         detail.maximumNumberOfLines = 3; detail.lineBreakMode = .byWordWrapping
-        times.maximumNumberOfLines = 2; hint.maximumNumberOfLines = 3
+        times.maximumNumberOfLines = 3; hint.maximumNumberOfLines = 5
         hint.textColor = .secondaryLabelColor; hint.font = .systemFont(ofSize: 11)
         run.target = self; run.action = #selector(syncNow); run.identifier = .init("sync.status.run")
         run.toolTip = "关闭设置后使用已保存的配置进行同步；不会应用尚未保存的设置。"
@@ -75,14 +75,14 @@ final class SyncStatusView: NSView {
         if sync.busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         let duration = sync.summary.durationMS.map { String(format: " · 最近耗时 %.1f 秒", Double($0) / 1000) } ?? ""
         backend.stringValue = "当前已保存配置：" + (presentation.enabled ? presentation.backendName : "未启用") + duration
-        times.stringValue = "最近成功：\(date(sync.summary.lastSuccess))    最近尝试：\(date(sync.summary.lastAttempt))"
+        times.stringValue = "最近成功：\(date(sync.summary.lastSuccess))    最近尝试：\(date(sync.summary.lastAttempt))\n下次自动检查 / 重试：\(sync.nextCheck.map { date($0) } ?? "未安排")"
         pending.stringValue = "本地改动：" + (!presentation.enabled ? "仅保存在本机" : sync.pendingLocalChanges.map { $0 ? "已保存，等待同步" : "暂无待同步修改" } ?? "待首次比较确认")
         let error = presentation.enabled && !sync.busy ? sync.recentError : nil
         detail.stringValue = presentation.guidance + (error.map { "\n上次错误：" + $0 } ?? "")
         detail.toolTip = detail.stringValue; detail.textColor = error == nil ? .secondaryLabelColor : .systemOrange
-        let schedule = !presentation.enabled ? "选择同步方式并应用后启用；设置草稿不会立即更改当前同步。" : sync.manualQueued ? "关闭设置后开始；若修改了连接配置，请先点击“应用”。" : "设置打开时暂停新的检查；关闭后恢复自动同步。"
+        let schedule = !presentation.enabled ? "选择同步方式并应用后启用；设置草稿不会立即更改当前同步。" : sync.manualQueued ? "关闭设置后开始；若修改了连接配置，请先点击“应用”。" : "设置打开时暂停新的检查；关闭后按已保存策略执行。"
         let cloud = presentation.directory && sync.phase != .success ? "iCloud 云端进度请在 Finder 查看。" : ""
-        hint.stringValue = sync.diagnostics.writeIssue ?? (schedule + cloud)
+        hint.stringValue = sync.diagnostics.writeIssue ?? sync.policyError ?? (sync.policy.summary + "\n" + schedule + cloud)
         run.title = (presentation.mark == .locked) ? "解锁主密码…" : (sync.manualQueued ? "已安排同步" : "关闭设置后同步")
         run.toolTip = (presentation.mark == .locked) ? "解锁主密码以继续同步。" : "关闭设置后使用已保存配置同步；未应用的修改不会保存。"
         run.isEnabled = presentation.enabled && !sync.busy && !sync.manualQueued && (!(presentation.mark == .locked) || onUnlock != nil)

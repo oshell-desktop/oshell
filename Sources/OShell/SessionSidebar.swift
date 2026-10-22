@@ -52,7 +52,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
     let search = NSSearchField()
     private let status = NSTextField(labelWithString: "")
     private let root = Node(key: "root", title: "", metadata: "")
-    private var nodes = [String: Node](), expanded = Set<String>(), hasLoaded = false, filtering = false
+    private var nodes = [String: Node](), expanded = Set<String>(), filtering = false
     var onOpen: ((UUID) -> Void)?, onHide: (() -> Void)?, onManage: (() -> Void)?
     init() {
         super.init(frame: .zero)
@@ -124,14 +124,16 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             let node = Node(key: "l:"+link.id.uuidString, title: link.name, metadata: SessionSearchQuery.metadata(profile)+" "+SessionSearchQuery.normalize(link.name+" "+SessionDirectory.display(path)), profileID: profile.id, isLink: true, linkID: link.id, kind: profile.kind)
             nodes[node.key] = node; directories[path]?.children.append(node)
         }
+        let pins = (try? SessionPins.load().keys) ?? []
+        func pinned(_ node: Node) -> Bool { pins.contains(node.directory.map(SessionPins.directory) ?? node.profileID.map(SessionPins.session) ?? "") && !node.isLink }
         for node in [root] + Array(nodes.values) {
             node.children.sort {
+                if node === root, pinned($0) != pinned($1) { return pinned($0) }
                 if ($0.directory != nil) != ($1.directory != nil) { return $0.directory != nil }
                 let result = $0.title.localizedStandardCompare($1.title)
                 return result == .orderedSame ? $0.key < $1.key : result == .orderedAscending
             }
         }
-        if !hasLoaded { expanded = Set(directories.values.filter { $0 !== root && SessionDirectory.parent($0.directory ?? "").isEmpty }.map(\.key)); hasLoaded = true }
         filter(preserving: selected)
     }
     func controlTextDidChange(_ notification: Notification) { rememberExpanded(); filter(preserving: nil) }
@@ -188,7 +190,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             icon.imageScaling = .scaleProportionallyDown
             label.font = .systemFont(ofSize: 12); cell.textField = label; cell.imageView = icon
             for view in [label, icon] { view.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(view) }
-            NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 36), icon.heightAnchor.constraint(equalToConstant: 20), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
+            NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 44), icon.heightAnchor.constraint(equalToConstant: 24), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         }
         cell.textField?.stringValue = node.title
         let style: SessionListIcon = node.kind.map { .session($0, shortcut: node.isLink) } ?? .directory

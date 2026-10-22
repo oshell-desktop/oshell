@@ -25,16 +25,16 @@ struct SyncStatusPresentation {
         let directory = sync?.directory != nil
         let enabled = directory || sync?.enabled == true
         self.init(enabled: enabled, locked: enabled && PasswordVault.shared.cachedMaster == nil, phase: sync?.phase ?? .idle,
-                  directory: directory, manualQueued: sync?.manualQueued == true, failure: sync?.summary.failure?.kind)
+                  directory: directory, manualQueued: sync?.manualQueued == true, failure: sync?.summary.failure?.kind, automatic: sync?.policy.automatic ?? true, autoRetry: sync.map { $0.policy.automatic && $0.policy.retryInterval > 0 } ?? true)
     }
-    init(enabled: Bool, locked: Bool = false, phase: WebDAVSync.Phase = .idle, directory: Bool = false, manualQueued: Bool = false, failure: SyncDiagnostics.Failure? = nil) {
+    init(enabled: Bool, locked: Bool = false, phase: WebDAVSync.Phase = .idle, directory: Bool = false, manualQueued: Bool = false, failure: SyncDiagnostics.Failure? = nil, automatic: Bool = true, autoRetry: Bool = true) {
         self.enabled = enabled; self.directory = directory
         if !enabled { mark = .off; title = "未启用同步"; guidance = "在下方选择同步方式；配置目前只保存在本机。"; return }
         if locked { mark = .locked; title = "等待解锁主密码"; guidance = "解锁后继续同步；本地修改已保留。"; return }
         switch phase {
-        case .idle: mark = .waiting; title = "等待检查"; guidance = "将比较本机与共享配置；无需保持 SSH 连接。"
+        case .idle: mark = .waiting; title = automatic ? "等待检查" : "仅手动同步"; guidance = automatic ? "将比较本机与共享配置；无需保持 SSH 连接。" : "点击“关闭设置后同步”开始一次同步。"
         case .queued:
-            mark = .waiting; title = "等待同步"
+            mark = .waiting; title = !automatic && !manualQueued ? "等待手动同步" : "等待同步"
             guidance = manualQueued ? "已安排同步：关闭设置后使用已保存配置执行；未应用的修改不会生效。" : "本地修改已保存，等待同步；设置打开时暂停新的检查。"
         case .reading: mark = .working; title = "正在读取共享数据"; guidance = "正在比较两端变化，本地配置仍可使用。"
         case .writing: mark = .working; title = "正在加密并上传"; guidance = "正在安全写入共享配置，请稍候。"
@@ -49,11 +49,11 @@ struct SyncStatusPresentation {
             case .tls: guidance = "请在下方测试连接，检查或核对服务器证书后重试。"
             case .directoryUnavailable, .cloudDownload, .cloudConflict: guidance = "请在 Finder 检查目录是否可用、文件是否已下载，以及是否有冲突副本。"
             case .remoteDeleted: guidance = "共享文件已被删除；请确认目标数据后重新选择同步位置，不会自动覆盖。"
-            case .network, .http: guidance = "请检查网络或服务端；恢复后会自动重试，也可安排一次手动同步。"
+            case .network, .http: guidance = autoRetry ? "请检查网络或服务端；恢复后会自动重试，也可安排一次手动同步。" : "请检查网络或服务端，修复后手动同步。"
             default: guidance = "请查看下方错误或诊断日志，确认两端主密码与版本兼容后重试。"
             }
         case .conflict: mark = .attention; title = "同步需要确认"; guidance = "请点击“关闭设置后同步”，继续首次接入或冲突处理；确认前不会覆盖数据。"
-        case .cancelled: mark = .cancelled; title = "本次同步已取消"; guidance = "本地修改已保留；自动检查仍启用，也可重新安排同步。"
+        case .cancelled: mark = .cancelled; title = "本次同步已取消"; guidance = automatic ? "本地修改已保留；自动检查仍启用，也可重新安排同步。" : "本地修改已保留，可手动安排下一次同步。"
         }
     }
     /// Small native vector icon, including a shape cue so status does not rely on color alone.

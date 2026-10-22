@@ -67,7 +67,8 @@ extension WorkspaceController {
             let copies = try result.get()
             guard isSecurityUnlocked, configurationRevision == revision else { throw ModelError.invalid("配置已变化，请重新复制后粘贴。") }
             var value = configuration; value.profiles += copies
-            return saveConfiguration(value) ? copies : nil
+            guard saveConfiguration(value) else { return nil }
+            copySessionTitleChoices(from: sources, to: copies); return copies
         } catch {
             Dialogs.message("粘贴会话配置失败：" + error.localizedDescription)
             return nil

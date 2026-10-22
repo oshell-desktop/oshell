@@ -100,10 +100,11 @@ extension WorkspaceController {
     @objc func editCurrentSessionProfile() {
         guard canEditCurrentSessionProfile, let pane = selectedTab?.activePane else { return }
         let source = credentialProfiles.first { $0.id == pane.profile.id } ?? pane.profile
-        guard let profile = Dialogs.session(source, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor) else { return }
+        var titleChoice: (UUID, SessionTitleDisplayMode)?
+        guard let profile = Dialogs.session(source, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor, titleSelection: { titleChoice = ($0, $1) }) else { return }
         var value = configuration
         if let index = value.profiles.firstIndex(where: { $0.id == source.id }) { value.profiles[index] = profile }
         else { value.profiles.append(profile) }
-        _ = saveConfiguration(value)
+        if saveConfiguration(value) { saveSessionTitleChoice(titleChoice) }
     }
 }

@@ -36,6 +36,17 @@ do {
         try check(try SessionCipher.decrypt(applied.profiles[0].encryptedPassword!, master: master, profile: applied.profiles[0]) == "fixture-session-password")
         try check(try SessionCipher.decrypt(applied.proxies[0].settings.encryptedPassword!, master: master, profile: applied.proxies[0].settings.credentialProfile) == "fixture-jump-password")
         try save(applied, args[4])
+    case "publish-selected":
+        let local = try load(args[2]), remote = try load(args[3]), bits = Int(args[5])!
+        var selection = SyncContentSelection(); selection.sessions = bits & 1 != 0; selection.clientSettings = bits & 2 != 0; selection.quickCommands = bits & 4 != 0; selection.sessionDefaults = bits & 8 != 0
+        try save(SessionSyncConfiguration.wireConfiguration(local, preserving: remote, selection: selection), args[4])
+    case "check-selected-roundtrip":
+        let swift = try load(args[2]), go = try load(args[3])
+        var all = SyncContentSelection(); all.clientSettings = true; all.quickCommands = true; all.sessionDefaults = true
+        try check(SessionSyncConfiguration.same(swift, go, selection: all))
+        try check(try SessionCipher.decrypt(go.profiles[0].encryptedPassword!, master: master, profile: go.profiles[0]) == "fixture-session-password")
+        try check(try SessionCipher.decrypt(go.proxies[0].settings.encryptedPassword!, master: master, profile: go.proxies[0].settings.credentialProfile) == "fixture-jump-password")
+        try save(SessionSyncConfiguration.wireConfiguration(go, preserving: swift, selection: all), args[4])
     case "settings-only":
         var local = try load(args[2]); local.preferences.fontSize = 24; local.sessionDefaults.sshPort = 2299; local.sessionLinks.visible = true
         try save(local, args[3])

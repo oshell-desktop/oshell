@@ -104,6 +104,54 @@ enum TerminalSelectionTest {
         feed("alpha:beta\u{1b}[?1000h\u{1b}[?1006h")
         click(shift: true); checks["shiftCanBypassMouseReporting"] = terminal.selection.getSelectedText() == "alpha:beta"
         terminal.feed(text: "\u{1b}[?1000l\u{1b}[?1006l")
+        // Reproduce progress refreshes between individual mouse-drag events,
+        // using both feed entry points with mouse-reporting permission enabled.
+        terminal.allowMouseReporting = true
+        func pointer(_ type: NSEvent.EventType, col: Int, shift: Bool = false) {
+            timestamp += 0.02
+            let cell = terminal.bounds.width / CGFloat(model.cols)
+            let point = terminal.convert(NSPoint(x: (CGFloat(col) + 0.25) * cell, y: terminal.bounds.height - 8), to: nil)
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: shift ? [.shift] : [], timestamp: timestamp, windowNumber: workspace.window!.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 1)!
+            switch type {
+            case .leftMouseDown: terminal.mouseDown(with: event)
+            case .leftMouseDragged: terminal.mouseDragged(with: event)
+            default: terminal.mouseUp(with: event)
+            }
+        }
+        feed("Download package artifact 00%")
+        pointer(.leftMouseDown, col: 0); pointer(.leftMouseDragged, col: 0); pointer(.leftMouseDragged, col: 2)
+        let anchor = terminal.selection.start
+        var survived = terminal.selection.active
+        for index in 3...24 {
+            let update = "\r\u{1b}[2KDownload package artifact \(index)%"
+            if index % 2 == 0 { terminal.feed(text: update) }
+            else { terminal.feed(byteArray: Array(update.utf8)[...]) }
+            survived = survived && terminal.selection.active && terminal.selection.start == anchor
+            pointer(.leftMouseDragged, col: index)
+        }
+        checks["progressOutputPreservesDragAnchor"] = survived
+        pointer(.leftMouseUp, col: 24)
+        let copied = terminal.selection.getSelectedText()
+        checks["progressSelectionCopiesCompleteText"] = copied.contains("Download package") && copied.count >= 23 && clipboard.string(forType: .string) == copied
+        terminal.feed(text: "\r\u{1b}[2KDownload package artifact 99%")
+        checks["selectionSurvivesAfterMouseRelease"] = terminal.selection.active && terminal.selection.start == anchor
+        terminal.copy(terminal)
+        checks["manualCopyWorksDuringProgress"] = clipboard.string(forType: .string)?.contains("Download package") == true
+        checks["progressContinuesRendering"] = String(decoding: model.getBufferAsData(), as: UTF8.self).contains("99%")
+        feed("alpha:beta\u{1b}[?1000h\u{1b}[?1006h")
+        click(shift: true)
+        terminal.feed(text: "\r\u{1b}[2Kalpha:beta")
+        checks["shiftSelectionSurvivesRemoteMouseOutput"] = terminal.selection.active && terminal.selection.getSelectedText() == "alpha:beta"
+        terminal.feed(text: "\u{1b}[?1049h")
+        checks["alternateScreenClearsOldSelection"] = !terminal.selection.active
+        terminal.feed(text: "alternate"); terminal.selection.selectAll()
+        terminal.feed(text: "\u{1b}[?1049l")
+        checks["returnToMainClearsAlternateSelection"] = !terminal.selection.active
+        terminal.selection.selectAll(); terminal.feed(text: "\u{1b}c")
+        checks["resetClearsSelection"] = !terminal.selection.active
+        terminal.feed(text: "resized"); terminal.selection.selectAll()
+        terminal.setFrameSize(NSSize(width: terminal.frame.width - 20, height: terminal.frame.height))
+        checks["resizeClearsSelection"] = !terminal.selection.active
         func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
         func edit(apply: Bool, reset: Bool = false) {
             let timer = Timer(timeInterval: 0.15, repeats: false) { _ in

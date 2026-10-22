@@ -13,6 +13,27 @@ final class WebDAVSync {
     private(set) var manualQueued = false
     private(set) var summary = SyncDiagnostics.Summary(scope: "")
     private var queuedTimer: Timer?
+    private var retryTimer: Timer?, taskDate: Date?
+    private var automaticFailed = false
+    private(set) var policy = SyncPolicy()
+    private(set) var policyError: String?
+    func reloadPolicy() {
+        do { policy = try SyncPolicy.load(); policyError = nil }
+        catch { policy = SyncPolicy(); policy.automatic = false; policyError = error.localizedDescription }
+    }
+    private func updateNextCheck() {
+        nextCheck = ([refreshTimer, retryTimer].compactMap { timer -> Date? in
+            guard let timer, timer.isValid else { return nil }
+            return timer.fireDate > Date() ? timer.fireDate : Date().addingTimeInterval(timer.timeInterval)
+        } + [taskDate].compactMap { $0 }).min()
+    }
+    private func installRetryTimer() {
+        guard syncEnabled, policy.automatic, policy.retryInterval > 0, automaticFailed, retryTimer == nil else { return }
+        let timer = Timer(timeInterval: Double(policy.retryInterval), repeats: true) { [weak self] _ in
+            self?.sync(interactive: false, retry: true); self?.updateNextCheck(); self?.notify()
+        }
+        retryTimer = timer; RunLoop.main.add(timer, forMode: .common); updateNextCheck()
+    }
     private var runStarted: Date?, runID: UUID?, runManual = false, verboseRun = true
     private var lastLoggedCheck: Date?
     var diagnosticBackend: SyncDiagnostics.Backend { directory != nil ? .directory : (enabled ? .webDAV : .none) }
@@ -21,14 +42,16 @@ final class WebDAVSync {
     private func notify() { NotificationCenter.default.post(name: Self.statusDidChange, object: self) }
     private func fingerprint() -> String? {
         guard let configuration = windows?.active?.configuration ?? windows?.workspaces.first?.configuration,
-              let data = try? SessionSyncConfiguration.data(configuration) else { return nil }
+              let data = try? SessionSyncConfiguration.data(configuration, selection: policy.content) else { return nil }
         return PlatformDigest.sha256(data).map { String(format: "%02x", $0) }.joined()
     }
     private func restoreDiagnostics() {
-        let identity = directory.map { Data($0.path.utf8) } ?? (try? SharedDataFile.readIfPresent(Self.settingsURL)) ?? Data("disabled".utf8)
+        var identity = directory.map { Data($0.path.utf8) } ?? (try? SharedDataFile.readIfPresent(Self.settingsURL)) ?? Data("disabled".utf8)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        if policy.content != SyncContentSelection(), let data = try? encoder.encode(policy.content) { identity.append(data) }
         let scope = PlatformDigest.sha256(identity).map { String(format: "%02x", $0) }.joined()
         summary = diagnostics.summary(for: scope) ?? .init(scope: scope)
-        lastError = summary.failure?.text
+        lastError = summary.failure?.text; automaticFailed = lastError != nil
         if let saved = summary.localFingerprint { pendingLocalChanges = fingerprint() != saved }
         else { pendingLocalChanges = nil }
         phase = lastError == nil ? .idle : .failed
@@ -41,6 +64,7 @@ final class WebDAVSync {
     }
     private var elapsed: Int? { runStarted.map { max(0, Int(Date().timeIntervalSince($0) * 1000)) } }
     private func succeeded(unchanged: Bool = false) {
+        automaticFailed = false; retryTimer?.invalidate(); retryTimer = nil; updateNextCheck()
         phase = .success; status = "同步完成"; lastError = nil; pendingLocalChanges = false
         summary.lastSuccess = Date(); summary.durationMS = elapsed; summary.outcome = unchanged ? .unchanged : .completed
         summary.failure = nil; summary.localFingerprint = fingerprint()
@@ -53,7 +77,7 @@ final class WebDAVSync {
         notify()
     }
     func directoryConfigurationChanged() {
-        cancel(); restoreDiagnostics(); status = syncEnabled ? "同步配置已更新" : "同步已停用，本地及共享数据保留"
+        cancel(); reloadPolicy(); restoreDiagnostics(); status = syncEnabled ? "同步配置已更新" : "同步已停用，本地及共享数据保留"
         diagnostics.record(syncEnabled ? .configured : .disabled, backend: diagnosticBackend); notify()
     }
     func queueManualSync() {
@@ -70,12 +94,24 @@ final class WebDAVSync {
     }
     func cancelCurrent() { cancel(); phase = .cancelled; status = "本次同步已取消；本地修改保留"; installRefreshTimer(); notify() }
     private func installRefreshTimer() {
-        guard syncEnabled, refreshTimer == nil else { return }
-        nextCheck = Date().addingTimeInterval(60)
-        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            self?.nextCheck = Date().addingTimeInterval(60); self?.sync(interactive: false); self?.notify()
+        guard syncEnabled, policy.automatic else { return }
+        if automaticFailed { installRetryTimer(); return }
+        guard refreshTimer == nil, policy.checkInterval > 0 else { updateNextCheck(); return }
+        let timer = Timer(timeInterval: Double(policy.checkInterval), repeats: true) { [weak self] _ in
+            self?.sync(interactive: false); self?.updateNextCheck(); self?.notify()
         }
-        refreshTimer = timer; RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer; RunLoop.main.add(timer, forMode: .common); updateNextCheck()
+    }
+    private func queueAutomatic(after delay: TimeInterval) {
+        task?.cancel(); taskDate = Date().addingTimeInterval(delay)
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }; self.task = nil; self.taskDate = nil
+            guard self.syncEnabled, self.policy.automatic, !self.automaticFailed else { self.updateNextCheck(); self.notify(); return }
+            if NSApp.modalWindow != nil || self.busy { self.queueAutomatic(after: 1); return }
+            self.sync(interactive: false); self.updateNextCheck(); self.notify()
+        }
+        task = work; updateNextCheck(); notify()
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private weak var windows: WorkspaceWindows?
@@ -97,14 +133,14 @@ final class WebDAVSync {
     init(windows: WorkspaceWindows) {
         self.windows = windows; store = windows.store
         diagnostics = SyncDiagnostics(directory: Self.root)
-        restoreDiagnostics()
+        reloadPolicy(); restoreDiagnostics()
     }
     #if OSHELL_TEST_HARNESS
-    var diagnosticTimers: (refresh: Timer?, queued: Timer?) { (refreshTimer, queuedTimer) }
+    var diagnosticTimers: (refresh: Timer?, queued: Timer?, retry: Timer?) { (refreshTimer, queuedTimer, retryTimer) }
     #endif
     deinit {
         // Weak timer callbacks do not remove the timer from the run loop.
-        queuedTimer?.invalidate(); refreshTimer?.invalidate(); task?.cancel(); client?.cancel()
+        queuedTimer?.invalidate(); refreshTimer?.invalidate(); retryTimer?.invalidate(); task?.cancel(); client?.cancel()
     }
     func settings(master: String) throws -> WebDAVSettings? {
         guard let data = try SharedDataFile.readIfPresent(Self.settingsURL) else { return nil }
@@ -139,34 +175,35 @@ final class WebDAVSync {
         if interrupted { record(.cancelled, always: true); summary.outcome = .cancelled; summary.durationMS = elapsed; diagnostics.saveSummary(summary) }
         deferredConflict = false; refreshTimer?.invalidate(); refreshTimer = nil; nextCheck = nil
         queuedTimer?.invalidate(); queuedTimer = nil; manualQueued = false
+        retryTimer?.invalidate(); retryTimer = nil; taskDate = nil
         token = UUID(); task?.cancel(); task = nil; client?.cancel(); client = nil; busy = false
         if interrupted { phase = .cancelled; status = "本次同步已取消；本地修改保留" }
         notify()
     }
-    func schedule(localChanges: Bool = false) {
+    func schedule(localChanges: Bool = false, startup: Bool = false) {
         guard syncEnabled, !applying else { return }
         if localChanges {
             let changed = fingerprint() != summary.localFingerprint
             if !changed, summary.lastSuccess != nil { pendingLocalChanges = false; installRefreshTimer(); notify(); return }
             if pendingLocalChanges != true { diagnostics.record(.localChanged, backend: diagnosticBackend) }
             pendingLocalChanges = true
-            if !busy && !deferredConflict && !manualQueued { phase = .queued; status = "本地修改已保存，等待同步" }
+            if !busy && !deferredConflict && !manualQueued && !automaticFailed { phase = .queued; status = policy.automatic && policy.afterChanges ? "本地修改已保存，等待同步" : "本地修改已保存，等待手动或定时同步" }
         }
         installRefreshTimer()
-        task?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.task = nil; self?.sync(interactive: false) }; task = work
-        notify()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+        guard policy.automatic, !automaticFailed, !localChanges || policy.afterChanges, !startup || policy.onStartup else { notify(); return }
+        queueAutomatic(after: localChanges ? Double(policy.changeDelay) : 2)
     }
     private static func same(_ a: Configuration, _ b: Configuration) -> Bool {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return (try? encoder.encode(a)) == (try? encoder.encode(b))
     }
-    func sync(interactive: Bool) {
+    func sync(interactive: Bool, retry: Bool = false) {
+        guard policyError == nil else { if interactive { Dialogs.message("无法读取同步策略：" + (policyError ?? "")) }; return }
+        guard interactive || (policy.automatic && (!automaticFailed || retry)) else { return }
         guard syncEnabled, !busy, NSApp.modalWindow == nil, let workspace = windows?.active else { return }
         guard !manualQueued || interactive else { return }
         guard interactive || !deferredConflict else { return }
-        if interactive { deferredConflict = false }
+        if interactive { deferredConflict = false; task?.cancel(); task = nil; taskDate = nil; retryTimer?.invalidate(); retryTimer = nil; updateNextCheck() }
         guard !SharedConflictDrafts.exists(for: store) else { phase = .conflict; status = "本机有待处理的冲突草稿"; notify(); if interactive { Dialogs.message("请先处理本机同步冲突草稿。"); }; return }
         guard let master = PasswordVault.shared.cachedMaster else { notify(); if interactive { Dialogs.message("请先解锁主密码，再同步共享数据。"); }; return }
         runID = UUID(); runStarted = Date(); runManual = interactive
@@ -185,7 +222,7 @@ final class WebDAVSync {
                 guard let settings = try settings(master: master) else { return }
                 client = try makeClient(settings); baselineURL = Self.root.appendingPathComponent("webdav-baseline.json"); allowCreate = true
             }
-            let local = try SessionSyncConfiguration.project(workspace.configuration), revision = workspace.configurationRevision, current = UUID()
+            let local = try SessionSyncConfiguration.project(workspace.configuration, selection: policy.content), revision = workspace.configurationRevision, current = UUID()
             let name = backendName
             token = current; self.client = client; busy = true; status = "正在读取\(name)共享数据…"; notify()
             let baseData = try SharedDataFile.readIfPresent(baselineURL)
@@ -200,8 +237,8 @@ final class WebDAVSync {
                     guard let self, self.token == current, let workspace else { return }
                     do {
                         let (object, compatibility, oldBaseline) = try result.get(); self.record(.fetched)
-                        let remote = try compatibility.map(SessionSyncConfiguration.project)
-                        let baseline = try oldBaseline.map(SessionSyncConfiguration.project)
+                        let remote = try compatibility.map { try SessionSyncConfiguration.project($0, selection: self.policy.content) }
+                        let baseline = try oldBaseline.map { try SessionSyncConfiguration.project($0, selection: self.policy.content) }
                         guard NSApp.modalWindow == nil else {
                             self.phase = .queued; self.status = "等待关闭当前对话框后继续同步"; self.record(.queued, always: true)
                             self.finish()
@@ -229,17 +266,17 @@ final class WebDAVSync {
                             else if var baseline {
                                 baseline.masterPasswordVerifier = local.masterPasswordVerifier
                                 let plan = try ConfigurationMerge(base: baseline, local: local, remote: remote)
-                                guard let choices = self.choose(plan, name: name) else { self.status = "有待确认的会话冲突，稍后重新同步"; self.finish(); return }
+                                guard let choices = self.choose(plan, name: name) else { self.status = "有待确认的同步配置冲突，稍后重新同步"; self.finish(); return }
                                 resolved = try plan.resolve(choices)
                             } else {
                                 self.phase = .conflict; self.status = "首次连接已有数据，等待选择"; self.record(.conflict, always: true); self.notify()
                                 let alert = PopupAlert(); alert.messageText = "\(name)已有共享数据"
-                                alert.informativeText = "首次同步：共享端有 \(remote.profiles.count) 个会话，本机有 \(local.profiles.count) 个。请选择加载共享会话，或合并本机会话及其代理、目录和链接；客户端设置保留在本机，不会按时间直接覆盖。"
+                                alert.informativeText = "首次同步所选类别：\(self.policy.content.summary)。请选择载入共享数据或合并本机修改，未勾选的类别保留各端现状，不按时间直接覆盖。"
                                 alert.addButton(withTitle: "使用共享版本"); alert.addButton(withTitle: "合并本机会话"); alert.addButton(withTitle: "取消")
                                 let response = alert.runModal()
                                 if response == .alertFirstButtonReturn { resolved = remote }
                                 else if response == .alertSecondButtonReturn {
-                                    let plan = try SessionSyncConfiguration.initialMerge(local: local, remote: remote)
+                                    let plan = try SessionSyncConfiguration.initialMerge(local: local, remote: remote, selection: self.policy.content)
                                     guard let choices = self.choose(plan, name: name) else { self.finish(); return }; resolved = try plan.resolve(choices)
                                 } else { self.deferredConflict = true; self.phase = .conflict; self.status = "首次同步待确认，请手动同步继续"; self.record(.postponed, always: true); self.summary.outcome = .postponed; self.diagnostics.saveSummary(self.summary); self.finish(); return }
                             }
@@ -257,27 +294,28 @@ final class WebDAVSync {
     }
     private func choose(_ plan: ConfigurationMerge, name: String) -> [String: ConfigurationMerge.Choice]? {
         if plan.conflicts.isEmpty { return [:] }
-        phase = .conflict; status = "有会话冲突，等待确认"; record(.conflict, always: true); notify()
-        let alert = PopupAlert(); alert.messageText = "\(name)会话冲突"; alert.informativeText = "请逐项选择保留的版本。稍后处理会保留本机离线数据，下次同步继续比较。"
+        phase = .conflict; status = "有同步配置冲突，等待确认"; record(.conflict, always: true); notify()
+        let alert = PopupAlert(); alert.messageText = "\(name)同步配置冲突"; alert.informativeText = "请逐项选择保留的版本。稍后处理会保留本机离线数据，下次同步继续比较。"
         alert.addButton(withTitle: "确认同步"); alert.addButton(withTitle: "稍后处理")
         let view = SharedConflictView(plan.conflicts); alert.accessoryView = view; let save = alert.buttons[0]; save.isEnabled = false
         view.onReady = { [weak save] in save?.isEnabled = $0 }
-        guard alert.runModal() == .alertFirstButtonReturn else { deferredConflict = true; status = "有待确认的会话冲突，请手动同步继续"; record(.postponed, always: true); summary.outcome = .postponed; diagnostics.saveSummary(summary); return nil }
+        guard alert.runModal() == .alertFirstButtonReturn else { deferredConflict = true; status = "有待确认的同步配置冲突，请手动同步继续"; record(.postponed, always: true); summary.outcome = .postponed; diagnostics.saveSummary(summary); return nil }
         return view.choices
     }
     private func commit(_ value: Configuration, localSnapshot: Configuration, compatibility: Configuration?, remote: WebDAVObject?, upload: Bool, client: SharedSyncTransport, baselineURL: URL, backupLocal: Bool, master: String, revision: Int, workspace: WorkspaceController, token: UUID, interactive: Bool) {
         phase = upload ? .writing : .applying
         status = upload ? "正在加密并上传…" : "正在载入共享数据…"
         record(upload ? .uploading : .applying); notify()
+        let selection = policy.content
         DispatchQueue.global(qos: .utility).async { [weak self, weak workspace] in
             let result = Result { () -> (Data, Data?) in
-                let wire = try SessionSyncConfiguration.wireConfiguration(value, preserving: compatibility)
+                let wire = try SessionSyncConfiguration.wireConfiguration(value, preserving: compatibility, selection: selection)
                 let encrypted = try SharedVault.encode(wire, password: master)
                 // If applying is deferred, resume the merge from the local
                 // snapshot used for this transfer, not the older common base.
                 // Using the merged remote value as that base would lose remote-
                 // only additions that have not yet reached the local database.
-                let continuation = try upload ? SharedVault.encode(SessionSyncConfiguration.wireConfiguration(localSnapshot, preserving: compatibility), password: master) : nil
+                let continuation = try upload ? SharedVault.encode(SessionSyncConfiguration.wireConfiguration(localSnapshot, preserving: compatibility, selection: selection), password: master) : nil
                 if upload { try client.put(encrypted, matching: remote?.etag) }
                 else if try client.fetch()?.etag != remote?.etag { throw WebDAVFailure.conflict }
                 return (encrypted, continuation)
@@ -308,11 +346,11 @@ final class WebDAVSync {
                             try FileManager.default.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                             try PrivateFile.write(prior, to: backup)
                         }
-                        let applied = SessionSyncConfiguration.applying(value, to: workspace.configuration)
+                        let applied = SessionSyncConfiguration.applying(value, to: workspace.configuration, selection: selection)
                         if !Self.same(applied, workspace.configuration) {
                             try self.store.save(applied)
                             PasswordVault.shared.acceptSharedConfiguration(applied)
-                            workspace.acceptSavedConfiguration(applied, applyPreferences: false)
+                            workspace.acceptSavedConfiguration(applied, applyPreferences: selection.clientSettings)
                         }
                         try FileManager.default.createDirectory(at: baselineURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                         try PrivateFile.write(encrypted, to: baselineURL)
@@ -326,8 +364,9 @@ final class WebDAVSync {
             }
         }
     }
-    private func finish() { busy = false; client = nil; notify() }
+    private func finish() { busy = false; client = nil; installRefreshTimer(); updateNextCheck(); notify() }
     private func fail(_ error: Error, interactive: Bool) {
+        automaticFailed = true; refreshTimer?.invalidate(); refreshTimer = nil
         phase = .failed; status = error.localizedDescription; lastError = status
         summary.failure = .init(error); summary.outcome = .failed; summary.durationMS = elapsed
         diagnostics.saveSummary(summary); record(.failed, error: error, always: true)

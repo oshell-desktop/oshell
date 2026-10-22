@@ -2827,10 +2827,14 @@ extension TerminalView {
     func feedPrepare()
     {
         search.invalidate()
-        // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
-            selection.active = false
-        }
+        // macOS local selections (including Shift bypass of remote mouse
+        // reporting) must survive streaming output. Permission to report mouse
+        // events does not mean the remote app owns the current gesture.
+        // Buffer switches, resets, resize and scroll eviction invalidate ranges
+        // separately; receiving another output chunk is not an invalidation.
+        #if !os(macOS)
+        if allowMouseReporting { selection.active = false }
+        #endif
         startDisplayUpdates()
     }
     

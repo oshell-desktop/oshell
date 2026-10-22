@@ -91,6 +91,8 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     var loadFailed = false
     private(set) var isSecurityUnlocked = false
     private var startupDecision: Bool?
+    private var pinsObserver: NSObjectProtocol?
+    private var titleSettingsObserver: NSObjectProtocol?
     private var startupWaiters = [(Bool) -> Void]()
     let masterWarning = NSView()
     var masterWarningHeight: NSLayoutConstraint!
@@ -143,9 +145,15 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             guard let self, let sync = note.object as? WebDAVSync, sync === self.windowCoordinator?.webDAV else { return }
             self.refreshSyncStatusButton()
         }
+        pinsObserver = NotificationCenter.default.addObserver(forName: SessionPins.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.sessionManager?.reload(); self?.refreshSessionSidebar()
+        }
+        titleSettingsObserver = NotificationCenter.default.addObserver(forName: SessionTitleSettings.didChange, object: nil, queue: .main) { [weak self] _ in self?.refreshSessionTitleDisplays() }
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: NSApp, queue: .main) { [weak self] _ in self?.markSelectedOutputRead() }
     }
     deinit {
+        if let pinsObserver { NotificationCenter.default.removeObserver(pinsObserver) }
+        if let titleSettingsObserver { NotificationCenter.default.removeObserver(titleSettingsObserver) }
         if let quickSendVisibilityObserver { NotificationCenter.default.removeObserver(quickSendVisibilityObserver) }
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
         if let updateStateObserver { NotificationCenter.default.removeObserver(updateStateObserver) }
@@ -442,18 +450,24 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     @objc func exportSessions() { showSessionManager(); sessionManager?.exportAll() }
     @objc func newSession() { createSession(kind: .ssh) }
     func createSession(kind: SessionKind, directory: String? = nil, showManager: Bool = true) {
-        guard let profile = Dialogs.session(profiles: credentialProfiles, directories: SessionDirectory.all(configuration), initialDirectory: directory ?? sessionManager?.currentDirectory ?? "服务器", kind: kind, defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor) else { return }
+        var titleChoice: (UUID, SessionTitleDisplayMode)?
+        guard let profile = Dialogs.session(profiles: credentialProfiles, directories: SessionDirectory.all(configuration), initialDirectory: directory ?? sessionManager?.currentDirectory ?? "服务器", kind: kind, defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor, titleSelection: { titleChoice = ($0, $1) }) else { return }
         var value = configuration; value.profiles.append(profile)
-        if saveConfiguration(value), showManager { if sessionManager == nil { showSessionManager() }; sessionManager?.reveal(profile); sessionManager?.showPreservingMode() }
+        if saveConfiguration(value) {
+            saveSessionTitleChoice(titleChoice)
+            if showManager { if sessionManager == nil { showSessionManager() }; sessionManager?.reveal(profile); sessionManager?.showPreservingMode() }
+        }
     }
     @objc func editSession() { if let profile = selectedProfile { editSavedSession(profileID: profile.id) } }
     func editSavedSession(profileID: UUID) {
+        var titleChoice: (UUID, SessionTitleDisplayMode)?
         guard isSecurityUnlocked, let selected = configuration.profiles.first(where: { $0.id == profileID }), selected.kind != .local,
-              let profile = Dialogs.session(selected, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor),
+              let profile = Dialogs.session(selected, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor, titleSelection: { titleChoice = ($0, $1) }),
               let index = configuration.profiles.firstIndex(where: { $0.id == profile.id }) else { return }
         var value = configuration; value.profiles[index] = profile
         let linkID = sessionManager?.selectedLink?.id
         if saveConfiguration(value) {
+            saveSessionTitleChoice(titleChoice)
             if let linkID { sessionManager?.revealLink(linkID) } else { sessionManager?.reveal(profile) }
         }
     }
@@ -553,10 +567,15 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         var resolved = profile
         if !reuseConnection { resolved.runtimeProxyRoute = []; resolved = (try? configuration.resolvingProxy(resolved)) ?? resolved }
         let pane = TerminalPane(profile: resolved, preferences: configuration.preferences, knownHostsFile: knownHosts, oneTimePassword: oneTimePassword, terminalType: terminalType, connectionGroup: connectionGroup, reuseConnection: reuseConnection, blank: blank)
+        if profile.kind == .local, !blank {
+            let settings = (try? SessionTitleSettings.load()) ?? .init()
+            pane.applyTitleDisplayMode(settings.overrides[profile.id.uuidString.lowercased()] ?? (configuration.profiles.contains { $0.id == profile.id } ? SessionTitleDisplayMode(profile.titleMode) : settings.defaultMode))
+        }
         bindPane(pane)
         return pane
     }
     private func bindPane(_ pane: TerminalPane) {
+        if let saved = configuration.profiles.first(where: { $0.id == pane.profile.id }) { pane.updateSessionTitleName(saved.name) }
         let profile = pane.profile
         var wasSaved = configuration.profiles.contains { $0.id == profile.id }
         pane.credentialsForConnection = { [weak self] in
@@ -758,7 +777,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     }
     private func close(_ tab: TerminalTab, focusRemainingTerminal: Bool = true) {
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
-        if tab.layout.panes.contains(where: \.hasActiveProcess),
+        if SessionTitleSettings.shouldConfirmTabClose, tab.layout.panes.contains(where: \.hasActiveProcess),
            !Dialogs.confirm("关闭此标签？", text: "此标签中的连接、本机工具与文件传输会结束。", action: "关闭") { return }
         let wasSelected = selectedTab === tab
         var groupNeighbor: TerminalTab?
@@ -793,7 +812,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let focusedPane = inputPanes.first { window?.firstResponder === $0.terminal }
         let panes = tab.layout.panes
         guard panes.count > 1 else { close(tab, focusRemainingTerminal: focusedPane != nil); return }
-        if pane.hasActiveProcess, !Dialogs.confirm("关闭此分屏会话？", text: "此分屏中的连接、本机工具与文件传输会结束，其他分屏保持连接。", action: "关闭") { return }
+        if SessionTitleSettings.shouldConfirmTabClose, pane.hasActiveProcess, !Dialogs.confirm("关闭此分屏会话？", text: "此分屏中的连接、本机工具与文件传输会结束，其他分屏保持连接。", action: "关闭") { return }
         if tab.restoreZoom() { rebuildWorkspace() }
         guard let index = panes.firstIndex(where: { $0 === pane }), let layout = tab.layout.removing(pane.id) else { return }
         pane.shutdown()
@@ -861,14 +880,19 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     func editPreferences(appearanceSelected: Bool, updatesSelected: Bool = false, storageSelected: Bool = false) {
         let storageView = StorageSettingsView(workspace: self)
         let securityView = SecuritySettingsView(workspace: self)
+        let titleView = SessionTitleSettingsView()
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
-        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, selectionView: { autoCopy, trim in
+        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
         }, localShortcutSelection: { localShortcut = $0 }) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
         var value = configuration; value.preferences = preferences
         guard saveConfiguration(value) else { return }
+        do {
+            let openProfiles = (windowCoordinator?.workspaces ?? [self]).flatMap { $0.inputPanes.filter { !$0.isBlank }.map(\.profile) }
+            try titleView.apply(profiles: configuration.profiles + openProfiles)
+        } catch { Dialogs.message("标题设置未保存：" + error.localizedDescription) }
         if let selection = try? selectionView?.values() { selection.save() }
         SessionSidebarPreferences.saveShortcut(localShortcut)
         ShortcutRuntime.install(preferences.keyboardShortcuts); refreshSessionSidebar()
@@ -1061,6 +1085,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
         let preferencesChanged = (try? encoder.encode(configuration.preferences)) != (try? encoder.encode(value.preferences))
         configuration = value; configurationRevision += 1
+        // A damaged/future local presentation file must never block shared data loading.
+        try? SessionPins.reconcile(value)
+        refreshSessionTitleDisplays()
         refreshTerminalChrome()
         refreshMasterWarning(); rebuildQuickLinks(); rebuildCommandMenu(); applyHighlightConfiguration()
         sessionManager?.reload(); commandManager?.reload(); highlightManager?.reload(); refreshSessionSidebar()

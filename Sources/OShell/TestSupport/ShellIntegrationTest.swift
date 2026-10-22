@@ -50,8 +50,8 @@ enum ShellIntegrationTest {
         for mode in HostTitleMode.allCases {
             let editor = SessionEditor(profile, profiles: [profile], directories: [], initialDirectory: "")
             let popup = descendants(editor.dialog.accessoryView!).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "session.titleMode" }!
-            checks["threeTitleModeChoices"] = popup.itemTitles == HostTitleMode.allCases.map(\.title)
-            popup.selectItem(at: HostTitleMode.allCases.firstIndex(of: mode)!)
+            checks["fourTitleModeChoices"] = popup.itemTitles == SessionTitleDisplayMode.allCases.map(\.title)
+            popup.selectItem(at: SessionTitleDisplayMode.allCases.firstIndex(of: SessionTitleDisplayMode(mode))!)
             let timer = Timer(timeInterval: 0.03, repeats: false) { _ in
                 if mode == .shellIntegration, let path = ProcessInfo.processInfo.environment["OSHELL_TITLE_MODE_PREVIEW"], let view = editor.dialog.window.contentView {
                     (editor.dialog.accessoryView as? NSTabView)?.selectTabViewItem(withIdentifier: "标签与快捷连接")
@@ -61,7 +61,7 @@ enum ShellIntegrationTest {
                 editor.dialog.buttons.first?.performClick(nil)
             }
             RunLoop.main.add(timer, forMode: .common); RunLoop.main.add(timer, forMode: .init("NSModalPanelRunLoopMode"))
-            checks["editorSavesMode-" + mode.rawValue] = editor.run()?.titleMode == mode
+            checks["editorSelectsLocalMode-" + mode.rawValue] = editor.run() != nil && editor.selectedTitleMode == SessionTitleDisplayMode(mode)
         }
         for byte in frame("outer-real|10.20.0.1|").utf8 { pane.terminal.feed(byteArray: [byte][...]) }
         checks["fragmentedMetadataRecognized"] = (pane.title == "outer-real" && pane.remoteAddress == "10.20.0.1") && pane.hasShellIntegration

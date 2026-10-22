@@ -97,17 +97,19 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         [alive, idle].forEach { $0.target = self; $0.action = #selector(keepAliveChanged) }
         quick.state = profile.quickConnect ? .on : .off
         titleMode.identifier = .init("session.titleMode")
-        titleMode.addItems(withTitles: HostTitleMode.allCases.map(\.title))
-        titleMode.selectItem(at: HostTitleMode.allCases.firstIndex(of: profile.titleMode)!)
+        titleMode.addItems(withTitles: SessionTitleDisplayMode.allCases.map(\.title))
+        let titleSettings = (try? SessionTitleSettings.load()) ?? .init()
+        titleMode.selectItem(at: SessionTitleDisplayMode.allCases.firstIndex(of: existing == nil ? titleSettings.defaultMode : titleSettings.mode(for: profile))!)
         titleMode.target = self; titleMode.action = #selector(titleModeChanged)
         titleModeNote.font = .systemFont(ofSize: 11); titleModeNote.textColor = .secondaryLabelColor
         titleModeChanged()
-        addPage("标签与快捷连接", rows: [("", quick), ("标题识别方式", titleMode), ("", titleModeNote)], note: "标签仅显示当前主机名。鼠标悬停可查看当前主机 IP、SSH 配置地址、端口、用户名和实际连接对端；无法确认的信息显示为未获取。配置在下次新建连接时生效。")
+        addPage("标签与快捷连接", rows: [("", quick), ("标题识别方式", titleMode), ("", titleModeNote)], note: "可使用会话名称或主机识别方式；标题选择仅保存在本机，保存后已打开的标签立即生效。悬停可查看主机、地址、端口、用户名及实际连接对端；连接参数仍在下次连接生效。")
         pages.frame = NSRect(x: 0, y: 0, width: 680, height: 500); alert.accessoryView = pages
         alert.window.initialFirstResponder = name
         allPages = pages.tabViewItems; protocolChanged(); proxyChanged(); keepAliveChanged()
     }
-    @objc private func titleModeChanged() { titleModeNote.stringValue = HostTitleMode.allCases[titleMode.indexOfSelectedItem].explanation }
+    var selectedTitleMode: SessionTitleDisplayMode { SessionTitleDisplayMode.allCases[titleMode.indexOfSelectedItem] }
+    @objc private func titleModeChanged() { titleModeNote.stringValue = selectedTitleMode.explanation }
     private func label(_ text: String) -> NSTextField { let view = NSTextField(wrappingLabelWithString: text); view.font = .systemFont(ofSize: 11); view.textColor = .secondaryLabelColor; return view }
     private func button(_ text: String, _ action: Selector) -> NSButton { let b = NSButton(title: text, target: self, action: action); b.bezelStyle = .rounded; return b }
     private func addPage(_ title: String, rows: [(String, NSView)], note: String? = nil) {
@@ -203,7 +205,6 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
             profile.keepAlive.tcp = tcp.state == .on; profile.keepAlive.idleEnabled = profile.kind == .ssh && idle.state == .on
             profile.keepAlive.idleInterval = Int(idleInterval.stringValue) ?? 0; profile.keepAlive.idleText = idleText.stringValue
             profile.quickConnect = quick.state == .on
-            profile.titleMode = HostTitleMode.allCases[titleMode.indexOfSelectedItem]
             if profile.kind == .ftp {
                 profile.identityFile = ""; profile.jumpHost = ""; profile.proxy = ProxySettings(); profile.proxyID = nil; profile.tunnels = []; profile.legacySSH = false; profile.keepAlive = KeepAliveSettings()
             }

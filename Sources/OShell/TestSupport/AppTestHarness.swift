@@ -14,6 +14,15 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.install() }
     }
     static func run(_ controller: WorkspaceController) {
+        // Older UI fixtures explicitly exercise host-derived titles. Seed their
+        // isolated local preference; the title-settings fixture tests the new default.
+        if !CommandLine.arguments.contains("--tab-title-settings-test"), ProcessInfo.processInfo.environment["OSHELL_DATA_DIR"] != nil {
+            var titles = (try? SessionTitleSettings.load()) ?? .init(); titles.defaultMode = .shellIntegration; try? titles.save()
+        }
+        if CommandLine.arguments.contains("--tab-close-confirmation-test") { TabCloseConfirmationTest.run(controller) }
+        if CommandLine.arguments.contains("--session-pins-test") { SessionPinsTest.run(controller) }
+        if CommandLine.arguments.contains("--tab-title-settings-test") { SessionTitleSettingsTest.run(controller) }
+
         if CommandLine.arguments.contains("--resource-review-test") { ResourceReviewTest.run(controller) }
         if CommandLine.arguments.contains("--tab-window-merge-test") { TabWindowMergeTest.run(controller) }
         if CommandLine.arguments.contains("--tab-detach-test") { TabDetachTest.run(controller) }

@@ -31,7 +31,8 @@ extension WorkspaceController {
             var copy = try result.get()
             copy.name = SessionDuplication.name(for: source, among: configuration.profiles)
             var value = configuration; value.profiles.append(copy)
-            return saveConfiguration(value) ? copy : nil
+            guard saveConfiguration(value) else { return nil }
+            copySessionTitleChoices(from: [source], to: [copy]); return copy
         } catch {
             if encrypted { PasswordVault.shared.lock() }
             Dialogs.message("复制会话失败：" + error.localizedDescription); return nil

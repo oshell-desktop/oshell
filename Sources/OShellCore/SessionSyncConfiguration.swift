@@ -1,47 +1,72 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 
-/// Sync only session-owned data. The v2 wire contract still requires client
-/// sections: preserve the fetched remote sections, never export this Mac's settings.
+/// Project selected sections for comparison; preserve every unselected remote
+/// section on the wire and every unselected local section when applying.
+/// Defaults retain the historical sessions-only behavior.
 public enum SessionSyncConfiguration {
-    public static func applying(_ shared: Configuration, to local: Configuration) -> Configuration {
+    public static func applying(_ shared: Configuration, to local: Configuration, selection: SyncContentSelection = .init()) -> Configuration {
         var result = local
-        result.profiles = shared.profiles; result.ftpProfiles = []
-        result.proxies = shared.proxies; result.directories = shared.directories
-        result.sessionLinks.entries = shared.sessionLinks.entries
-        result.sessionLinks.folders = shared.sessionLinks.folders
-        result.sessionLinks.rootOrder = shared.sessionLinks.rootOrder
+        if selection.sessions {
+            result.profiles = shared.profiles; result.ftpProfiles = []
+            result.proxies = shared.proxies; result.directories = shared.directories
+            result.sessionLinks.entries = shared.sessionLinks.entries
+            result.sessionLinks.folders = shared.sessionLinks.folders
+            result.sessionLinks.rootOrder = shared.sessionLinks.rootOrder
+        }
+        if selection.clientSettings {
+            result.preferences = shared.preferences
+            // Trust/update decisions remain local even when appearance is shared.
+            result.preferences.updateRepository = local.preferences.updateRepository
+            result.preferences.automaticUpdateChecks = local.preferences.automaticUpdateChecks
+            result.preferences.masterWarningAcknowledged = local.preferences.masterWarningAcknowledged
+            result.highlightSets = shared.highlightSets
+            result.sessionLinks.visible = shared.sessionLinks.visible
+        }
+        if selection.quickCommands { result.quickCommands = shared.quickCommands }
+        if selection.sessionDefaults { result.sessionDefaults = shared.sessionDefaults }
         return result
     }
-    public static func project(_ configuration: Configuration) throws -> Configuration {
+    public static func project(_ configuration: Configuration, selection: SyncContentSelection = .init()) throws -> Configuration {
         var value = configuration
         try value.migrateFileSessions(); try value.migrateProxyCatalog()
-        var result = applying(value, to: Configuration(profiles: []))
+        var result = applying(value, to: Configuration(profiles: []), selection: selection)
         result.masterPasswordVerifier = value.masterPasswordVerifier
         return result
     }
-    public static func data(_ configuration: Configuration) throws -> Data {
-        let normalized = try project(configuration)
+    public static func data(_ configuration: Configuration, selection: SyncContentSelection = .init()) throws -> Data {
+        let normalized = try project(configuration, selection: selection)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let full = try JSONSerialization.jsonObject(with: encoder.encode(normalized)) as! [String: Any]
         var body = [String: Any]()
-        for key in ["profiles", "proxies", "directories", "sessionLinks", "masterPasswordVerifier"] { body[key] = full[key] }
-        var links = body["sessionLinks"] as? [String: Any] ?? [:]; links.removeValue(forKey: "visible"); body["sessionLinks"] = links
+        body["masterPasswordVerifier"] = full["masterPasswordVerifier"]
+        if selection.sessions { for key in ["profiles", "proxies", "directories", "sessionLinks"] { body[key] = full[key] } }
+        var links = body["sessionLinks"] as? [String: Any] ?? [:]; links.removeValue(forKey: "visible")
+        if selection.clientSettings {
+            body["preferences"] = full["preferences"]; body["highlightSets"] = full["highlightSets"]
+            links["visible"] = normalized.sessionLinks.visible
+        }
+        if selection.sessions || selection.clientSettings { body["sessionLinks"] = links }
+        if selection.quickCommands { body["quickCommands"] = full["quickCommands"] }
+        if selection.sessionDefaults { body["sessionDefaults"] = full["sessionDefaults"] }
         return try JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
     }
-    public static func same(_ left: Configuration, _ right: Configuration) -> Bool {
-        guard let a = try? data(left), let b = try? data(right) else { return false }
+    public static func same(_ left: Configuration, _ right: Configuration, selection: SyncContentSelection = .init()) -> Bool {
+        guard let a = try? data(left, selection: selection), let b = try? data(right, selection: selection) else { return false }
         return a == b
     }
-    public static func wireConfiguration(_ sessions: Configuration, preserving remote: Configuration?) throws -> Configuration {
-        var result = applying(try project(sessions), to: remote ?? Configuration(profiles: []))
+    public static func wireConfiguration(_ sessions: Configuration, preserving remote: Configuration?, selection: SyncContentSelection = .init()) throws -> Configuration {
+        var result = applying(try project(sessions, selection: selection), to: remote ?? Configuration(profiles: []), selection: selection)
         result.masterPasswordVerifier = sessions.masterPasswordVerifier
+        if selection.clientSettings, let id = result.preferences.highlightSetID, !result.highlightSets.contains(where: { $0.id == id }) {
+            throw ModelError.invalid("所选客户端设置引用的突出显示集不存在，请同时保留匹配的设置与规则。")
+        }
         return result
     }
     /// First-use merge keeps disjoint dependencies from both nodes. Colliding
     /// session/proxy/link definitions still require explicit conflict choices.
-    public static func initialMerge(local: Configuration, remote: Configuration) throws -> ConfigurationMerge {
-        var own = try project(local), other = try project(remote)
+    public static func initialMerge(local: Configuration, remote: Configuration, selection: SyncContentSelection = .init()) throws -> ConfigurationMerge {
+        var own = try project(local, selection: selection), other = try project(remote, selection: selection)
         other.masterPasswordVerifier = own.masterPasswordVerifier
         func union<T: Hashable>(_ a: [T], _ b: [T]) -> [T] {
             var seen = Set<T>(); return (a + b).filter { seen.insert($0).inserted }
@@ -60,6 +85,10 @@ public enum SessionSyncConfiguration {
         own.sessionLinks.folders = union(other.sessionLinks.folders, own.sessionLinks.folders).sorted(); other.sessionLinks.folders = own.sessionLinks.folders
         own.sessionLinks.rootOrder = union(other.sessionLinks.rootOrder, own.sessionLinks.rootOrder); other.sessionLinks.rootOrder = own.sessionLinks.rootOrder
         var base = other; base.profiles = []; base.proxies = []; base.sessionLinks.entries = []
+        let defaults = Configuration(profiles: [])
+        if selection.clientSettings { base.preferences = defaults.preferences; base.highlightSets = defaults.highlightSets; base.sessionLinks.visible = defaults.sessionLinks.visible }
+        if selection.quickCommands { base.quickCommands = defaults.quickCommands }
+        if selection.sessionDefaults { base.sessionDefaults = defaults.sessionDefaults }
         return try ConfigurationMerge(base: base, local: own, remote: other)
     }
 }
