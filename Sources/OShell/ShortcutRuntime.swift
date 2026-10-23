@@ -89,6 +89,11 @@ enum ShortcutRuntime {
         NSMenuItem.usesUserKeyEquivalents = false // App-local: the in-app configuration owns menu bindings.
         func update(_ menu: NSMenu) {
             for item in menu.items {
+                if item.action == #selector(WorkspaceController.toggleAIAssistant) {
+                    let binding = try? AISettings.load().shortcut
+                    let allowed = binding.flatMap { shortcuts.action(for: $0) == nil ? $0 : nil }
+                    item.keyEquivalent = allowed?.key?.equivalent ?? ""; item.keyEquivalentModifierMask = allowed?.nativeModifiers ?? []
+                }
                 if item.action == #selector(WorkspaceController.toggleDeepFocus) {
                     let binding = WorkspaceController.deepFocusShortcut
                     item.keyEquivalent = shortcuts.action(for: binding) == nil ? "f" : ""

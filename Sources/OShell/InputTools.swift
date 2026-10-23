@@ -145,6 +145,7 @@ final class QuickCommandManager: NSWindowController, NSTableViewDataSource, NSTa
         guard Dialogs.confirm("删除“\(command.name)”？", text: "删除已保存的快速命令。", action: "删除") else { return }
         var config = workspace.configuration; config.quickCommands.removeAll { $0.id == command.id }; if workspace.saveConfiguration(config) { table.reloadData() }
     }
+    func addSuggestedCommand(_ text: String) { editCommand(QuickCommand(name: "AI 建议", group: "AI", text: text, appendReturn: false)) }
     private func editCommand(_ existing: QuickCommand?) {
         guard let workspace else { return }; var command = existing ?? QuickCommand()
         let alert = PopupAlert(); alert.messageText = existing == nil ? "新建快速命令" : "编辑快速命令"; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消")

@@ -281,8 +281,9 @@ final class TabStripView: InterfaceSurfaceView {
         let numbers = numbers ?? Dictionary(uniqueKeysWithValues: tabs.enumerated().map { ($0.element.id, $0.offset + 1) })
         update(entries: tabs.map { tab in
             let title = tab.title
+            let aiNotice = tab.layout.panes.contains { $0.aiSession?.unread == true } ? "AI 结果已就绪，打开对应分屏的 AI 助手查看。\n" : ""
             let action = tab.activePane.canDuplicateConnection ? "双击新建相同会话" : "当前状态不响应双击"
-            return Entry(id: tab.id, title: title, detail: tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus, sessionFields: tab.activePane.tabSessionFields)
+            return Entry(id: tab.id, title: title, detail: aiNotice + tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus, sessionFields: tab.activePane.tabSessionFields)
         }, selectedID: selected?.id)
     }
     func update(entries: [Entry], selectedID: UUID?) {

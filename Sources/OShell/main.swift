@@ -103,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard windows?.canQuit() ?? true else { return .terminateCancel }
         controller?.completeStartupUnlock(false); launchServer?.stop(); return .terminateNow
     }
-    func applicationWillTerminate(_ notification: Notification) { windows?.webDAV.diagnostics.flush(); launchServer?.stop(); SSHConnectionGroup.finishCleanup() }
+    func applicationWillTerminate(_ notification: Notification) { AIHistory.flushIfLoaded(); windows?.webDAV.diagnostics.flush(); launchServer?.stop(); SSHConnectionGroup.finishCleanup() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { windows?.externalWorkspace()?.show(); return true }
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
@@ -206,6 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(tools, "快速命令管理器…", #selector(WorkspaceController.showQuickCommands))
         add(tools, "快速发送栏", #selector(WorkspaceController.toggleQuickSendBar))
         add(tools, "定位快速发送栏", #selector(WorkspaceController.focusQuickSendBar), "k", [.command, .shift])
+        add(tools, "AI 助手", #selector(WorkspaceController.toggleAIAssistant))
+        add(tools, "AI 设置…", #selector(WorkspaceController.showAISettings))
         add(tools, "撰写窗", #selector(WorkspaceController.toggleComposer), "i", [.command, .shift])
         add(tools, "同步输入…", #selector(WorkspaceController.configureSyncInput))
         add(tools, "停止同步输入", #selector(WorkspaceController.stopSyncInput))
@@ -217,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(window, "最小化", #selector(NSWindow.performMiniaturize(_:)), "m", target: nil); window.items.last?.target = nil
         NSApp.mainMenu = root
         ShortcutRuntime.install(controller.configuration.preferences.keyboardShortcuts, menu: root)
+        controller.refreshAIShortcut()
     }
 }
 

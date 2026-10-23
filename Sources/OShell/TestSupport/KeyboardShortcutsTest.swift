@@ -7,6 +7,11 @@ import OShellCore
 
 enum KeyboardShortcutsTest {
     static func run(_ workspace: WorkspaceController) {
+        // AppTestHarness invokes us from applicationDidFinishLaunching. Let that
+        // callback return before testing real foreground keyboard routing.
+        RunLoop.main.add(Timer(timeInterval: 0.2, repeats: false) { _ in perform(workspace) }, forMode: .common)
+    }
+    private static func perform(_ workspace: WorkspaceController) {
         var checks = [String: Bool]()
         func descendants(_ view: NSView) -> [NSView] {
             let children = (view as? NSTabView)?.tabViewItems.compactMap(\.view) ?? view.subviews
@@ -85,11 +90,20 @@ enum KeyboardShortcutsTest {
         checks["menusUpdateImmediately"] = menu(.newBlank)?.keyEquivalent == replacement.key?.equivalent && menu(.newBlank)?.keyEquivalentModifierMask == replacement.nativeModifiers
         checks["clearedShortcutRemovedFromMenuAndRouter"] = menu(.find)?.keyEquivalent == "" && ShortcutRuntime.current.action(for: .init(3,cmd)) == nil
         checks["catalogFunctionsHaveMenus"] = ShortcutAction.allCases.allSatisfy { menu($0) != nil }
-        workspace.newBlankTab(); workspace.window?.makeKeyAndOrderFront(nil)
+        workspace.newBlankTab()
+        // Closing a modal preferences window does not synchronously finish the
+        // macOS activation/key-window handoff. Wait for the real precondition;
+        // retain the key-window and routing assertions below (including on lock).
+        NSApp.activate(ignoringOtherApps: true); workspace.window?.makeKeyAndOrderFront(nil)
+        let focusDeadline = Date().addingTimeInterval(2)
+        while workspace.window?.isKeyWindow != true && Date() < focusDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.025))
+        }
         let before = workspace.tabs.count
         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: replacement.nativeModifiers, timestamp: 0, windowNumber: workspace.window!.windowNumber, context: nil, characters: replacement.key!.equivalent, charactersIgnoringModifiers: replacement.key!.equivalent, isARepeat: false, keyCode: replacement.keyCode)!
         checks["recordedEventResolvesToFunction"] = workspace.configuration.preferences.keyboardShortcuts.action(for: .init(event: event)) == .newBlank
         checks["workspaceKeyWindowAvailable"] = workspace.window?.isKeyWindow == true
+        let foreground: [String: Bool] = ["applicationActive": NSApp.isActive, "windowVisible": workspace.window?.isVisible == true, "canBecomeKey": workspace.window?.canBecomeKey == true, "windowIsKey": workspace.window?.isKeyWindow == true, "hasModalWindow": NSApp.modalWindow != nil]
         checks["customKeyRoutesFromTerminalFocus"] = workspace.window?.performKeyEquivalent(with: event) == true && workspace.tabs.count == before + 1
         let searchEvent = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: workspace.window!.windowNumber, context: nil, characters: "f", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3)!
         _ = workspace.window?.performKeyEquivalent(with: searchEvent)
@@ -129,7 +143,7 @@ enum KeyboardShortcutsTest {
         }
         workspace.showPreferences()
         checks["recordingInterceptsQuitWithoutExecutingIt"] = recorded == .init(12,cmd)
-        let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
+        let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "foreground": foreground]
         if let path = ProcessInfo.processInfo.environment["OSHELL_SHORTCUTS_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path)) }
         print(report); workspace.shutdown(); NSApp.terminate(nil)
     }

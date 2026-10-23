@@ -20,6 +20,7 @@ bash scripts/build.sh --tests
 python3 scripts/run-ui-tests.py --list
 python3 scripts/run-ui-tests.py directory-picker-stress terminal-clock tab-bar-menu
 python3 scripts/run-ui-tests.py resource-review
+python3 scripts/run-ai-tests.py
 python3 scripts/run-ui-tests.py auth-concurrency login-password-save proxy-catalog
 python3 scripts/run-ui-tests.py tab-window-merge tab-detach tab-reorder multi-window
 python3 scripts/run-ui-tests.py --group sessions
@@ -52,6 +53,8 @@ work/test-tools/bin/python scripts/run-ssh-clone-tests.py
 work/test-tools/bin/python scripts/run-local-tool-tests.py --connection-status-only
 work/test-tools/bin/python scripts/run-webdav-tests.py
 ```
+
+`run-ai-tests.py` 仅使用回环模拟模型服务及合成密钥，覆盖请求、上下文遮盖、图片、会话隔离、命令填入、取消、重定向拒绝及加密存储；不需要真实 API 密钥。
 
 这些脚本默认使用测试应用和一次性本地账号。保存密码认证及明文不落盘检查统一由 `run-session-tests.py` 覆盖，移除了需手工启动固定端口服务的旧密码测试入口。更新、文件传输、代理、隧道和内存循环等专用脚本继续保留；它们与通用 UI 检查的测试服务需求不同。加密启动测试会自行生成临时样本，不依赖维护者工作目录中的文件。
 
@@ -97,3 +100,9 @@ python3 scripts/check-public-source.py --app dist/OShell.app
 同时人工检查 `git diff --cached`。不要提交真实会话、密码、密钥、令牌、机器日志或未脱敏截图。第三方版权署名保持原样；变更说明放在 `CHANGELOG.md`，调试记录留在忽略的本地目录中。
 
 正式构建使用固定代码签名证书，配置与备份方法见 [发布指南](releases.md#固定代码签名身份)。无维护者签名私钥时，个人开发构建可显式设置 `OSHELL_ALLOW_ADHOC=1`；测试构建默认使用独立的 ad-hoc 身份。
+
+AI 发送授权验证：`bash scripts/build.sh --tests` 后执行 `python3 scripts/run-ai-tests.py`。测试服务仅监听回环地址，使用合成身份/证据/图片；接收端核对实际字节的 SHA-256 与授权快照一致，并验证默认不带元数据/历史/旧图片、字段选择、派生资料撤回、跨任务/目标/模型/凭据变更失效、取消、单次使用和显式重试。`validation/ui-ai-assistant.json` 与 `validation/ai-transport.json` 是本机报告，不包含真实服务密钥或终端资料。
+
+四种模型协议由 `AIProtocol.swift` 负责纯数据转换，联网仅允许 `AISendAuthorization` 许可通过的 `AIClient`。`AIProtocolTest.swift` 和同一回环测试服务器验证各协议的鉴权、正文、图片及多段响应，默认历史排除、选择与撤回，以及拒绝/截断/工具调用/限流/重定向/取消。Responses 不回传服务端 ID，Gemini 地址中的模型必须与授权模型一致。无真实供应商密钥时，不得宣称已通过线上服务联调。
+
+渠道预设由 `AIProviderPreset.swift` 提供本机配置与兼容参数，`AIProviderPresetTest.swift` 验证预设切换清空旧密钥、同一预设与自定义编辑保留、v1/v2 迁移及 v3 加密存储、输出上限授权失效、真实客户端标识、服务端拒绝后不回退。回环接收端逐渠道核对密钥归属和 max_tokens；不得用其他工具的 User-Agent 伪装 OShell，也不把本机测试当成套餐客户端授权或真实供应商联调。

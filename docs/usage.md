@@ -439,3 +439,56 @@ WebDAV 登录信息和同步基准也使用主密码加密，分别保存在本�
 - 已连接的 OShell SSH 会话：复用原认证连接，通过 SFTP 上传。默认在服务器 `/tmp` 下建立独立私有目录，可在确认框中改为项目目录。上传完成才发送远端路径；失败、取消或目标断开时不发送路径。
 - 图片文件及转换后的 PNG 最多 20 MiB，剪贴板原始位图最多 160 MiB、4000 万像素（支持较大的 Retina TIFF 截图）。本地缓存最多 200 MiB，超过 7 天的图片在下次图片粘贴时清理；需要长期使用请另行保存。远端成功上传的图片不会由 OShell 自动删除；关闭会话也不会删除，需手动清理或由服务器的临时目录策略处理；取消或断线时可能残留未完成的私有临时目录。
 - 服务器需允许 SFTP。终端内再次执行 ssh、进入容器、切换用户或使用独立远程服务时，程序可能无法访问当前 SSH 主机的文件路径；此时应使用对应的 OShell SSH 会话，或选择程序可访问的共享目录。此功能不授予远端读取 Mac 剪贴板的权限。
+
+## AI 助手（首版）
+
+点击头部 **AI** 或按默认 **⌃⌥A** 打开右侧助手。面板可拖动分隔线调整宽度，窄窗口自动使用独立窗口；“收起”保留对话与草稿。每个终端分屏独立对话，跨窗口迁移沿用原会话；主机或已识别的工作目录变化时重新建立分析上下文。旧对话可从本机历史查看。后台回复完成后，对应标签和 AI 按钮显示未读提示，打开对应分屏的助手后清除。
+
+在“设置 → AI”可先选择**渠道预设**，自动填入接口类型、完整地址、模型和输出 Token 上限，再填写对应密钥。已有配置默认保持“自定义”，不会自动切换渠道。
+
+| 渠道预设 | 默认接口 | 默认模型 |
+| --- | --- | --- |
+| Kimi Code · 国内 / 国际 | `https://api.kimi.com/coding/v1/messages` / `https://api.kimi.ai/coding/v1/messages` | `kimi-for-coding` |
+| DeepSeek | `https://api.deepseek.com/chat/completions` | `deepseek-flash` |
+| MiniMax · 国内 / 国际 | `https://api.minimax.cn/anthropic/v1/messages` / `https://api.minimax.io/anthropic/v1/messages` | `MiniMax-M3.1-Flash` |
+| GLM · 标准 API | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `glm-5.3` |
+| GLM · Coding Plan | `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions` | `glm-5.3` |
+
+选择另一个非自定义预设会清空旧密钥，并关闭图片支持，防止串用账号或沿用上一模型的图片能力；重新选择同一预设保留编辑内容，切回“自定义”保留当前地址、模型与密钥。模型和地址仍可修改；预设只是参数配置，不验证服务身份，发送以授权窗口显示的实际地址为准。按模型能力开启图片后，仍需批准具体图片。
+
+渠道预设默认输出上限为 16384 tokens；旧配置保持 4096。可在“输出 Token 上限”中设置 256～65536，推理过程也可能计入该上限；若返回截断提示，可缩小问题或调高上限。DeepSeek、GLM 等预设的 Chat Completions 使用 `max_tokens`，不携带未声明支持的 `store` 扩展字段。自定义 OpenAI 格式继续使用 `max_completion_tokens`。这些参数也会进入冻结预览，改变渠道或输出上限会使旧授权失效。
+
+Kimi Code 专用密钥与普通 Kimi 开放平台密钥不通用。GLM 标准 API 与 Coding Plan 的端点和密钥分别配置；Coding 套餐能否供 OShell 使用，以服务方对账号、模型和客户端的授权为准。请求以真实 `OShell/版本号` 标识客户端，遇到权限拒绝不会伪装其他工具或自动切换付费渠道。上述预设依据 [Kimi Code 文档](https://www.kimi.com/code/docs/)、[DeepSeek API](https://api-docs.deepseek.com/)、[MiniMax 国内文档](https://platform.minimax.cn/docs/api-reference/text-anthropic-api)、[MiniMax 国际文档](https://platform.minimax.io/docs/api-reference/text-anthropic-api)、[GLM 标准 API](https://docs.bigmodel.cn/cn/api/introduction) 和 [GLM Coding 接入说明](https://docs.bigmodel.cn/cn/coding-plan/tool/others)（核对日期 2026-10-23）；模型可用性仍取决于账号权益。
+
+不使用预设时，也可直接选择**接口类型**并填写完整地址：
+
+| 类型 | 地址示例 | 鉴权 |
+| --- | --- | --- |
+| OpenAI 兼容 · Chat Completions | `https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` |
+| OpenAI · Responses | `https://api.openai.com/v1/responses` | `Authorization: Bearer` |
+| Anthropic · Messages | `https://api.anthropic.com/v1/messages` | `x-api-key`，固定 `anthropic-version: 2023-06-01` |
+| Gemini · generateContent | `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` | `x-goog-api-key` |
+
+可替换为提供对应原生协议的网关地址。Gemini 的 `{model}` 在授权前替换为“模型”字段，并在预览中显示真实请求地址；也可填写模型固定的完整地址，但必须与“模型”一致。密钥不要放在 URL 查询参数中。Gemini 使用 Developer API 的 API Key 鉴权，本版不包含 Vertex AI OAuth 或云平台专有鉴权。
+
+原有配置默认保持 Chat Completions。切换类型只更新填写提示，不自动修改现有地址或密钥、不发请求；类型变化也使旧授权失效。AI 本机设置保存为内部格式 v3，兼容读取 v1/v2；没有接口类型的旧配置使用 Chat Completions，没有渠道和输出上限的旧配置保持自定义与 4096 tokens；不认识类型或版本时拒绝加载，旧版程序不会把新接口配置误读成兼容接口。此内部格式与 App 版本号、共享配置协议独立。
+
+本机服务可使用 `http://localhost:端口/...` 或回环 IP；其他服务要求 HTTPS。四种类型均支持非流式文字与图片输入，图片能力需按模型实际支持情况启用。测试连接会先展示固定测试内容并请求一次授权，不附加终端内容。可选填写接收方、租户/项目和模型路由说明；这是用户声明，回环地址或 HTTPS 不能证明服务不会转发或保留数据。
+
+四种接口都只发送当次批准的快照。自定义 OpenAI 两种格式和 Gemini 请求显式设置 `store: false`，不使用服务端会话 ID、自动续聊、缓存引用或不透明推理内容；这不是服务端零留存承诺。工具调用、被拦截或截断的响应不会当作完整命令展示，也不会自动执行或重试。接口定义依据 [OpenAI Docs：Responses](https://developers.openai.com/api/docs/guides/migrate-to-responses)、[Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create) 和 [Gemini generateContent](https://ai.google.dev/api/generate-content)。
+
+三个入口分别面向故障排查、编写命令和解释命令。选中终端内容后可右键“用 AI 分析所选内容”或“用 AI 解释命令”；启用了右键粘贴时用 Shift+右键打开菜单。点击“添加上下文”可附加选中文字、当前屏幕、最近 100/300/1000 行、图片或 UTF-8 文本文件，也可向 AI 输入框粘贴/拖入单张图片。快照在添加时获取，不持续上传终端输出；超限截取会标明。单张图片最多 4 MiB，单次请求图片总计最多 8 MiB；模型需支持图片。
+
+点击“选择发送范围”或“审阅并发送”（⌘↩）打开授权窗口：
+
+- 默认仅勾选本次问题和主动添加的附件；会话名称、主机/IP、账号、目录、代理等字段逐项选择，默认均不发送。
+- 对话历史、旧附件和旧图片默认不重复发送。需要连续分析时，明确选择历史资料；历史 AI 回答只有在其全部依据也获准时才能发送。
+- 右侧显示实际接口、模型、路由声明、完整发送文字、图片预览、字节数和请求摘要；点击“授权并发送一次”才联网。未勾选的项目不会自动附带；已选择的文字和图片仍可能包含主机、账号等信息，请逐项检查。返回编辑、替换图片、切换目标或更改接口类型/模型/服务/密钥后，旧授权失效；预览超过五分钟也需重新审阅。
+- 历史资料可点击“后续不再引用此项”，连同依赖它的 AI 回答一起移出待选范围；“清空发送历史”清空全部可重用资料，本机对话显示仍保留。重新打开加密历史只读，不恢复授权。
+- 授权只对本次请求有效，不提供永久允许。不自动重试、切换服务或上传终端历史；失败后再次发送需要重新审阅，可能产生重复计费。
+
+文字会尝试遮盖常见密码、Token、私钥和当前 API 密钥，但不能识别全部敏感内容，也不会自动遮盖图片内的文字。请检查最终文字和图片，不希望发送的附件可取消勾选或回到草稿移除；如需裁剪/遮盖图片，请先在本机完成后重新添加。发送使用同一份冻结请求，审阅后不会自动补抓新输出。停止只能取消本机接收和后续发送，此前内容可能已到达服务端，不能撤回服务端已有数据。错误和取消保留草稿、附件供重新授权。输出上限按本机设置发送；达到上限而截断时会提示缩小问题范围。
+
+AI 回复中的 shell 代码块提供“复制”“填入原会话”“存为快速命令”。填入前重新核对原分屏、连接、主机与已识别目录，始终不回车、不参与同步输入广播。仅支持单行无控制字符的命令：空白 `OShell >` 提示符可直接填入；真实 Shell 需 Shell 集成确认处于空闲提示符，已有输入、登录认证、交互程序、传输或无法识别提示符时请使用复制。命令影响说明仅供辅助，建议不代表已经执行或故障已经解决。
+
+AI 服务设置和密钥保存在本机数据目录的 `ai/` 独立加密存储中，使用独立的本机密钥，不进入 `Configuration`、会话导出或多设备同步。历史默认仅在本次运行保留；开启加密保存后最多保留 50 条、约 8 MiB 文本历史，不保存图片本体。历史记录只读，不能直接将旧命令填入新会话；“当前会话”返回活动分屏。“处理记录”可复制或保存原始问题和建议，保留其尚未执行的说明。

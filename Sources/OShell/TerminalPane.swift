@@ -120,6 +120,17 @@ final class OShellTerminal: LocalProcessTerminalView {
             if !text.isEmpty { copySelectionToPasteboard() }
         }
     }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
+        menu.addItem(.separator())
+        for (title, action) in [("用 AI 分析所选内容", #selector(analyzeWithAI)), ("用 AI 解释命令", #selector(explainWithAI)), ("打开 AI 助手", #selector(openAI))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
+        }
+        return menu
+    }
+    @objc private func analyzeWithAI() { if let owner { owner.onAI?(owner, 0, selection.getSelectedText()) } }
+    @objc private func explainWithAI() { if let owner { owner.onAI?(owner, 2, selection.getSelectedText()) } }
+    @objc private func openAI() { if let owner { owner.onAI?(owner, 0, nil) } }
     override func rightMouseDown(with event: NSEvent) {
         wordClickSeed = nil
         if owner?.rightClickPaste == true && !event.modifierFlags.contains(.shift) { window?.makeFirstResponder(self); paste(self) }
@@ -243,6 +254,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var onCloseRequested: ((TerminalPane) -> Void)?
     var onUserInput: ((TerminalPane, [UInt8]) -> Bool)?
     var onPaste: ((TerminalPane, String) -> Void)?
+    var onAI: ((TerminalPane, Int, String?) -> Void)?
+    var aiSession: AIAssistantSession?
+    private var aiAtPrompt = false
+    private var aiWorkingDirectory: (host: String, path: String)?
     var onPasteImage: ((TerminalPane, TerminalClipboardImage) -> Void)?
     var credentialsForConnection: (() -> SessionProfile)?
     var onSaveAuthenticatedPassword: ((SessionProfile, String, SSHIdentity) -> Void)? { didSet { authBroker?.onSavePassword = onSaveAuthenticatedPassword } }
@@ -356,6 +371,47 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             .init(id: "port", title: "配置端口", value: ssh ? String(profile.port) : nil, unavailable: "不适用（本地）")
         ]
     }
+    var aiTarget: AITarget {
+        let directory = aiWorkingDirectory.flatMap { matchesCurrentHost($0.host) ? $0.path : nil }
+        let stamp = "\(id.uuidString):\(terminal.process.shellPid):\(localToolPID):\(hostEpoch):\(remoteHostname ?? ""):\(remoteAddress ?? ""):\(directory ?? "")"
+        let title: String
+        if isBlank { title = "OShell >（本机工具）" }
+        else if profile.kind == .local { title = sessionTitleName + " · 本机" + (ended ? " · 已结束" : "") }
+        else { title = sessionTitleName + " · " + (profile.username.isEmpty ? "默认账号" : profile.username) + "@" + profile.host + ":" + String(profile.port) + (ended ? " · 已断开" : sessionReady ? " · 已连接" : " · 连接中") }
+        var fields = tabSessionFields.compactMap { field -> AIIdentityField? in
+            guard let value = field.value, !value.isEmpty else { return nil }
+            return .init(id: field.id, name: field.title, value: value)
+        }
+        if let directory { fields.append(.init(id: "directory", name: "当前目录", value: directory)) }
+        let route = profile.runtimeProxyRoute.map { $0.kind.title + " · " + $0.host + ":" + String($0.port) }.joined(separator: " → ")
+        if !route.isEmpty { fields.append(.init(id: "proxy", name: "代理链", value: route)) }
+        else if profile.proxy.kind != .none { fields.append(.init(id: "proxy", name: "代理", value: profile.proxy.kind.title + " · " + profile.proxy.host + ":" + String(profile.proxy.port))) }
+        else if !profile.jumpHost.isEmpty { fields.append(.init(id: "proxy", name: "跳板机", value: profile.jumpHost)) }
+        return AITarget(paneID: id, stamp: stamp, title: title, metadata: "会话：" + title + "\n" + connectionDetails + "\n当前目录：" + (directory ?? "未获取"), fields: fields)
+    }
+    var aiCanFill: Bool {
+        guard !isShutdown, !isTransferring, !isRunningLocalTool, acceptsManagedInput,
+              !terminal.getTerminal().isCurrentBufferAlternate else { return false }
+        if isBlank && ended {
+            let line = terminal.getTerminal().getCursorLineText()
+            return line == EndedSessionInput.prompt || line == EndedSessionInput.prompt.trimmingCharacters(in: .whitespaces)
+        }
+        return !ended && aiAtPrompt && hasShellIntegration && !integratedPromptPending && !userEditingLine
+            && !lastPromptText.isEmpty && terminal.getTerminal().getCursorLineText() == lastPromptText
+            && !RemoteHostIdentity.isAuthenticationPrompt(lastPromptText)
+    }
+    func aiOutput(lines: Int?) -> String {
+        let model = terminal.getTerminal()
+        var content: [String] = []
+        if let lines {
+            var low = 0, high = 1
+            while high < 200000 && model.bufferLine(atRow: high) != nil { high *= 2 }
+            while low < high { let mid = (low + high + 1) / 2; if model.bufferLine(atRow: mid) != nil { low = mid } else { high = mid - 1 } }
+            for row in max(0, low - lines + 1)...low { if let line = model.bufferLine(atRow: row) { content.append(String(line.translateToString(trimRight: true).prefix(2048))) } }
+        } else { for row in 0..<model.rows { if let line = model.getLine(row: row) { content.append(String(line.translateToString(trimRight: true).prefix(2048))) } } }
+        let text = content.joined(separator: "\n"), limit = min(32000, ((try? AISettings.load().contextLimit) ?? 24000) / 2)
+        return (text.count > limit ? "[快照已截断，仅保留最后 \(limit) 个字符]\n" : "") + String(text.suffix(limit))
+    }
     var connectionDetails: String {
         func display(_ value: String) -> String {
             String(value.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : String($0) }.joined().prefix(256))
@@ -404,7 +460,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         return !ended && terminal.process.running && (profile.kind == .local || sessionReady)
     }
     private func resetHostIdentity() {
-        hasShellIntegration = false; integratedPromptPending = false
+        hasShellIntegration = false; integratedPromptPending = false; aiAtPrompt = false
         hostEpoch += 1; hostAliases = []; currentHostHint = nil; remoteHostname = nil; remoteAddress = nil
         attemptedHostEpoch = nil; lastPromptText = ""; userEditingLine = false
         hostProbeWork?.cancel(); hostProbeWork = nil; hostProbeTimeout?.cancel(); hostProbeTimeout = nil
@@ -836,7 +892,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     func stopLogging() { logger?.stop(); logger = nil; refreshHeader(); onState?() }
     func shutdown() {
         guard !isShutdown else { return }
-        isShutdown = true
+        isShutdown = true; aiSession?.cancel(); onAI = nil
         clockView.dispose()
         searchPanel.dispose()
         if let window = terminal.window, let responder = window.firstResponder as? NSView,
@@ -929,6 +985,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
         for byte in bytes {
+            if [3, 4, 10, 13].contains(byte) { aiAtPrompt = false }
             if [3, 4, 10, 13, 21].contains(byte) { userEditingLine = false }
             else { userEditingLine = true }
         }
@@ -989,7 +1046,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private func receiveShellIdentity(_ bytes: ArraySlice<UInt8>) {
         guard effectiveHostTitleMode != .passive, observesHostIdentity, !terminal.getTerminal().isCurrentBufferAlternate,
               let identity = RemoteHostIdentity.integrationReport(bytes) else { return }
-        hasShellIntegration = true; integratedPromptPending = true
+        hasShellIntegration = true; integratedPromptPending = true; aiAtPrompt = true
         currentHostHint = nil
         hostProbeWork?.cancel(); hostProbeWork = nil
         applyHostIdentity(identity)
@@ -997,6 +1054,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         guard observesHostIdentity else { return }
         if let directory, let host = TerminalHostname.fromDirectory(directory) { updateHostname(host) }
+        if let directory, let url = URL(string: directory), url.scheme == "file", let host = url.host,
+           matchesCurrentHost(host), !url.path.isEmpty, (try? RemotePath.validate(url.path)) != nil,
+           aiWorkingDirectory?.host != host || aiWorkingDirectory?.path != url.path {
+            aiWorkingDirectory = (host, url.path); onState?()
+        }
         if !ended, profile.kind == .ssh, let directory, let url = URL(string: directory), url.scheme == "file", let host = url.host,
            [profile.host, initialRemoteHostname ?? ""].contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }), !url.path.isEmpty,
            (try? RemotePath.validate(url.path)) != nil { remoteDirectory = url.path }
@@ -1109,7 +1171,7 @@ final class TerminalTab {
         }
         return "\(panes.count) 个分屏\n" + lines.joined(separator: "\n") + "\n\n状态圆点及下方连接详情对应当前分屏。\n"
     }
-    var hasUnreadOutput: Bool { layout.panes.contains(where: \.hasUnreadOutput) }
+    var hasUnreadOutput: Bool { layout.panes.contains { $0.hasUnreadOutput || $0.aiSession?.unread == true } }
     func markOutputRead() {
         if let zoomedPane { zoomedPane.markOutputRead() }
         else { layout.panes.forEach { $0.markOutputRead() } }

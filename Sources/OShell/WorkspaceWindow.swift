@@ -22,6 +22,10 @@ final class WorkspaceWindow: NSWindow {
         let shortcut = KeyboardShortcut(event: event)
         guard workspace.isSecurityUnlocked, shortcut.isValid else { return false }
         let configured = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: shortcut)
+        if configured == nil, shortcut == (try? AISettings.load().shortcut) {
+            if !event.isARepeat { workspace.toggleAIAssistant() }; return true
+        }
+        if firstResponder is AIPromptEditor { return false }
         if shortcut == WorkspaceController.deepFocusShortcut, configured == nil {
             if !event.isARepeat { workspace.toggleDeepFocus() }
             return true
