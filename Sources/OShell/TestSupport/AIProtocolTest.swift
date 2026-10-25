@@ -21,11 +21,36 @@ final class AIProtocolTest {
     }
     private func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
     private func config(_ type: AIAPIType, _ action: String) -> AISettings {
-        var value = original; value.apiType = type; value.model = "native-model"
+        var value = original; value.apiType = type; value.model = "native-model"; value.reasoningEffort = .high
         value.endpoint = base + "/native/" + type.rawValue + "/" + action + (type == .gemini ? "/models/{model}:generateContent" : "")
         return value
     }
     private func settingsChecks() throws {
+        for (type, input, expected) in [
+            (AIAPIType.chatCompletions, "", "/v1/chat/completions"),
+            (.chatCompletions, "/", "/v1/chat/completions"),
+            (.chatCompletions, "/v1", "/v1/chat/completions"),
+            (.chatCompletions, "/gateway/v1/", "/gateway/v1/chat/completions"),
+            (.chatCompletions, "/v1/chat/completions/", "/v1/chat/completions"),
+            (.responses, "/v1/", "/v1/responses"),
+            (.anthropic, "/v1", "/v1/messages"),
+            (.anthropic, "/anthropic/", "/anthropic/v1/messages"),
+            (.anthropic, "/coding", "/coding/v1/messages"),
+            (.gemini, "", "/v1beta/models/native-model:generateContent"),
+            (.gemini, "/v1beta/", "/v1beta/models/native-model:generateContent"),
+            (.gemini, "/gateway/v1beta/models", "/gateway/v1beta/models/native-model:generateContent"),
+            (.chatCompletions, "/custom/", "/custom/"),
+            (.responses, "/tenant%2Froute/custom/", "/tenant%2Froute/custom/"),
+            (.responses, "/tenant%2Froute/v1", "/tenant%2Froute/v1/responses")
+        ] {
+            var value = original; value.apiType = type; value.model = "native-model"; value.endpoint = base + input
+            checks["nativeBaseURL:" + type.rawValue + input] = try value.validatedURL().absoluteString == base + expected
+        }
+        for type in [AIAPIType.chatCompletions, .responses, .anthropic] {
+            var value = original; value.apiType = type
+            value.endpoint = base + (type == .chatCompletions ? "/v1/responses" : "/v1/chat/completions")
+            reject("nativeKnownEndpointMismatch:" + type.rawValue) { _ = try value.validatedURL() }
+        }
         var old = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as! [String: Any]
         old["version"] = 1; old.removeValue(forKey: "apiType")
         let legacy = try JSONDecoder().decode(AISettings.self, from: JSONSerialization.data(withJSONObject: old))
@@ -94,7 +119,7 @@ final class AIProtocolTest {
             let draft = try session.sendDraft(); let host = draft.items.first { $0.origin == .identity && $0.text == "NATIVE_HOST_ALLOWED" }!.id
             let frozen = try draft.freeze(settings: settings, selected: draft.defaults.union([host]))
             checks["nativePreviewShowsTypeAndImageDigest:" + key] = frozen.preview.contains(type.title) && frozen.preview.contains(AIRequest.digest(png)) && !frozen.preview.contains(png.base64EncodedString()) && !frozen.preview.contains(settings.apiKey)
-            checks["nativeFrozenEndpointIsActualURL:" + key] = frozen.endpoint == (try settings.validatedURL().absoluteString) && !frozen.endpoint.contains("{model}")
+            checks["nativeFrozenEndpointIsActualURL:" + key] = frozen.endpoint == (try settings.streamingURL().absoluteString) && !frozen.endpoint.contains("{model}")
             var changed = settings; changed.apiType = type == .chatCompletions ? .responses : .chatCompletions
             reject("nativeTypeChangeInvalidatesGrant:" + key) { _ = try session.authorize(frozen, settings: { changed }, target: { target }) }
             var current = settings
@@ -171,7 +196,7 @@ final class AIProtocolTest {
         catch { checks["nativeCancelSetup:" + type.rawValue] = false; finish(); return }
         let cancel = Timer(timeInterval: 0.15, repeats: false) { _ in session.cancel() }; RunLoop.main.add(cancel, forMode: .common)
         let late = Timer(timeInterval: 1.8, repeats: false) { [self] _ in
-            checks["nativeCancellationIgnoresLateResponse:" + type.rawValue] = !session.busy && session.messages.isEmpty && session.draft == "NATIVE_CANCEL"
+            checks["nativeCancellationIgnoresLateResponse:" + type.rawValue] = !session.busy && session.messages.count == 2 && session.messages.last?.text.contains("用户停止") == true && session.draft == "NATIVE_CANCEL"
             runProtocol(index + 1)
         }; RunLoop.main.add(late, forMode: .common)
     }

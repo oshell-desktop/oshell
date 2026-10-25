@@ -30,6 +30,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-clone-',dir='/tmp') as folder:
         except (OSError,EOFError):pass
         finally:channel.close()
     class Server(paramiko.ServerInterface):
+        def get_banner(self): return ("中文登录提示：仅供授权人员使用。\nLiteral \\350\\277\\231 stays literal.\n", "zh-CN")
         def check_channel_env_request(self,channel,name,value):
             if name in (b'LANG',b'LANGUAGE') or name.startswith(b'LC_'):
                 with lock:facts['localeRequests']+=1

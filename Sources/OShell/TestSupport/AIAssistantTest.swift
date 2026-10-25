@@ -27,10 +27,19 @@ final class AIAssistantTest {
     }
     private func start() {
         do {
+            checks.merge(AIComposerLayoutTest.run()) { _, new in new }
+            checks.merge(AIRecordsWindowTest.run()) { _, new in new }
+            checks.merge(AIMarkdownTest.run()) { _, new in new }
+            checks.merge(AIReviewLayoutTest.run()) { _, new in new }
+            checks.merge(AIStreamDecoderTest.run()) { _, new in new }
+            checks.merge(AIReasoningEffortTest.run()) { _, new in new }
+            checks.merge(AIBudgetTest.run()) { _, new in new }
+            checks.merge(AIInvestigationTest.run(), uniquingKeysWith: { _, new in new })
             guard let output = ProcessInfo.processInfo.environment["OSHELL_AI_OUTPUT"] else { return }
             base = try String(contentsOf: URL(fileURLWithPath: output).deletingLastPathComponent().appendingPathComponent("ai-test-fixture.txt"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
             settings.endpoint = base + "/success"; settings.model = "fixture-model"; settings.apiKey = "synthetic-ai-key"; settings.supportsImages = true; settings.saveHistory = true
             try settings.save()
+            checks["historyV1EncryptedFileLoads"] = try AIHistoryContinuationTest.seedLegacyArchive()
             let stored = try Data(contentsOf: AIStorage.root.appendingPathComponent("settings.json"))
             checks["settingsEncrypted"] = SharedVault.isEncrypted(stored) && !String(decoding: stored, as: UTF8.self).contains(settings.apiKey)
             checks["settingsRoundTrip"] = try AIStorage.read("settings.json", as: AISettings.self) == settings
@@ -47,14 +56,18 @@ final class AIAssistantTest {
             checks["multilineCommandCannotFill"] = !AICommand(text: "echo one\necho two").canFill && !AICommand(text: "echo\u{1b}bad").canFill
             checks["onlyShellFencesBecomeCommands"] = AICommand.parse("```json\n{}\n```\n```bash\nprintf test\n```").map(\.text) == ["printf test"]
             workspace.window?.setContentSize(NSSize(width: 1440, height: 820)); workspace.window?.contentView?.layoutSubtreeIfNeeded()
+            let unbound = workspace.getAIAssistant(); unbound.show()
+            let unboundEditor = views(unbound).compactMap { $0 as? AIPromptEditor }.first!
+            unboundEditor.insertText("standalone fixture", replacementRange: NSRange(location: 0, length: 0))
+            checks["noTerminalStillHasEditableConversation"] = workspace.inputPanes.isEmpty && unboundEditor.isEditable && unbound.session?.draft == "standalone fixture" && unbound.session?.target.fields == nil
             workspace.newBlankTab(); pane = workspace.selectedPaneForAI
             workspace.newBlankTab(); other = workspace.selectedPaneForAI
             workspace.showAI(for: pane, mode: 0, selection: "nginx: configuration syntax error\npassword=fixture-password")
             let assistant = workspace.getAIAssistant(); session = assistant.session!
             checks["sidebarOpensForSelectionSource"] = assistant.session?.target.paneID == pane.id && workspace.aiHost?.showing == true
             let input = views(assistant).compactMap { $0 as? AIPromptEditor }.first!
-            input.string = "为什么 Nginx 启动失败？"
-            assistant.textDidChange(Notification(name: NSText.didChangeNotification))
+            input.insertText("为什么 Nginx 启动失败？", replacementRange: NSRange(location: 0, length: input.string.utf16.count))
+            checks["nativeTextInputUpdatesDraft"] = session.draft == "为什么 Nginx 启动失败？"
             assistant.attach(image: try ImagePasteTest.sample(), name: "synthetic.png")
             let draft = try session.sendDraft()
             let prepared = try draft.freeze(settings: settings, selected: draft.defaults)
@@ -64,12 +77,23 @@ final class AIAssistantTest {
             let revision = workspace.configurationRevision
             // First cancel, proving opening review and selecting fields never sends.
             reviewAction(approve: false)
+            assistant.reviewAndSend()
+            checks["cancelReviewDoesNotSend"] = !session.busy && session.messages.isEmpty && session.sendReceipts.isEmpty
+            approvedDigests.append(prepared.bodyDigest)
             views(assistant).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "ai.send" }?.performClick(nil)
-            checks["cancelReviewDoesNotSend"] = !session.busy && session.messages.isEmpty
-            reviewAction(approve: true)
-            views(assistant).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "ai.send" }?.performClick(nil)
+            checks["sendClickNeedsNoReviewModal"] = NSApp.modalWindow == nil
+            checks["directSendCreatesExactReceipt"] = session.sendReceipts.last?.digest == prepared.bodyDigest && session.sendReceipts.last?.content.contains("syntax error") == true && session.sendReceipts.last?.content.contains("fixture-password") == false
             checks["sendStartsOneRequest"] = session.busy && session.messages.count == 1
+            checks["pendingAssistantVisibleImmediately"] = views(assistant).contains { $0.identifier?.rawValue == "ai.message.pending" }
+            assistant.layoutSubtreeIfNeeded()
+            if let bitmap = assistant.bitmapImageRepForCachingDisplay(in: assistant.bounds) {
+                assistant.cacheDisplay(in: assistant.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output).deletingLastPathComponent().appendingPathComponent("ai-waiting-response.png"))
+            }
             checks["duplicateSendIgnored"] = (try? session.sendDraft()) == nil
+            let partialCheck = Timer(timeInterval: 0.4, repeats: false) { [self] _ in
+                checks["streamingPartialArrivesBeforeCompletion"] = session.busy && !session.streamingText.isEmpty && session.messages.count == 1
+            }; RunLoop.main.add(partialCheck, forMode: .common)
             other.onFocus?(other)
             checks["switchPaneGetsSeparateConversation"] = assistant.session?.target.paneID == other.id && assistant.session?.messages.isEmpty == true
             wait("modelResponseReceived", { !self.session.busy && self.session.messages.last?.role == "assistant" }) { [self] in
@@ -83,17 +107,50 @@ final class AIAssistantTest {
     private func testCommands() {
         do {
             pane.onFocus?(pane)
+            let auditRoot = workspace.getAIAssistant()
+            views(auditRoot).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "ai.preview" }?.performClick(nil)
+            let auditText = views(auditRoot).compactMap { $0 as? NSTextView }.first { $0.identifier?.rawValue == "ai.receipts.content" }?.string ?? ""
+            checks["auditShowsActualSentData"] = auditText.contains("syntax error") && auditText.contains("synthetic.png") && auditText.contains("fixture-model") && !auditText.contains(settings.apiKey)
+            if let path = ProcessInfo.processInfo.environment["OSHELL_AI_OUTPUT"], let bitmap = auditRoot.bitmapImageRepForCachingDisplay(in: auditRoot.bounds) {
+                auditRoot.cacheDisplay(in: auditRoot.bounds, to: bitmap)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("ai-send-audit.png"))
+            }
+            checks["auditDoesNotSendOrMutateConversation"] = NSApp.modalWindow == nil && session.messages.count == 2 && session.sendReceipts.count == 1 && !session.busy
+            views(auditRoot).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "ai.preview" }?.performClick(nil)
             let assistant = workspace.getAIAssistant(); assistant.layoutSubtreeIfNeeded()
             checks["viewingResponseClearsUnread"] = !session.unread
-            let code = AICommand.parse(session.messages.last!.text).first!
+            let suggested = AICommand.parse(session.messages.last!.text).first!
+            do { _ = try AISSHCommandPolicy.parse(suggested.text); checks["unsupportedSuggestionNotApproved"] = false }
+            catch { checks["unsupportedSuggestionNotApproved"] = true }
+            let code = AICommand(text: "printf 'AI_FILL_FIXTURE'")
             checks["responseHasActionableCard"] = views(assistant).contains { $0.identifier?.rawValue == "ai.command.fill" }
+            let rich = views(assistant).compactMap { $0 as? AIMarkdownTextView }
+            checks["responseUsesMarkdownTextViews"] = rich.count >= 3 && rich.contains { $0.string.contains("初步判断") } && rich.contains { $0.string.contains("执行后检查退出码") }
+            let codeView = rich.first { $0.identifier?.rawValue == "ai.markdown.code" }!
+            checks["markdownCommandIsStillLiteral"] = codeView.string == suggested.text
+            checks["markdownViewsFitTranscriptWidth"] = rich.allSatisfy { text in
+                guard let scroll = text.enclosingScrollView, let document = scroll.documentView else { return false }
+                let rect = text.convert(text.bounds, to: document)
+                let fits = rect.minX >= 0 && rect.maxX <= scroll.contentSize.width + 1 && document.frame.width <= scroll.contentSize.width + 1
+                if !fits { print("Markdown width:", rect, "document:", document.frame.width, "viewport:", scroll.contentSize.width) }
+                return fits
+            }
             workspace.syncTargets = [pane.id, other.id]
             let beforeOther = other.terminal.getTerminal().getBufferAsData()
             checks["emptyLocalPromptCanFill"] = pane.aiCanFill
+            let ask = Timer(timeInterval: 0.05, repeats: true) { [self] timer in
+                guard let root = NSApp.modalWindow?.contentView,
+                      let button = views(root).compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue == "ai.fill.confirm" }) else { return }
+                checks["commandFillRequiresAsk"] = true; button.performClick(nil); timer.invalidate()
+            }
+            RunLoop.main.add(ask, forMode: .modalPanel)
+            defer { ask.invalidate() }
             try workspace.fillAICommand(code, target: session.target)
-            checks["fillDoesNotSubmitOrStartTool"] = pane.localToolPID == 0 && !pane.isRunningLocalTool && pane.terminal.getTerminal().getCursorLineText().contains(code.text)
+            checks["fillDoesNotSubmitOrStartTool"] = pane.localToolPID == 0 && !pane.isRunningLocalTool && pane.terminal.getTerminal().getCursorLineText().contains("AI_FILL_FIXTURE")
             checks["fillBypassesBroadcast"] = other.terminal.getTerminal().getBufferAsData() == beforeOther
             do { try workspace.fillAICommand(code, target: session.target); checks["pendingInputProtected"] = false } catch { checks["pendingInputProtected"] = true }
+            checks["confirmationCannotBypassOShellPendingInput"] = !pane.aiCanConfirmPaste
+            do { try workspace.fillAICommand(code, target: session.target, confirmIfNeeded: true); checks["pendingInputFallbackRejected"] = false } catch { checks["pendingInputFallbackRejected"] = true }
             var stale = session.target; stale.stamp += "stale"
             do { try workspace.fillAICommand(code, target: stale); checks["changedTargetRejected"] = false } catch { checks["changedTargetRejected"] = true }
             do { try workspace.fillAICommand(.init(text: "echo one\necho two"), target: session.target); checks["multilineNotInserted"] = false } catch { checks["multilineNotInserted"] = true }
@@ -111,6 +168,9 @@ final class AIAssistantTest {
             workspace.saveAICommand(code)
             checks["cancelQuickCommandKeepsConfiguration"] = workspace.configuration.quickCommands.isEmpty && AIHistory.shared.entries.count == records
             if let output = ProcessInfo.processInfo.environment["OSHELL_AI_OUTPUT"] {
+                // Give both complete turns room in the design preview, rather
+                // than capturing only the scrolled bottom of the AI answer.
+                workspace.window?.setContentSize(NSSize(width: 1440, height: 1400)); workspace.window?.contentView?.layoutSubtreeIfNeeded()
                 for appearance in [NSAppearance.Name.aqua, .oshellDark] {
                     assistant.appearance = NSAppearance(named: appearance); assistant.layoutSubtreeIfNeeded()
                     let previous = NSAppearance.current; NSAppearance.current = assistant.effectiveAppearance
@@ -120,6 +180,19 @@ final class AIAssistantTest {
                     }
                     NSAppearance.current = previous
                 }
+                workspace.aiHost?.panelWidth = 340; workspace.aiHost?.needsLayout = true
+                workspace.window?.contentView?.layoutSubtreeIfNeeded(); assistant.layoutSubtreeIfNeeded()
+                checks["narrowConversationReflowsWithinViewport"] = views(assistant).compactMap { $0 as? AIMessageView }.allSatisfy { card in
+                    guard let scroll = card.enclosingScrollView, let document = scroll.documentView else { return false }
+                    let rect = card.convert(card.bounds, to: document)
+                    return rect.maxX <= scroll.contentSize.width + 1 && views(card).compactMap { $0 as? NSButton }.allSatisfy { button in button.convert(button.bounds, to: card).maxX <= card.bounds.width + 1 }
+                }
+                if let bitmap = assistant.bitmapImageRepForCachingDisplay(in: assistant.bounds) {
+                    assistant.cacheDisplay(in: assistant.bounds, to: bitmap)
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output).deletingLastPathComponent().appendingPathComponent("ai-messages-narrow.png"))
+                }
+                workspace.aiHost?.panelWidth = 420; workspace.aiHost?.needsLayout = true
+                workspace.window?.setContentSize(NSSize(width: 1440, height: 820)); workspace.window?.contentView?.layoutSubtreeIfNeeded()
                 assistant.appearance = nil
             }
             let paneBeforeResize = workspace.selectedPaneForAI
@@ -151,11 +224,11 @@ final class AIAssistantTest {
         do { try sendAuthorized(pending, settings: slow) } catch { checks["cancelSetup"] = false; finish(); return }
         let cancel = Timer(timeInterval: 0.2, repeats: false) { [self] _ in
             pending.cancel()
-            checks["cancelRetainsDraft"] = !pending.busy && pending.messages.isEmpty && pending.draft == "cancel fixture"
+            checks["cancelRetainsDraft"] = !pending.busy && pending.messages.count == 2 && pending.historySources.contains { $0.text == "cancel fixture" } && pending.draft == "cancel fixture"
         }
         RunLoop.main.add(cancel, forMode: .common)
         let timer = Timer(timeInterval: 1.8, repeats: false) { [self] _ in
-            checks["lateResponseCannotOverwriteCancellation"] = pending.messages.isEmpty && !pending.busy
+            checks["lateResponseCannotOverwriteCancellation"] = pending.messages.count == 2 && pending.messages.last?.text.contains("用户停止") == true && !pending.busy
             testAuthorization()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -164,13 +237,28 @@ final class AIAssistantTest {
         let timer = Timer(timeInterval: 0.1, repeats: false) { [self] _ in
             guard let root = NSApp.modalWindow?.contentView, let review = views(root).compactMap({ $0 as? AISendReview }).first else { checks["reviewVisible"] = false; NSApp.abortModal(); return }
             checks["reviewVisible"] = true
+            if let preview = views(review).compactMap({ $0 as? NSScrollView }).first(where: { $0.identifier?.rawValue == "ai.review.previewScroll" }) {
+                checks["reviewFirstPresentationStartsAtTop"] = preview.documentVisibleRect.minY < 1
+            }
+            if let first = views(review).first(where: { $0.identifier?.rawValue.hasPrefix("ai.review.item.") == true }), let scroll = first.enclosingScrollView {
+                checks["reviewFirstPresentationShowsChoices"] = scroll.documentVisibleRect.contains(first.convert(first.bounds, to: scroll.documentView))
+            }
             if let frozen = review.snapshot {
                 checks["reviewDefaultsExcludeIdentityAndHistory"] = frozen.items.allSatisfy { $0.origin == .current }
+                let text = views(review).compactMap { $0 as? NSTextView }.first!
+                checks["reviewDefaultsToReadableSources"] = text.string == frozen.disclosureText && !text.string.contains("max_completion_tokens") && !text.string.contains("SHA256")
+                checks["reviewReadableSourcesAreExactAndSanitized"] = frozen.items.allSatisfy { text.string.contains($0.text) && text.string.contains($0.name) } && !text.string.contains("fixture-password")
+                let details = views(review).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "ai.review.technical" }!
+                details.performClick(nil)
+                checks["reviewTechnicalDetailsUseSameSnapshot"] = text.string == frozen.preview && review.snapshot?.id == frozen.id
+                details.performClick(nil)
+                checks["reviewCanReturnToReadableSources"] = text.string == frozen.disclosureText && review.snapshot?.bodyDigest == frozen.bodyDigest
                 if approve { approvedDigests.append(frozen.bodyDigest) }
             }
             if !approve, let imageID = review.snapshot?.items.first(where: { $0.image != nil })?.id {
                 views(review).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "ai.review.item." + imageID }?.performClick(nil)
                 checks["reviewCanExcludeNewImage"] = review.snapshot?.items.compactMap(\.image).isEmpty == true
+                checks["reviewReadablePreviewExcludesUncheckedImage"] = review.snapshot?.disclosureText.contains("synthetic.png") == false
                 if let field = views(review).compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue.contains(".identity.") == true }) {
                     field.performClick(nil)
                     checks["reviewCanAuthorizeOneIdentityField"] = review.snapshot?.items.filter { $0.origin == .identity }.count == 1
@@ -178,7 +266,7 @@ final class AIAssistantTest {
                     checks["reviewCanRemoveIdentityField"] = review.snapshot?.items.allSatisfy { $0.origin != .identity } == true
                 }
             }
-            if let output = ProcessInfo.processInfo.environment["OSHELL_AI_OUTPUT"], approve {
+            if let output = ProcessInfo.processInfo.environment["OSHELL_AI_OUTPUT"] {
                 for appearance in [NSAppearance.Name.aqua, .oshellDark] {
                     review.appearance = NSAppearance(named: appearance); review.layoutSubtreeIfNeeded()
                     let previous = NSAppearance.current; NSAppearance.current = review.effectiveAppearance
@@ -195,7 +283,7 @@ final class AIAssistantTest {
                 if let text = views(review).compactMap({ $0 as? NSTextView }).first, let scroll = text.enclosingScrollView, let container = text.textContainer, let manager = text.layoutManager {
                     manager.ensureLayout(for: container)
                     let end = manager.usedRect(for: container).maxY + text.textContainerInset.height
-                    checks["completePayloadCanScrollToLastLine"] = text.bounds.height >= end && text.bounds.height > scroll.contentSize.height
+                    checks["completePayloadCanScrollToLastLine"] = text.bounds.height >= end
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, text.bounds.height - scroll.contentSize.height)))
                     checks["payloadLastLineIsReachable"] = text.visibleRect.maxY >= end
                     scroll.contentView.scroll(to: .zero)
@@ -325,7 +413,7 @@ final class AIAssistantTest {
         let timer = Timer(timeInterval: 0.1, repeats: false) { [self] _ in
             guard let root = NSApp.modalWindow?.contentView else { NSApp.abortModal(); return }
             do {
-                let scope = UUID(), request = try AIRequest.connectionTest(settings: page.values(), scope: scope)
+                let scope = UUID(), request = try AIRequest.connectionTest(settings: page.values().resolved(for: nil), scope: scope)
                 approvedDigests.append(request.bodyDigest)
                 checks["connectionTestNoBusinessData"] = request.items.count == 1 && request.items[0].text == "Reply OK."
                 views(root).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "ai.test.approve" }?.performClick(nil)
@@ -375,7 +463,13 @@ final class AIAssistantTest {
             AIProtocolTest(base: base, settings: settings) { [self] results, approved in
                 checks.merge(results) { _, new in new }; approvedDigests += approved
                 AIProviderPresetTest(base: base, settings: settings) { [self] results, approved in
-                    checks.merge(results) { _, new in new }; approvedDigests += approved; finish()
+                    checks.merge(results) { _, new in new }; approvedDigests += approved
+                    AIHistoryContinuationTest(workspace: workspace, original: session, base: base, settings: settings) { [self] results, approved in
+                        checks.merge(results) { _, new in new }; approvedDigests += approved
+                        AIModelCatalogTest(workspace: workspace, base: base, original: settings) { [self] results, approved in
+                            checks.merge(results) { _, new in new }; approvedDigests += approved; finish()
+                        }.run()
+                    }.run()
                 }.run()
             }.run()
         } catch { checks["settingsWorkflow"] = false; finish() }

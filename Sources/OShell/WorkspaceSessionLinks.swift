@@ -142,14 +142,17 @@ extension WorkspaceController {
         }
         let merge = menu.addItem(withTitle: "合并为单组选项卡", action: #selector(mergeTabGroups), keyEquivalent: "")
         merge.target = self; merge.isEnabled = customTabLayout != nil || arrangement != .tabs
-        let arrangementItem = menu.addItem(withTitle: "排列", action: nil, keyEquivalent: "")
-        let arrangements = NSMenu(); arrangements.autoenablesItems = false
-        for mode in TabArrangement.allCases {
-            let item = arrangements.addItem(withTitle: mode.title, action: #selector(changeArrangement(_:)), keyEquivalent: "")
-            item.target = self; item.tag = mode.rawValue; item.toolTip = mode.hint
-            item.state = customTabLayout == nil && arrangement == mode ? .on : .off
+        for grouped in [true, false] {
+            let parent = menu.addItem(withTitle: grouped ? "分组排列" : "分屏排列", action: nil, keyEquivalent: "")
+            let submenu = NSMenu(); submenu.autoenablesItems = false
+            for mode in TabArrangement.allCases {
+                let item = submenu.addItem(withTitle: mode.title, action: grouped ? #selector(changeArrangement(_:)) : #selector(changeSplitArrangement(_:)), keyEquivalent: "")
+                item.target = self; item.tag = mode.rawValue; item.toolTip = mode.hint
+                item.isEnabled = !tabs.isEmpty
+                item.state = (grouped ? customTabLayout != nil : customTabLayout == nil) && arrangement == mode ? .on : .off
+            }
+            parent.submenu = submenu
         }
-        arrangementItem.submenu = arrangements
         let fullscreen = menu.addItem(withTitle: isFocusFullscreen ? "退出专注全屏" : "专注全屏", action: #selector(toggleFocusFullscreen), keyEquivalent: "")
         fullscreen.target = self
         let deepFocus = menu.addItem(withTitle: isDeepFocus ? "退出全心专注" : "全心专注", action: #selector(toggleDeepFocus), keyEquivalent: "")

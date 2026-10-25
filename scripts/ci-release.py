@@ -188,7 +188,7 @@ Apple Silicon 包支持 macOS 13 及更新系统；Intel（x86_64 / amd64）包�
 下载适合本机的一种 DMG，将 OShell.app 拖入 Applications。包内附带 SHA256SUMS.txt（包内文件校验）和 release-manifest.json（构建信息）；对应源码包单独提供。
 
 这些安装包使用{signing_label}，未进行 Developer ID 签名或 Apple 公证。流水线校验架构、部署目标、载荷和签名完整性，并运行构建机原生架构的核心测试；不代表已在 macOS 10.13 的真实系统上完成验证。
-{'内置更新直接使用上述 DMG，签名更新信息包含在本页中，无需额外 XML 或更新 ZIP。旧客户端请手动安装本版本一次。' if updates else '本次仅发布手动安装包，不包含内置更新信息。'}
+{'内置更新直接使用上述 DMG，签名更新信息包含在本页中，无需额外 XML 或更新 ZIP。依赖旧 macOS13-x86_64 文件名的 Intel 客户端需手动安装一次 macOS 10.13 Intel 包，之后使用统一更新通道。' if updates else '本次仅发布手动安装包，不包含内置更新信息。'}
 
 对应提交：`{meta['commit']}`
 """
@@ -215,14 +215,11 @@ def publish(meta, repository, output):
     files = sorted(path for path in output.iterdir() if path.name not in internal)
     expected = {artifact_name(meta['version'], flavor) for flavor in RELEASE_FLAVORS} | {f"OShell-{meta['version']}-source.tar.gz"}
     manifest = json.loads((output/'release-manifest.json').read_text())
-    aliases = manifest.get('compatibilityAliases', [])
-    if aliases:
-        name = f"OShell-{meta['version']}-macOS13-x86_64.dmg"
-        source = artifact_name(meta['version'], 'legacy')
-        expected_alias = dict(file=name, source=source, sha256=sha256(output/source), size=(output/source).stat().st_size)
-        if aliases != [expected_alias] or (output/name).is_symlink() or sha256(output/name) != expected_alias['sha256']:
-            raise ValueError('Compatibility alias must be identical to the verified Intel installer')
-        expected.add(name)
+    if manifest.get('compatibilityAliases'):
+        raise ValueError('Filename compatibility aliases are no longer published; exactly two DMGs are required')
+    platforms = set(re.findall(r'<!-- oshell-update-v1:([^:]+):', (output/'RELEASE_NOTES.md').read_text()))
+    if not platforms.issubset({TARGETS[flavor].suffix for flavor in RELEASE_FLAVORS}):
+        raise ValueError('Release notes contain retired or unexpected update platforms')
     if {path.name for path in files} != expected:
         raise ValueError('Release asset set is incomplete')
     expected_checksums = expected | {'release-manifest.json'}

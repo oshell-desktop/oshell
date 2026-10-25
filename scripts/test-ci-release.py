@@ -77,7 +77,7 @@ class ReleaseTests(unittest.TestCase):
     def test_compatibility_secrets_are_scoped_before_publication(self):
         _, jobs = self.workflow_jobs('release.yml')
         release = jobs['release']
-        before, signing = release.split('      - name: Prepare Intel filename alias and signed compatibility metadata', 1)
+        before, signing = release.split('      - name: Prepare signed original-repository Pages metadata (two DMGs)', 1)
         self.assertNotIn('scripts/ci-release.py publish', before)
         self.assertIn('scripts/ci-release.py publish', signing)
         self.assertIn('--release-output dist/github-release', signing)
@@ -435,6 +435,7 @@ class ReleaseTests(unittest.TestCase):
         upload = next(call for call in calls if call[:2] == ('release', 'upload'))
         self.assertNotIn(str(self.output/'SHA256SUMS.txt'), upload)
         self.assertNotIn(str(self.output/'release-manifest.json'), upload)
+        self.assertEqual({Path(arg).name for arg in upload if arg.endswith('.dmg')}, {CI.artifact_name(META['version'], f) for f in RELEASE_FLAVORS})
 
     def test_upload_failure_leaves_draft(self):
         self.collect(); calls = []
@@ -459,16 +460,24 @@ class ReleaseTests(unittest.TestCase):
         (self.output/'SHA256SUMS.txt').write_text(''.join(CI.sha256(p)+'  '+p.name+'\n' for p in files))
         return self.output/name
 
-    def test_compatibility_alias_uploaded_before_publication(self):
-        self.collect(); alias = self.add_compatibility_alias(); calls = []
-        with patch.object(CI, 'gh', self.fake_gh(calls)): CI.publish(META,'owner/repo',self.output)
-        upload = next(call for call in calls if call[:2] == ('release','upload'))
-        self.assertIn(str(alias),upload)
-        self.assertIn('--draft=false',calls[-1])
+    def test_compatibility_alias_rejected_even_with_matching_bytes(self):
+        self.collect(); self.add_compatibility_alias()
+        with patch.object(CI,'gh') as network, self.assertRaisesRegex(ValueError, 'aliases'):
+            CI.publish(META,'owner/repo',self.output)
+        network.assert_not_called()
 
-    def test_compatibility_alias_cannot_substitute_other_bytes(self):
-        self.collect(); alias = self.add_compatibility_alias(); alias.write_bytes(b'different installer')
-        with patch.object(CI,'gh') as network, self.assertRaises(ValueError):
+    def test_undeclared_extra_dmg_rejected_before_any_github_call(self):
+        self.collect()
+        (self.output/'OShell-1.2.3-macOS13-x86_64.dmg').write_bytes(b'extra installer')
+        with patch.object(CI,'gh') as network, self.assertRaisesRegex(ValueError, 'asset set'):
+            CI.publish(META,'owner/repo',self.output)
+        network.assert_not_called()
+
+    def test_retired_feed_rejected_even_without_alias_file(self):
+        self.collect()
+        with (self.output/'RELEASE_NOTES.md').open('a') as stream:
+            stream.write('\n<!-- oshell-update-v1:macOS13-x86_64:c3ludGhldGlj -->\n')
+        with patch.object(CI,'gh') as network, self.assertRaisesRegex(ValueError, 'platforms'):
             CI.publish(META,'owner/repo',self.output)
         network.assert_not_called()
 

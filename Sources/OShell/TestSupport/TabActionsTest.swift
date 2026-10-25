@@ -65,7 +65,7 @@ enum TabActionsTest {
                 controller.select(other)
                 let menu = controller.sessionTabContextMenu(original.id)
                 checks["copyMenuEntries"] = menu.items.contains { $0.title == "复制会话" && $0.isEnabled } && menu.items.contains { $0.title == "复制 SSH 渠道" && $0.isEnabled }
-                let arrangements = menu.items.first { $0.title == "排列" }?.submenu
+                let arrangements = menu.items.first { $0.title == "分组排列" }?.submenu
                 checks["contextHasAllArrangements"] = arrangements?.items.map(\.tag) == TabArrangement.allCases.map(\.rawValue)
                 if let vertical = arrangements?.items.first(where: { $0.tag == TabArrangement.vertical.rawValue }) { NSApp.sendAction(vertical.action!, to: vertical.target, from: vertical) }
                 checks["contextArrangementWorks"] = controller.arrangement == .vertical

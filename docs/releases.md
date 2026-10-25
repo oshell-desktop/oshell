@@ -9,7 +9,7 @@
 | `legacy` | macOS 10.13 | Intel x86_64 | `macOS10.13-Intel` |
 | `arm64` | macOS 13 | Apple Silicon arm64 | `macOS13-arm64` |
 
-现代版本以 macOS 13 为最低运行目标，可以用于更新系统；并非限制只能在 macOS 13 使用。两种包共用源码，最低系统和名称统一定义在 `scripts/release_targets.py`。Intel 包统一以 macOS 10.13 为最低目标；不再单独发布 Universal 和现代 Intel 包。
+现代版本以 macOS 13 为最低运行目标，可以用于更新系统；并非限制只能在 macOS 13 使用。两种包共用源码，最低系统和名称统一定义在 `scripts/release_targets.py`。Intel 包统一以 macOS 10.13 为最低目标；后续 Release 只上传两个 DMG 和对应源码包，不再生成旧名称 Intel 兼容副本，也不单独发布 Universal 或现代 Intel 包。已有 Release 的附件、说明和标签保持原样。
 
 所有任务均使用 GitHub 托管 Runner：元数据检查、Release 发布和更新站点使用 `ubuntu-24.04`；ARM64 DMG 使用 `macos-15`，Intel DMG 使用 `macos-15-intel`。两个目标最多并行执行两个 job，不依赖本机或组织的自托管节点。
 
@@ -81,7 +81,7 @@ Sparkle 2.9.6 负责校验签名、下载、安装及重启。客户端通过随
 
 Apple Silicon 的 macOS 13+ 使用 arm64 包；所有受支持的 Intel 系统统一使用 macOS 10.13 Intel 包。Apple Silicon 的 macOS 11/12 不再提供新版安装包。客户端只下载匹配目标的 DMG。
 
-已安装的旧版现代 Intel 客户端仍查找 `macOS13-x86_64` 更新；发布后复制同一份 Intel DMG 为旧名称兼容附件，并生成对应签名更新信息，因此不需要手动迁移，也不增加编译目标。历史目标定义仅保留用于手动排查，不参与默认构建或发布。
+已安装的旧版现代 Intel 客户端仍查找 `macOS13-x86_64` 更新。后续 Release 不再提供该文件名，依赖它的客户端需手动安装一次 macOS 10.13 Intel 包，之后使用统一更新通道。历史 Release 中已有的兼容附件和签名元数据保持原样，站点工具仍能读取；不会补建或删除。历史目标定义仅保留用于读取旧发布和手动排查，不参与默认构建或发布。
 
 CI 使用 `OSHELL_UPDATE_SIGNING_KEY` Secret。维护者本地的 `.release-private/` 不属于构建缓存，清理脚本不会删除其中的私钥。现有发行线不能随意替换公钥或生成新密钥；独立 fork 应使用自己的更新密钥。
 
@@ -130,11 +130,13 @@ Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按两种平�
 
 `arnolixi/oshell` 作为兼容更新仓库继续使用。旧客户端请求 `https://arnolixi.github.io/oshell/updates/latest.json`，该站点由公开仓库 `arnolixi/arnolixi.github.io` 的 `master` 分支承载，仅包含公开更新信息。不要重建 `arnolixi/oshell` 仓库，以免移除 GitHub 到新仓库的迁移跳转。
 
-正式发布前，`publish-legacy-updates.py --release-output` 验证本地已校验 Intel DMG 的 Ed25519 签名，创建字节完全相同的 `macOS13-x86_64` 兼容附件，更新签名元数据、清单和校验和。所有附件必须在草稿阶段上传并核验，才将 Release 公开；不可变发布公开后不能追加附件。原始的两个编译目标不变。脚本用现有 `OSHELL_UPDATE_SIGNING_KEY` 生成分别绑定新、旧仓库名的签名元数据；新站点额外提供旧 Intel 文件名入口，旧站点保留旧仓库下载地址，由 GitHub 将下载跳转到新仓库。不会降低客户端仓库名、系统目标或签名校验。
+正式发布前，`publish-legacy-updates.py --release-output` 只读取并验证本地已校验的两份 DMG 及 Ed25519 签名，生成独立的 Pages 输出；不复制安装包，不修改发布说明、清单或校验和。暂存目录若包含额外 DMG、旧兼容别名清单或第三个平台的更新标记，会在发布前拒绝处理。发布器也只允许两个 DMG 和对应源码包，不能通过手工添加别名清单扩大附件集合。
+
+脚本继续使用现有 `OSHELL_UPDATE_SIGNING_KEY`，为旧仓库名生成两种平台的签名元数据；当前仓库的原始签名信息不变。旧站点保留旧仓库下载地址，由 GitHub 将下载跳转到新仓库。不会降低客户端仓库名、系统目标或签名校验。
 
 `deploy-legacy-pages.py` 通过专用 `OSHELL_LEGACY_PAGES_DEPLOY_KEY` 更新旧站点的 `.nojekyll`、`oshell/index.html` 和 `oshell/updates/latest.json`。该部署密钥仅对旧 Pages 仓库有写权限；更新签名私钥不进入该仓库。旧站点由 Pages 的分支发布处理，无定时轮询。相同内容不产生额外提交；旧版本拒绝覆盖新版本。
 
-手动修复使用 **Repair legacy update entry (no builds)** 工作流。它只读取最新正式 Release、重新生成签名元数据并部署新旧 Pages；不会改动不可变 Release、追加附件、重新编译、创建版本或移动标签。若旧发布没有兼容附件，需在下一正式版本发布前加入，不能事后补传。macOS 11/12 的 Apple Silicon 已不属于新版本支持范围，不通过伪造最低系统版本提供更新。
+手动修复使用 **Repair legacy update entry (no builds)** 工作流。它只读取最新正式 Release、重新生成签名元数据并部署新旧 Pages；不会改动不可变 Release、追加附件、重新编译、创建版本或移动标签。修复时只根据最新 Release 实际存在的已签名平台生成站点：旧发布已有兼容附件则继续读取，新发布只有两种包则不合成第三种入口。不能追加附件或承诺下一版本恢复旧别名。macOS 11/12 的 Apple Silicon 已不属于新版本支持范围，不通过伪造最低系统版本提供更新。
 
 ## Actions 历史记录保留
 

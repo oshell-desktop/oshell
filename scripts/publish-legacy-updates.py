@@ -5,7 +5,6 @@
 import argparse
 import base64
 import copy
-import hashlib
 import importlib.util
 import json
 import os
@@ -22,11 +21,9 @@ SPEC = importlib.util.spec_from_file_location('update_pages', ROOT/'scripts/buil
 PAGES = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(PAGES)
 CURRENT = 'oshell-desktop/oshell'
 LEGACY = 'arnolixi/oshell'
-FLAVORS = ('legacy', 'arm64', 'intel')
+FLAVORS = PAGES.RELEASE_FLAVORS
 NS = PAGES.NS
 ET.register_namespace('sparkle', NS[1:-1])
-NOTICE = ('旧更新仓库 `arnolixi/oshell` 继续有效。旧名称的 `macOS13-x86_64.dmg` '
-          '是 macOS 10.13 Intel 包的同内容兼容副本，不是第三个编译目标。')
 
 
 def signed_xml(encoded, key, *, url, minimum):
@@ -38,38 +35,11 @@ def signed_xml(encoded, key, *, url, minimum):
     return base64.b64encode(data + f'<!-- sparkle-signatures:\nedSignature: {signature}\nlength: {len(data)}\n-->\n'.encode()).decode()
 
 
-def prepare(release, public, key):
+def prepare(release, public, key, *, flavors=FLAVORS):
     actual = base64.b64encode(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
     if actual != public: raise ValueError('Signing key differs from the pinned update public key')
-    original = PAGES.document(release, CURRENT, public)
-    value = copy.deepcopy(release)
-    value['body'] = value['body'].replace(
-        '旧版现代 Intel 客户端需手动安装一次 Intel 兼容包，之后使用统一更新通道',
-        '旧版现代 Intel 客户端可通过旧名称兼容附件直接升级，之后使用统一更新通道')
-    value['body'] = value['body'].replace('旧客户端请手动安装本版本一次。', '使用 Pages 更新的旧客户端可通过兼容入口直接升级。')
-    base = original['platforms']['macOS10.13-Intel']
-    alias = f'OShell-{original["version"]}-macOS13-x86_64.dmg'
-    alias_url = f'https://github.com/{CURRENT}/releases/download/{release["tag_name"]}/{alias}'
-    feed = signed_xml(base['signedFeed'], key, url=alias_url, minimum='13.0')
-    marker = '<!-- oshell-update-v1:macOS13-x86_64:' + feed + ' -->'
-    pattern = r'<!-- oshell-update-v1:macOS13-x86_64:[A-Za-z0-9+/=]+ -->'
-    if re.search(pattern, value['body']): value['body'] = re.sub(pattern, marker, value['body'])
-    else: value['body'] += '\n' + marker + '\n'
-    if NOTICE not in value['body']: value['body'] += '\n' + NOTICE + '\n'
-    value['assets'] = [a for a in value['assets'] if a['name'] != alias]
-    value['assets'].append(dict(name=alias, size=base['size'], state='uploaded', browser_download_url=alias_url))
-    current = PAGES.document(value, CURRENT, public)
-    old = copy.deepcopy(value)
-    old['body'] = ''
-    for flavor in FLAVORS:
-        target = PAGES.TARGETS[flavor]; platform = current['platforms'][target.suffix]
-        url = f'https://github.com/{LEGACY}/releases/download/{release["tag_name"]}/{platform["file"]}'
-        encoded = signed_xml(platform['signedFeed'], key, url=url, minimum=target.minimum)
-        old['body'] += '<!-- oshell-update-v1:' + target.suffix + ':' + encoded + ' -->\n'
-    for asset in old['assets']:
-        asset['browser_download_url'] = asset['browser_download_url'].replace('/'+CURRENT+'/', '/'+LEGACY+'/')
-    legacy = PAGES.document(old, LEGACY, public, flavors=FLAVORS)
-    return value['body'], current, legacy
+    current = PAGES.document(release, CURRENT, public, flavors=flavors)
+    return release['body'], current, legacy_document(release, current, public, key)
 
 
 def gh(*args):
@@ -100,20 +70,30 @@ def prepare_local(output, tag, public, key):
     for path in output.glob('*.dmg'):
         if path.is_symlink(): raise ValueError('Installer must not be a symlink')
         release['assets'].append(dict(name=path.name,size=path.stat().st_size,state='uploaded',browser_download_url=f'https://github.com/{CURRENT}/releases/download/{tag}/{path.name}'))
-    body,current,legacy = prepare(release,public,key)
-    base = current['platforms']['macOS10.13-Intel']; alias = current['platforms']['macOS13-x86_64']
-    data = (output/base['file']).read_bytes()
-    item = ET.fromstring(base64.b64decode(base['signedFeed'])).find('./channel/item/enclosure')
-    key.public_key().verify(base64.b64decode(item.get(NS+'edSignature'),validate=True),data)
-    if len(data) != base['size']: raise ValueError('Installer size mismatch')
-    target = output/alias['file']
-    if target.exists() and (target.is_symlink() or target.read_bytes() != data): raise ValueError('Existing alias differs from the verified installer')
-    target.write_bytes(data)
-    (output/'RELEASE_NOTES.md').write_text(body)
-    manifest['compatibilityAliases'] = [dict(file=target.name,source=base['file'],sha256=hashlib.sha256(data).hexdigest(),size=len(data))]
-    manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
-    files = sorted(p for p in output.iterdir() if p.name not in ('SHA256SUMS.txt','RELEASE_NOTES.md'))
-    (output/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
+    expected = {f'OShell-{tag[1:]}-{PAGES.TARGETS[flavor].suffix}.dmg' for flavor in FLAVORS}
+    if {asset['name'] for asset in release['assets']} != expected or manifest.get('compatibilityAliases'):
+        raise ValueError('Future releases must contain exactly two DMGs; filename aliases are not allowed')
+    markers = set(re.findall(r'<!-- oshell-update-v1:([^:]+):', release['body']))
+    if markers != {PAGES.TARGETS[flavor].suffix for flavor in FLAVORS}:
+        raise ValueError('Future releases require signed metadata for exactly two DMGs')
+    _,current,legacy = prepare(release,public,key)
+    # Verify both existing artifacts, but never alter release notes, manifests,
+    # checksums or installers. Only the separate Pages output may be generated.
+    for platform in current['platforms'].values():
+        data = (output/platform['file']).read_bytes()
+        item = ET.fromstring(base64.b64decode(platform['signedFeed'])).find('./channel/item/enclosure')
+        key.public_key().verify(base64.b64decode(item.get(NS+'edSignature'),validate=True),data)
+        if len(data) != platform['size']: raise ValueError('Installer size mismatch')
+    return current,legacy
+
+
+def prepare_existing(release, tag, public, key):
+    # An existing Release may contain historical aliases. Preserve its actual
+    # signed platforms in Pages without creating or changing any Release asset.
+    if release['tag_name'] != tag: raise ValueError('Only Latest may update compatibility Pages')
+    flavors = [f for f in ('legacy','arm64','intel','compat') if '<!-- oshell-update-v1:'+PAGES.TARGETS[f].suffix+':' in release['body']]
+    if not set(FLAVORS).issubset(flavors): raise ValueError('Release is missing a required installer')
+    _,current,legacy = prepare(release,public,key,flavors=flavors)
     return current,legacy
 
 
@@ -122,7 +102,7 @@ def main():
     parser.add_argument('--tag', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--private-key', type=Path)
-    parser.add_argument('--release-output',type=Path,help='Prepare the compatibility alias BEFORE publishing an immutable Release')
+    parser.add_argument('--release-output',type=Path,help='Read and verify the two staged DMGs; generate Pages only without modifying release files')
     args = parser.parse_args()
     if args.output.exists(): raise ValueError('Choose a new output directory')
     if args.private_key:
@@ -139,12 +119,9 @@ def main():
         # Existing releases may be immutable: only regenerate metadata, never
         # mutate their assets, notes, tags or original signed feeds.
         release = json.loads(gh('api',f'repos/{CURRENT}/releases/latest'))
-        if release['tag_name'] != args.tag: raise ValueError('Only Latest may update compatibility Pages')
-        flavors = [f for f in ('legacy','arm64','intel','compat') if '<!-- oshell-update-v1:'+PAGES.TARGETS[f].suffix+':' in release['body']]
-        if not {'legacy','arm64'}.issubset(flavors): raise ValueError('Release is missing a required installer')
-        current = PAGES.document(release,CURRENT,public,flavors=flavors)
-        legacy = legacy_document(release,current,public,key)
-        if 'intel' not in flavors: print('This immutable release has no modern Intel filename alias; that client requires the next compatibility-enabled release.')
+        current,legacy = prepare_existing(release,args.tag,public,key)
+        if 'macOS13-x86_64' not in current['platforms']:
+            print('Old Intel clients requiring the retired filename must install the macOS 10.13 Intel package manually once.')
     PAGES.write_site(current,args.output/'current')
     PAGES.write_site(legacy,args.output/'legacy')
     print('Prepared signed current and legacy update sites for',args.tag,'; no installer compilation performed.')

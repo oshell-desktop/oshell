@@ -5,10 +5,17 @@
 """USM one-use ticket: SSH, SFTP and SCP share one authenticated transport."""
 import json,os,pathlib,secrets,shutil,signal,socket,subprocess,tempfile,threading,time
 import paramiko,re,errno,shlex
+import importlib.util
+_proxy_spec = importlib.util.spec_from_file_location('global_proxy_fixture', pathlib.Path(__file__).with_name('global-proxy-fixture.py'))
+_proxy_module = importlib.util.module_from_spec(_proxy_spec); _proxy_spec.loader.exec_module(_proxy_module)
+proxy_fixture = _proxy_module.ProxyFixture() if os.environ.get('OSHELL_TEST_GLOBAL_PROXY') == '1' else None
+if proxy_fixture: os.environ['OSHELL_GLOBAL_PROXY_FIXTURE_PORT'] = str(proxy_fixture.port)
 project=pathlib.Path(__file__).resolve().parent.parent
 launcher=pathlib.Path(os.environ.get('OSHELL_TEST_APP',str(project/'work/test-app/OShell.app')))/'Contents/MacOS/OShell-ZOC'
 with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as folder:
     root=pathlib.Path(folder).resolve();key=paramiko.RSAKey.generate(2048)
+    # Keep Foundation's standardized IPC path stable before app registration.
+    (root/'config').mkdir()
     remote_root=root/'remote';remote_root.mkdir();(remote_root/'seed.txt').write_text('seed fixture\n')
     user='clone-user#asset';password='one-use!@:'+secrets.token_urlsafe(20)
     (root/'fixture.json').write_text(json.dumps({'password':password}));(root/'fixture.json').chmod(0o600)
@@ -168,6 +175,10 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
         while not (root/'app-result.json').exists() and time.time()<deadline:time.sleep(.1)
         report=json.loads((root/'app-result.json').read_text())
         report['checks'].update(initialLaunchAccepted=result.returncode==0,oneTransportOnly=facts['transports']==1,oneAuthenticationOnly=facts['authenticated']==1 and facts['authAttempts']==1,imageAndFileSFTPChannels=6<=facts['sftp']<=7,SFTPRefusalExercised=facts['sftpDenied']==2,SCPCommandsReusedConnection=facts['execRequests']==2)
+        if proxy_fixture:
+            report['checks']['globalProxyCarriesSSHAndReusedFiles'] = proxy_fixture.connections == 1 and not proxy_fixture.errors
+            report['proxyConnections'] = proxy_fixture.connections
+        report['checks']['singleFixtureApp'] = app.pid == pid == int((root/'app.pid').read_text())
         report['server']=facts
         if result.returncode: report['launchError']=result.stderr.decode(errors='replace').replace(password,'<fixture-secret>').replace(user,'<fixture-user>')[:300]
         report['checks']['clientLocaleNotForwarded']=facts['localeRequests']==0

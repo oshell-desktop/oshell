@@ -7,6 +7,11 @@ import OShellCore
 
 // SSH ProxyCommand transport. Credentials travel over the existing private IPC
 // channel, never argv, environment values, a temporary file, or terminal output.
+// The transport belongs to OpenSSH's pipes, not the terminal's foreground
+// process group. ControlPersist can outlive the original terminal while file
+// channels still use it; closing that PTY must not hang up this proxy (or an
+// exec'ed SSH jump). A helper already leading its own group may return EPERM.
+_ = setsid()
 signal(SIGPIPE, SIG_IGN)
 func fail(_ message: String) -> ModelError { .invalid(message) }
 func writeAll(_ fd: Int32, _ data: Data) throws {

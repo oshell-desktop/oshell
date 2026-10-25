@@ -22,7 +22,7 @@ final class AIProviderPresetTest {
         checks["providerOldSettingsPreserved"] = migrated.provider == .custom && migrated.maxOutputTokens == 4096 && migrated.endpoint == original.endpoint && migrated.apiKey == original.apiKey
         old["providerPreset"] = "unknown-provider"
         reject("providerUnknownPresetFailsClosed") { _ = try JSONDecoder().decode(AISettings.self, from: JSONSerialization.data(withJSONObject: old)) }
-        for limit in [0, 255, 65537] { var invalid = original; invalid.outputTokenLimit = limit; reject("providerInvalidOutputLimit:\(limit)") { try invalid.validate() } }
+        for limit in [0, 255, 131073] { var invalid = original; invalid.outputTokenLimit = limit; reject("providerInvalidOutputLimit:\(limit)") { try invalid.validate() } }
         let page = AISettingsView()
         let picker = views(page).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "ai.settings.provider" }!
         let keyField = views(page).compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "ai.settings.key" }!
@@ -35,7 +35,7 @@ final class AIProviderPresetTest {
         for preset in presets {
             keyField.stringValue = "OLD_PROVIDER_KEY_NEVER"; choose(preset)
             var value = try page.values()
-            checks["providerUIFillsDefaults:" + preset.rawValue] = value.provider == preset && value.endpoint == preset.endpoint && value.model == preset.model && value.protocolType == preset.protocolType && value.maxOutputTokens == 16384
+            checks["providerUIFillsDefaults:" + preset.rawValue] = value.provider == preset && value.endpoint == preset.endpoint && value.model == preset.model && value.protocolType == preset.protocolType && value.maxOutputTokens == 131072
             checks["providerClearsOldKeyAndImageOptIn:" + preset.rawValue] = value.apiKey.isEmpty && !value.supportsImages
             try value.validate()
             keyField.stringValue = "synthetic-provider-key-" + preset.rawValue
@@ -97,7 +97,7 @@ final class AIProviderPresetTest {
             reject("providerRequiresImageOptIn:" + key) { let draft = try session.sendDraft(); _ = try draft.freeze(settings: settings, selected: draft.defaults) }
             session.images = []
             let draft = try session.sendDraft(), request = try draft.freeze(settings: settings, selected: draft.defaults)
-            checks["providerPreviewShowsPresetAndRealClient:" + key] = request.preview.contains(preset.title) && request.preview.contains("OShell/") && request.preview.contains("16384") && !request.preview.contains(settings.apiKey)
+            checks["providerPreviewShowsPresetAndRealClient:" + key] = request.preview.contains(preset.title) && request.preview.contains("OShell/") && request.preview.contains("131072") && !request.preview.contains(settings.apiKey)
             var changed = settings; changed.providerPreset = .custom
             reject("providerChangeInvalidatesSnapshot:" + key) { _ = try session.authorize(request, settings: { changed }, target: { session.target }) }
         } catch { checks["providerScopeSetup:" + key] = false; finish(); return }

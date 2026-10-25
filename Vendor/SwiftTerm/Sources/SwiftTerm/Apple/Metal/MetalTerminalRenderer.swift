@@ -357,6 +357,12 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+#if os(macOS)
+        // currentDrawable may wait for the compositor. Do not acquire surfaces
+        // for occluded, minimized, detached or hidden terminal views; lifecycle
+        // notifications request a fresh frame when they become visible again.
+        guard terminalView?.isMetalRendererEligibleForRetry == true else { return }
+#endif
 #if canImport(os) && !OSHELL_LEGACY
         let drawID = OSSignpostID(log: MetalTerminalRenderer.profileLog)
         if MetalTerminalRenderer.profileEnabled {

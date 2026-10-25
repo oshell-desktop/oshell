@@ -10,6 +10,7 @@ import OShellCore
 final class LocalToolProcess: LocalProcessDelegate {
     let command: LocalToolCommand
     private var process: LocalProcess!
+    private var sshClientLocale: SSHClientLocale?
     private var drainTimer: DispatchSourceTimer?
     private(set) var exited = false
     private var stopped = false
@@ -28,9 +29,13 @@ final class LocalToolProcess: LocalProcessDelegate {
         var environment = ProcessInfo.processInfo.environment
         for key in ["SSH_ASKPASS", "SSH_ASKPASS_REQUIRE", "OSHELL_AUTH_SOCKET", "OSHELL_AUTH_TOKEN"] { environment.removeValue(forKey: key) }
         environment["TERM"] = "xterm-256color"; environment["COLORTERM"] = "truecolor"; environment["LC_CTYPE"] = "UTF-8"
-        if command.name == "ssh" { environment = SSHEnvironment.remoteClient(environment) }
+        var arguments = command.arguments
+        if command.name == "ssh" {
+            let locale = try SSHClientLocale(arguments: arguments, currentDirectory: NSHomeDirectory()); sshClientLocale = locale; arguments = locale.arguments
+            environment = SSHClientLocale.environment(environment)
+        }
         environment["PATH"] = (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin") + ":/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/sbin"
-        process.startProcess(executable: executable, args: command.arguments, environment: environment.map { "\($0.key)=\($0.value)" }, currentDirectory: NSHomeDirectory())
+        process.startProcess(executable: executable, args: arguments, environment: environment.map { "\($0.key)=\($0.value)" }, currentDirectory: NSHomeDirectory())
         if !exited && process.shellPid == 0 { throw ModelError.invalid("无法启动本机工具 \(command.name)。") }
     }
     func send(_ bytes: ArraySlice<UInt8>) { guard !stopped, !exited else { return }; process.send(data: bytes) }

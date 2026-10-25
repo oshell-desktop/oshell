@@ -47,6 +47,8 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     private(set) var connected = false
     private var busy = false
     private(set) var closed = false
+    // Runtime-only origin: never persisted or matched merely by hostname/profile.
+    private(set) var sourcePaneID: UUID?
     private(set) var profile: SessionProfile?
     let id = UUID()
     var onStateChanged: (() -> Void)?
@@ -119,16 +121,17 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     @objc func toggleHistory() { showHistory(!historyVisible) }
     private func showHistory(_ visible: Bool) { historyVisible = visible; historyHost.isHidden = !visible; historyHeight.constant = visible ? 180 : 0; historyView.updateActions() }
     private var historyTransport: String { profile?.kind == .ftp ? "FTP" : (transferMode.indexOfSelectedItem == 1 ? "SCP" : "SFTP") }
-    func connect(_ profile: SessionProfile, directory: String? = nil, uploading: [URL] = [], password: String? = nil, connectionGroup: SSHConnectionGroup? = nil) {
+    func connect(_ profile: SessionProfile, directory: String? = nil, uploading: [URL] = [], password: String? = nil, connectionGroup: SSHConnectionGroup? = nil, sourcePaneID: UUID? = nil) {
         guard let workspace, !busy, !closed, profile.kind != .local else { return }
         var profile = profile
         do {
-            if connectionGroup == nil { profile = try workspace.configuration.resolvingProxy(profile) }
+            if connectionGroup == nil { profile = try workspace.resolvedConnectionProfile(profile) }
         } catch { reportError(error); return }
         let lease: SSHConnectionLease?
         do { lease = try connectionGroup.map { try SSHConnectionLease(group: $0, profile: profile) } }
         catch { reportError(error); return }
         if let old = self.profile, old.id != profile.id || old.host != profile.host || old.port != profile.port || old.username != profile.username || old.kind != profile.kind { transferHistory.reset(); resumeJobs.removeAll(); pendingResume = nil }
+        self.sourcePaneID = sourcePaneID
         self.profile = profile; pendingUploads = uploading; launchPassword = connectionGroup == nil ? password : nil
         identityID = UUID(); let identity = identityID
         displayIP = FileSessionAddress.literal(profile.host)
@@ -184,7 +187,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         status.stringValue = error.localizedDescription; onStateChanged?()
         if window != nil && !closed { Dialogs.message((profile?.name ?? "文件会话") + "：" + error.localizedDescription) }
     }
-    @objc private func reconnect() { guard let profile else { chooseConnection(); return }; connect(profile, directory: directory, password: launchPassword, connectionGroup: connectionGroup) }
+    @objc private func reconnect() { guard let profile else { chooseConnection(); return }; connect(profile, directory: directory, password: launchPassword, connectionGroup: connectionGroup, sourcePaneID: sourcePaneID) }
     var transientPassword: String? { launchPassword }
     private func connectBackend(_ destination: String) {
         connected = false; guard backend != nil else { return }
@@ -340,7 +343,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         let token = UUID(), history = transferHistory
         let records = urls.map { history.enqueue(batch: token, upload: true, transport: historyTransport, local: $0.path, remote: RemotePath.join(target, $0.lastPathComponent)) }
         showHistory(true)
-        do { if useSCP, let profile = sshProfile, let workspace { scp = try SCPTransfer(profile: profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit) } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
+        do { if useSCP, let profile = sshProfile, let workspace { scp = try SCPTransfer(profile: connectionGroup == nil ? try workspace.resolvedConnectionProfile(profile) : profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit) } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
         let scp = self.scp
         perform("正在上传…", id: token, historyBatch: token) { [weak self] backend in
             var names = Set(try backend.list(target).map(\.name))
@@ -375,7 +378,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         let token = UUID(), history = transferHistory
         let records = files.map { history.enqueue(batch: token, upload: false, transport: historyTransport, local: destination.appendingPathComponent($0.name).path, remote: RemotePath.join(parent, $0.name), directory: $0.directory) }
         showHistory(true)
-        do { if useSCP, let profile = sshProfile, let workspace { scp = try SCPTransfer(profile: profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit) } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
+        do { if useSCP, let profile = sshProfile, let workspace { scp = try SCPTransfer(profile: connectionGroup == nil ? try workspace.resolvedConnectionProfile(profile) : profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit) } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
         let scp = self.scp
         perform("正在下载…", id: token, historyBatch: token) { [weak self] backend in
             var names = Set(try FileManager.default.contentsOfDirectory(atPath: destination.path))
@@ -486,7 +489,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         showHistory(true)
         do {
             try RemotePath.validate(remote.stringValue)
-            let task = try SCPTransfer(profile: profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit); scp = task
+            let task = try SCPTransfer(profile: connectionGroup == nil ? try workspace.resolvedConnectionProfile(profile) : profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit); scp = task
             let remotePath = remote.stringValue; operationID = token; busy = true; cancelButton.isEnabled = true; progress.isIndeterminate = true; progress.startAnimation(nil); status.stringValue = "SCP 传输中…"; onStateChanged?()
             worker.async { [weak self] in
                 let result = Result {

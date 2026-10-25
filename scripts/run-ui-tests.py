@@ -5,7 +5,18 @@
 import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
-CASES = {'ai-assistant':'OSHELL_AI_OUTPUT',
+CASES = {
+ 'ai-compaction':'OSHELL_AI_COMPACTION_OUTPUT',
+ 'ai-record-selection':'OSHELL_AI_RECORD_SELECTION_OUTPUT',
+ 'finder-service':'OSHELL_FINDER_SERVICE_OUTPUT',
+ 'ai-history-scroll':'OSHELL_AI_HISTORY_SCROLL_OUTPUT',
+ 'activation-latency':'OSHELL_ACTIVATION_LATENCY_OUTPUT','ai-context':'OSHELL_AI_CONTEXT_OUTPUT',
+ 'terminal-focus':'OSHELL_FOCUS_OUTPUT',
+ 'tiled-input':'OSHELL_TILED_INPUT_OUTPUT',
+ 'terminal-interrupt':'OSHELL_INTERRUPT_OUTPUT',
+ 'ai-history-close':'OSHELL_AI_HISTORY_CLOSE_OUTPUT',
+ 'ai-assistant':'OSHELL_AI_OUTPUT',
+ 'ai-model-discovery':'OSHELL_AI_DISCOVERY_OUTPUT',
  'tab-session-info':'OSHELL_TAB_SESSION_INFO_OUTPUT',
  'marked-text':'OSHELL_MARKED_TEXT_OUTPUT',
  'image-paste':'OSHELL_IMAGE_PASTE_OUTPUT',
@@ -58,6 +69,7 @@ CASES = {'ai-assistant':'OSHELL_AI_OUTPUT',
  'password-selection': 'OSHELL_PASSWORD_SELECTION_OUTPUT',
  'paste-scroll': 'OSHELL_PASTE_SCROLL_OUTPUT',
  'popup-keyboard': 'OSHELL_POPUP_OUTPUT',
+ 'global-proxy': 'OSHELL_GLOBAL_PROXY_OUTPUT',
  'proxy-catalog': 'OSHELL_PROXY_CATALOG_OUTPUT',
  'quicksend': 'OSHELL_QUICKSEND_OUTPUT',
  'quicksend-focus': 'OSHELL_QUICKSEND_FOCUS_OUTPUT',
@@ -118,6 +130,8 @@ def run_case(source, case, timeout):
         args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data),
                 '--env', CASES[case]+'='+str(destination), '--stdout', str(log), '--stderr', str(log),
                 str(app), '--args', '--'+case+'-test']
+        if case == 'activation-latency' and os.environ.get('OSHELL_ACTIVATION_METAL') == '1':
+            args[1:1] = ['--env', 'OSHELL_ACTIVATION_METAL=1']
         try:
             subprocess.run(args, timeout=timeout, check=True, capture_output=True)
             if case == 'session-list': report.write_bytes((destination/'session-list-result.json').read_bytes())

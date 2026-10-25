@@ -34,7 +34,7 @@ enum TerminalClockTest {
         }
         func finish() {
             workspace.shutdown()
-            checks["lastPaneStopsTimer"] = !TerminalClockTicker.shared.isRunning && TerminalClockTicker.shared.subscriberCount == 0
+            checks["lastWindowStopsTimer"] = !TerminalClockTicker.shared.isRunning && TerminalClockTicker.shared.subscriberCount == 0
             if let path = ProcessInfo.processInfo.environment["OSHELL_CLOCK_OUTPUT"] {
                 let result: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
                 try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
@@ -44,7 +44,7 @@ enum TerminalClockTest {
         later {
             workspace.configuration.preferences.metal = false
             workspace.newBlankTab(); let tab = workspace.selectedTab!, pane = tab.activePane
-            checks["disabledByDefaultNoTimer"] = pane.clockView.isHidden && !TerminalClockTicker.shared.isRunning
+            checks["disabledByDefaultNoTimer"] = workspace.clockView.isHidden && !TerminalClockTicker.shared.isRunning
             later {
                 guard let root = NSApp.modalWindow?.contentView,
                       let controls = clockControls(root) else { return }
@@ -55,14 +55,14 @@ enum TerminalClockTest {
                 views(root).compactMap { $0 as? NSButton }.first { $0.title == "应用" }?.performClick(nil)
             }
             workspace.showPreferences()
-            checks["settingsApplyImmediately"] = pane.clockView.enabled && pane.clockView.position == .bottomRight && TerminalClockTicker.shared.isRunning
+            checks["settingsApplyImmediately"] = workspace.clockView.enabled && workspace.clockView.position == .bottomRight && TerminalClockTicker.shared.isRunning
             checks["clockPreferencesPersist"] = (try? workspace.store.load().preferences.terminalClockEnabled) == true && (try? workspace.store.load().preferences.terminalClockPosition) == .bottomRight
-            let before = pane.clockView.text, originalBuffer = pane.terminal.getTerminal().getBufferAsData()
+            let before = workspace.clockView.text, originalBuffer = pane.terminal.getTerminal().getBufferAsData()
             later(1.4) {
-                checks["updatesEverySecond"] = before != pane.clockView.text
+                checks["updatesEverySecond"] = before != workspace.clockView.text
                 let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.calendar = Calendar(identifier: .gregorian)
                 formatter.timeZone = .current; formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-                checks["usesMacLocalTime"] = [Date(), Date().addingTimeInterval(-1)].contains { formatter.string(from: $0) == pane.clockView.text }
+                checks["usesMacLocalTime"] = [Date(), Date().addingTimeInterval(-1)].contains { formatter.string(from: $0) == workspace.clockView.text }
                 checks["noTimeWrittenToTerminalBuffer"] = pane.terminal.getTerminal().getBufferAsData() == originalBuffer
                 var renderers = [false]
                 #if !OSHELL_LEGACY
@@ -71,10 +71,10 @@ enum TerminalClockTest {
                 for gpu in renderers {
                     var prefs = workspace.configuration.preferences; prefs.metal = gpu
                     for position in TerminalClockPosition.allCases {
-                        prefs.terminalClockPosition = position; pane.apply(prefs); window.contentView?.layoutSubtreeIfNeeded()
-                        let clock = pane.clockView, rect = pane.terminal.convert(clock.bounds, from: clock), area = pane.terminal.bounds
+                        prefs.terminalClockPosition = position; pane.apply(prefs); workspace.clockView.apply(prefs); window.contentView?.layoutSubtreeIfNeeded()
+                        let clock = workspace.clockView, rect = workspace.terminalHost.convert(clock.bounds, from: clock), area = workspace.terminalHost.bounds
                         let x = 12 + max(0, area.width - 24 - rect.width) * CGFloat(position.column) / 2
-                        let row = pane.terminal.isFlipped ? position.row : 2 - position.row
+                        let row = workspace.terminalHost.isFlipped ? position.row : 2 - position.row
                         let y = 12 + max(0, area.height - 24 - rect.height) * CGFloat(row) / 2
                         checks["position-\(gpu)-\(position.rawValue)"] = abs(rect.minX - x) < 1 && abs(rect.minY - y) < 1 && area.contains(rect)
                         checks["smallLayerAndHalfOpacity-\(gpu)-\(position.rawValue)"] = clock.bounds.width < 200 && clock.bounds.height < 30 && clock.alphaValue == 0.5
@@ -94,49 +94,57 @@ enum TerminalClockTest {
                     views(root).compactMap { $0 as? NSButton }.first { $0.title == "应用" }?.performClick(nil)
                 }
                 workspace.showPreferences()
-                checks["clockStyleAppliesImmediately"] = pane.clockView.clockFont.fontName == "Helvetica" && pane.clockView.clockFont.pointSize == 24 && pane.clockView.alphaValue == 0.25 && pane.clockView.foreground.rgbHex == "#00FF00"
+                checks["clockStyleAppliesImmediately"] = workspace.clockView.clockFont.fontName == "Helvetica" && workspace.clockView.clockFont.pointSize == 24 && workspace.clockView.alphaValue == 0.25 && workspace.clockView.foreground.rgbHex == "#00FF00"
                 let stored = try? workspace.store.load().preferences
                 checks["clockStylePersists"] = stored?.terminalClockFontName == "Helvetica" && stored?.terminalClockFontSize == 24 && stored?.terminalClockColor == "#00FF00" && stored?.terminalClockOpacity == 0.25
                 for gpu in renderers {
                     var prefs = workspace.configuration.preferences; prefs.metal = gpu
                     for size in [8.0, 96.0] {
-                        prefs.terminalClockFontSize = size; pane.apply(prefs); window.contentView?.layoutSubtreeIfNeeded()
-                        let rect = pane.terminal.convert(pane.clockView.bounds, from: pane.clockView)
-                        checks["customSizeFits-\(gpu)-\(size)"] = pane.terminal.bounds.contains(rect) && pane.clockView.clockFont.pointSize == CGFloat(size)
-                        checks["clockAboveTerminal-\(gpu)-\(size)"] = (pane.clockView.layer?.zPosition ?? 0) > (pane.terminal.layer?.zPosition ?? 0) && pane.clockView.hitTest(.zero) == nil
+                        prefs.terminalClockFontSize = size; pane.apply(prefs); workspace.clockView.apply(prefs); window.contentView?.layoutSubtreeIfNeeded()
+                        let rect = workspace.terminalHost.convert(workspace.clockView.bounds, from: workspace.clockView)
+                        checks["customSizeFits-\(gpu)-\(size)"] = workspace.terminalHost.bounds.contains(rect) && workspace.clockView.clockFont.pointSize == CGFloat(size)
+                        checks["clockAboveTerminal-\(gpu)-\(size)"] = (workspace.clockView.layer?.zPosition ?? 0) > (pane.terminal.layer?.zPosition ?? 0) && workspace.clockView.hitTest(.zero) == nil
                     }
                 }
                 var preview = workspace.configuration.preferences; preview.metal = false; preview.terminalClockPosition = .topRight
                 preview.terminalClockOpacity = 0.5; preview.terminalClockFontSize = 32
-                pane.apply(preview)
+                pane.apply(preview); workspace.clockView.apply(preview)
                 pane.terminal.feed(text: "\u{1b}[2J\u{1b}[H" + String(repeating: String(repeating: "INFO  ", count: 80) + "\r\n", count: 30))
-                snapshot(pane.view, "terminal-clock-overlay-review")
+                snapshot(workspace.terminalHost.superview!, "terminal-clock-overlay-review")
                 var fallback = preview; fallback.terminalClockFontName = "OShell-Missing-Clock-Font"; fallback.terminalClockColor = ""; fallback.terminalClockOpacity = 0
-                pane.apply(fallback)
-                checks["missingFontFallsBack"] = pane.clockView.clockFont.pointSize == 32 && pane.clockView.clockFont.fontName != fallback.terminalClockFontName
-                checks["automaticColorFollowsPalette"] = pane.clockView.foreground.rgbHex == fallback.colorScheme.foreground.uppercased()
-                checks["fullyTransparentClockStopsTicker"] = !pane.clockView.needsClockUpdates && !TerminalClockTicker.shared.isRunning
-                pane.apply(workspace.configuration.preferences)
-                workspace.splitVertical(); let other = tab.activePane
-                checks["splitClocksShareOneTicker"] = TerminalClockTicker.shared.subscriberCount == 2 && other.clockView.enabled
+                pane.apply(fallback); workspace.clockView.apply(fallback)
+                checks["missingFontFallsBack"] = workspace.clockView.clockFont.pointSize == 32 && workspace.clockView.clockFont.fontName != fallback.terminalClockFontName
+                checks["automaticColorFollowsPalette"] = workspace.clockView.foreground.rgbHex == fallback.colorScheme.foreground.uppercased()
+                checks["fullyTransparentClockStopsTicker"] = !workspace.clockView.needsClockUpdates && !TerminalClockTicker.shared.isRunning
+                pane.apply(workspace.configuration.preferences); workspace.clockView.apply(workspace.configuration.preferences)
+                workspace.splitVertical()
+                checks["splitKeepsSingleWindowClock"] = TerminalClockTicker.shared.subscriberCount == 1 && workspace.clockView.enabled && views(window.contentView!).compactMap { $0 as? TerminalClockView }.count == 1
                 workspace.togglePaneZoom()
-                checks["hiddenSplitUnsubscribes"] = TerminalClockTicker.shared.subscriberCount == 1
+                checks["zoomKeepsWindowClock"] = TerminalClockTicker.shared.subscriberCount == 1
                 workspace.togglePaneZoom()
-                checks["restoredSplitResubscribes"] = TerminalClockTicker.shared.subscriberCount == 2
+                checks["restoreSplitKeepsSingleWindowClock"] = TerminalClockTicker.shared.subscriberCount == 1
                 workspace.newBlankTab(); let next = workspace.selectedTab!
-                checks["hiddenTabStopsRefreshing"] = TerminalClockTicker.shared.subscriberCount == 1
+                checks["newTabKeepsOneWindowClock"] = TerminalClockTicker.shared.subscriberCount == 1
                 workspace.select(tab); next.activePane.sendManaged(Array("exit\r".utf8))
-                checks["switchBackKeepsClocks"] = TerminalClockTicker.shared.subscriberCount == 2
+                checks["switchBackKeepsSingleClock"] = TerminalClockTicker.shared.subscriberCount == 1
+                let second = WorkspaceController(store: workspace.store, configuration: workspace.configuration)
+                second.show(); second.newBlankTab()
+                checks["eachWindowOwnsOneClock"] = second.clockView !== workspace.clockView && TerminalClockTicker.shared.subscriberCount == 2 && views(second.window!.contentView!).compactMap { $0 as? TerminalClockView }.count == 1
+                second.closeTab()
+                checks["windowWithoutTabsKeepsClock"] = second.tabs.isEmpty && second.clockView.enabled && TerminalClockTicker.shared.subscriberCount == 2
+                second.shutdown(); second.window?.orderOut(nil)
+                checks["closingSecondWindowKeepsFirstClock"] = TerminalClockTicker.shared.subscriberCount == 1 && workspace.clockView.enabled
+                window.makeKeyAndOrderFront(nil)
                 later {
                     guard let root = NSApp.modalWindow?.contentView, let controls = clockControls(root) else { return }
                     controls.enabled.performClick(nil)
                     _ = PopupKeyboard.dismiss(window: NSApp.modalWindow!)
                 }
                 workspace.showPreferences()
-                checks["cancelDoesNotDisableClocks"] = pane.clockView.enabled && other.clockView.enabled
+                checks["cancelDoesNotDisableClocks"] = workspace.clockView.enabled
                 var value = workspace.configuration; value.preferences.terminalClockEnabled = false
                 checks["disableSaves"] = workspace.saveConfiguration(value)
-                checks["disableStopsSharedTicker"] = !TerminalClockTicker.shared.isRunning && pane.clockView.isHidden && other.clockView.isHidden
+                checks["disableStopsSharedTicker"] = !TerminalClockTicker.shared.isRunning && workspace.clockView.isHidden
                 value.preferences.terminalClockEnabled = true; _ = workspace.saveConfiguration(value)
                 finish()
             }

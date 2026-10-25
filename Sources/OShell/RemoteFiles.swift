@@ -45,13 +45,23 @@ final class FileProcess {
     private let lock = NSLock()
     private var errorData = Data()
     private var cancelled = false
+    private var sshClientLocale: SSHClientLocale?
+    private let usesSSHLocale: Bool
     init(executable: String, arguments: [String], environment: [String: String]? = nil) {
+        usesSSHLocale = ["/usr/bin/ssh", "/usr/bin/scp"].contains(executable)
         let legacyClient = OpenSSHCapabilities.current.needsLegacyAskpass && ["/usr/bin/ssh", "/usr/bin/scp"].contains(executable)
         task.executableURL = legacyClient ? ZmodemTransfer.helperDirectory.appendingPathComponent("OShellSSH") : URL(fileURLWithPath: executable)
         task.arguments = (legacyClient && executable == "/usr/bin/scp" ? ["--scp"] : []) + arguments
         task.environment = environment; task.standardInput = input; task.standardOutput = output; task.standardError = errors
     }
     func start() throws {
+        if usesSSHLocale {
+            var args = task.arguments ?? []; let scpWrapper = args.first == "--scp"
+            if scpWrapper { args.removeFirst() }
+            let locale = try SSHClientLocale(arguments: args); sshClientLocale = locale
+            task.arguments = (scpWrapper ? ["--scp"] : []) + locale.arguments
+            task.environment = SSHClientLocale.environment(task.environment ?? ProcessInfo.processInfo.environment)
+        }
         errors.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }

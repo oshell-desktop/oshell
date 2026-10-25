@@ -111,7 +111,7 @@ public struct SessionProfile: Codable, Equatable, Identifiable {
                     "-o", "StrictHostKeyChecking=ask", "-o", "ConnectTimeout=15"]
         if !username.isEmpty { args += ["-l", username] }
         if !identityFile.isEmpty { args += ["-i", NSString(string: identityFile).expandingTildeInPath] }
-        if !jumpHost.isEmpty { args += ["-J", jumpHost] }
+        if !jumpHost.isEmpty && runtimeProxyRoute.isEmpty { args += ["-J", jumpHost] }
         if proxyID != nil || !runtimeProxyRoute.isEmpty {
             if let proxyHelper {
                 guard !runtimeProxyRoute.isEmpty, runtimeProxyRoute.count <= ProxyCatalog.maximumHops else { throw ModelError.invalid("共享代理尚未解析或已被删除，未建立连接。") }

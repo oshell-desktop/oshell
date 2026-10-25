@@ -156,6 +156,19 @@ final class TabArrangementView: NSScrollView {
     override func scrollWheel(with event: NSEvent) {
         if !scrollArrangement(with: event) { super.scrollWheel(with: event) }
     }
+    func reveal(_ view: NSView) {
+        layoutSubtreeIfNeeded()
+        guard let documentView, view.isDescendant(of: documentView) else { return }
+        let target = view.convert(view.bounds, to: documentView)
+        let clip = contentView.bounds
+        func origin(_ start: CGFloat, _ end: CGFloat, _ current: CGFloat, _ length: CGFloat, _ extent: CGFloat) -> CGFloat {
+            let next = start < current ? start : (end > current + length ? end - length : current)
+            return min(max(0, extent - length), max(0, next))
+        }
+        contentView.scroll(to: NSPoint(x: origin(target.minX, target.maxX, clip.minX, clip.width, documentView.bounds.width),
+                                      y: origin(target.minY, target.maxY, clip.minY, clip.height, documentView.bounds.height)))
+        reflectScrolledClipView(contentView)
+    }
     func equalize() {
         layoutSubtreeIfNeeded()
         (documentView as? Split)?.equalize()

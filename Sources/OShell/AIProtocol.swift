@@ -42,7 +42,7 @@ enum AIAPIType: String, Codable, CaseIterable {
         }
         return headers
     }
-    func payload(instruction: String, model: String, items: [AIDisclosure], maxOutputTokens: Int = 4096, compatibleChatParameters: Bool = false) -> [String: Any] {
+    func payload(instruction: String, model: String, items: [AIDisclosure], maxOutputTokens: Int = AISettings.defaultOutputTokens, compatibleChatParameters: Bool = false) -> [String: Any] {
         func text(_ item: AIDisclosure) -> String { item.role == "assistant" ? item.text : "\(item.name)：\n\(item.text)" }
         switch self {
         case .chatCompletions:
@@ -116,12 +116,14 @@ enum AIAPIType: String, Codable, CaseIterable {
             if ["tool_calls", "function_call"].contains(where: { message[$0] != nil && !(message[$0] is NSNull) }) { throw tool }
             if message["refusal"] is String || choice["finish_reason"] as? String == "content_filter" { throw refused }
             if choice["finish_reason"] as? String == "length" { throw incomplete }
+            if let channel = message["channel"] as? String, channel != "final" { throw invalid }
             if let text = message["content"] as? String { texts = [text] }
         case .responses:
             guard body["status"] as? String == "completed" else { throw incomplete }
             guard let output = body["output"] as? [[String: Any]] else { throw invalid }
             for item in output {
                 if item["type"] as? String == "reasoning" { continue }
+                if let channel = item["channel"] as? String, channel != "final" { continue }
                 guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { throw tool }
                 if let status = item["status"] as? String, status != "completed" { throw incomplete }
                 guard let content = item["content"] as? [[String: Any]] else { throw invalid }

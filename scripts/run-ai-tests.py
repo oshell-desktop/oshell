@@ -12,34 +12,38 @@ captures = []
 native_checks = {}
 native_errors = []
 provider_checks = {}
+catalog_checks = []
 facts = {'requests': 0, 'slowRequests': 0, 'sinkRequests': 0, 'redacted': True, 'authCorrect': True, 'images': False, 'boundedOutput': True}
 
 def inspect_native(kind, action, payload, headers, path):
     # Assertions are independent of the Swift serializer, on bytes received over HTTP.
-    assert '?' not in path and '{' not in path
+    assert ('?' not in path or (kind == 'gemini' and path.endswith('?alt=sse'))) and '{' not in path
     assert not any(k in payload for k in ['previous_response_id', 'conversation', 'tools', 'cachedContent', 'continuationToken'])
     auth = 'x-api-key' if kind == 'anthropic' else 'x-goog-api-key' if kind == 'gemini' else 'Authorization'
     assert headers.get(auth) == ('Bearer ' if auth == 'Authorization' else '') + 'synthetic-ai-key'
     assert all(headers.get(h) is None for h in ['x-api-key', 'x-goog-api-key', 'Authorization'] if h != auth)
     if kind == 'anthropic': assert headers.get('anthropic-version') == '2023-06-01'
     else: assert headers.get('anthropic-version') is None
-    if kind in ['chatCompletions', 'responses']: assert payload['store'] is False and payload['stream'] is False
+    if kind in ['chatCompletions', 'responses']: assert payload['store'] is False and payload['stream'] is True
     if kind == 'chatCompletions':
-        assert payload['model'] == 'native-model' and payload['max_completion_tokens'] == 4096
+        assert payload['reasoning_effort'] == 'high'
+        assert payload['model'] == 'native-model' and payload['max_completion_tokens'] == 131072
         messages = payload['messages']; assert messages[0]['role'] == 'system'
         messages = messages[1:]
     elif kind == 'responses':
-        assert payload['model'] == 'native-model' and payload['max_output_tokens'] == 4096
+        assert payload['reasoning'] == {'effort': 'high'}
+        assert payload['model'] == 'native-model' and payload['max_output_tokens'] == 131072
         assert isinstance(payload['instructions'], str) and payload['instructions']
         assert 'messages' not in payload
         messages = payload['input']
     elif kind == 'anthropic':
-        assert payload['model'] == 'native-model' and payload['max_tokens'] == 4096 and payload['stream'] is False
+        assert payload['thinking'] == {'type': 'adaptive'} and payload['output_config'] == {'effort': 'high'}
+        assert payload['model'] == 'native-model' and payload['max_tokens'] == 131072 and payload['stream'] is True
         assert isinstance(payload['system'], str) and payload['system']
         messages = payload['messages']
     else:
-        assert path.endswith('/models/native-model:generateContent') and 'model' not in payload
-        assert payload['generationConfig'] == {'maxOutputTokens': 4096, 'candidateCount': 1}
+        assert path.endswith('/models/native-model:streamGenerateContent?alt=sse') and 'model' not in payload
+        assert payload['generationConfig'] == {'maxOutputTokens': 131072, 'candidateCount': 1, 'thinkingConfig': {'thinkingLevel': 'HIGH'}}
         assert payload['systemInstruction']['parts'][0]['text'] and payload['store'] is False
         messages = payload['contents']
     all_text, images, roles = [], [], []
@@ -121,9 +125,9 @@ def provider_response(preset, action, payload, headers):
     anthropic = preset in ['kimiCodeCN', 'kimiCodeGlobal', 'minimaxCN', 'minimaxGlobal']
     models = {'kimiCodeCN': 'kimi-for-coding', 'kimiCodeGlobal': 'kimi-for-coding', 'deepseek': 'deepseek-flash', 'minimaxCN': 'MiniMax-M3.1-Flash', 'minimaxGlobal': 'MiniMax-M3.1-Flash', 'glm': 'glm-5.3', 'glmCoding': 'glm-5.3'}
     assert payload['model'] == models[preset]
-    assert payload['max_tokens'] == (8192 if action == 'next' else 16384)
+    assert payload['max_tokens'] == (8192 if action == 'next' else 131072)
     assert 'max_completion_tokens' not in payload and 'store' not in payload
-    assert payload['stream'] is False and 'tools' not in payload
+    assert payload['stream'] is True and 'tools' not in payload
     assert headers.get('User-Agent', '').startswith('OShell/')
     expected_key = 'synthetic-provider-key-' + preset
     if anthropic:
@@ -149,6 +153,25 @@ def provider_response(preset, action, payload, headers):
     return 200, json.dumps(body).encode()
 
 
+def streaming_events(kind, body):
+    if kind == 'chatCompletions':
+        text = body['choices'][0]['message']['content']
+    elif kind == 'responses':
+        text = '\n'.join(b['text'] for item in body['output'] if item['type'] == 'message' for b in item['content'])
+    elif kind == 'anthropic':
+        text = '\n'.join(b['text'] for b in body['content'] if b['type'] == 'text')
+    else:
+        text = '\n'.join(b['text'] for b in body['candidates'][0]['content']['parts'] if not b.get('thought'))
+    chunks = [text[:len(text)//2], text[len(text)//2:]]
+    if kind == 'chatCompletions':
+        return [{'choices':[{'index':0,'delta':{'content':c}}]} for c in chunks] + [{'choices':[{'index':0,'delta':{},'finish_reason':'stop'}]}, '[DONE]']
+    if kind == 'responses':
+        return [{'type':'response.output_text.delta','delta':c} for c in chunks] + [{'type':'response.completed','response':body}]
+    if kind == 'anthropic':
+        return [{'type':'message_start','message':{'role':'assistant'}}, {'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}}] + [{'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':c}} for c in chunks] + [{'type':'message_delta','delta':{'stop_reason':'end_turn'}}, {'type':'message_stop'}]
+    return [{'candidates':[{'index':0,'content':{'parts':[{'text':c}]}}]} for c in chunks] + [{'candidates':[{'index':0,'finishReason':'STOP'}]}]
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
     def do_GET(self):
@@ -166,12 +189,13 @@ class Handler(BaseHTTPRequestHandler):
         facts['redacted'] &= b'fixture-password' not in data and b'synthetic-ai-key' not in data and b'synthetic-provider-key-' not in data and b'OLD_PROVIDER_KEY_NEVER' not in data
         is_native = self.path.startswith('/native/')
         is_provider = self.path.startswith('/provider/')
+        is_catalog = self.path.startswith('/catalog/')
         facts['authCorrect'] &= self.headers.get('User-Agent', '').startswith('OShell/')
-        if not is_native and not is_provider: facts['authCorrect'] &= self.headers.get('Authorization') == 'Bearer synthetic-ai-key'
+        if not is_native and not is_provider and not is_catalog: facts['authCorrect'] &= self.headers.get('Authorization') == 'Bearer synthetic-ai-key'
         facts['images'] |= b'image_url' in data
-        if not is_native and not is_provider: facts['boundedOutput'] &= payload.get('max_completion_tokens') == 4096
+        if not is_native and not is_provider and not is_catalog: facts['boundedOutput'] &= payload.get('max_completion_tokens') == 131072
         status = 200
-        text = '示例响应（本机模拟服务，未调用外部模型）\n\n初步判断：Nginx 配置校验失败。\n\n证据：附加输出包含 syntax error。\n\n待确认：配置文件路径及 Nginx 版本。\n\n下一步：检查配置。命令尚未执行。\n```bash\nnginx -t\n```'
+        text = '## 初步判断\n**Nginx 配置校验失败。**\n\n> 示例响应：本机模拟服务，未调用外部模型。\n\n- 证据：附加输出包含 `syntax error`。\n- 待确认：配置文件路径及 Nginx 版本。\n\n| 项目 | 状态 |\n| --- | --- |\n| 配置 | 待检查 |\n| 服务 | 尚未操作 |\n\n下一步：检查配置。命令尚未执行。\n```bash\nnginx -t\n```\n\n执行后检查退出码，再决定下一步。'
         if self.path == '/consent': text = 'DERIVED_FIXTURE: synthetic analysis, not executed.'
         body = json.dumps({'choices': [{'message': {'role': 'assistant', 'content': text}}]}).encode()
         if self.path == '/success': time.sleep(.25)
@@ -195,7 +219,39 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 native_errors.append('provider:' + preset + ':' + action + ':' + type(error).__name__)
                 status, body = 500, b'{}'
+        if is_catalog:
+            try:
+                channel = self.path.rsplit('/', 1)[-1]; model = payload['model']
+                assert self.headers.get('Authorization') == f'Bearer synthetic-catalog-{channel}-key'
+                assert model in (['catalog-a-one', 'catalog-a-two'] if channel == 'a' else ['catalog-b-one'])
+                assert b'synthetic-catalog' not in data and b'image_url' not in data
+                assert payload.get('max_completion_tokens', payload.get('max_output_tokens')) == {'catalog-a-one': 1024, 'catalog-a-two': 8192, 'catalog-b-one': 2048}[model]
+                assert (payload.get('reasoning_effort') if channel == 'a' else payload.get('reasoning', {}).get('effort')) == {'catalog-a-one': 'max', 'catalog-a-two': 'high', 'catalog-b-one': 'medium'}[model]
+                expected = {'catalog-a-one': 'CATALOG_A_ONE', 'catalog-a-two': 'CATALOG_A_TWO', 'catalog-b-one': 'CATALOG_B_ONE'}[model]
+                assert expected.encode() in data
+                permitted = [expected, 'CATALOG_A_ONE'] if model == 'catalog-a-two' else [expected]
+                assert all(value.encode() not in data for value in ['CATALOG_A_ONE', 'CATALOG_A_TWO', 'CATALOG_B_ONE'] if value not in permitted)
+                if model == 'catalog-a-two': assert b'CATALOG_A_ONE' in data and b'CATALOG_REPLY_catalog-a-one' in data
+                reply = 'CATALOG_REPLY_' + model
+                if channel == 'a':
+                    assert 'messages' in payload and 'input' not in payload
+                    result = {'choices': [{'message': {'role': 'assistant', 'content': reply}}]}
+                else:
+                    assert 'input' in payload and 'messages' not in payload
+                    result = {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': reply}]}]}
+                body = json.dumps(result).encode(); catalog_checks.append(model)
+            except Exception as error:
+                native_errors.append('catalog:' + type(error).__name__); status, body = 500, b'{}'
         try:
+            if status == 200 and (self.path == '/success' or (is_native and action == 'success')):
+                self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.end_headers()
+                for event in streaming_events(kind if is_native else 'chatCompletions', json.loads(body)):
+                    raw = (event if isinstance(event, str) else json.dumps(event, ensure_ascii=False))
+                    packet = ('data: ' + raw + '\r\n\r\n').encode()
+                    # Split the event across writes to exercise framing independently of SSE boundaries.
+                    self.wfile.write(packet[:7]); self.wfile.flush()
+                    self.wfile.write(packet[7:]); self.wfile.flush(); time.sleep(.15)
+                return
             self.send_response(status)
             if status == 302: self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/sink')
             self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(body))); self.end_headers()
@@ -212,7 +268,7 @@ def main():
         runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
         runner.run_case(ROOT / 'work/test-app/OShell.app', 'ai-assistant', 120)
         result = json.loads((ROOT / 'validation/ui-ai-assistant.json').read_text())
-        assert facts['requests'] == 92 and facts['sinkRequests'] == 0 and facts['slowRequests'] == 1, facts
+        assert facts['requests'] == 98 and facts['sinkRequests'] == 0 and facts['slowRequests'] == 1, facts
         assert facts['redacted'] and facts['authCorrect'] and facts['images'] and facts['boundedOutput']
         assert Counter(result['approvedDigests']) == Counter(item[2] for item in captures), 'Actual bytes differ from approved frozen bodies'
         consent = [data for path, data, _ in captures if path == '/consent']
@@ -225,6 +281,12 @@ def main():
         assert b'CONSENT_B' in followup and b'CONSENT_A' not in followup
         assert b'CONSENT_A' in selective and b'CONSENT_C' in selective and b'CONSENT_B' not in selective
         assert b'CONSENT_D' in cleared and all(marker not in cleared for marker in [b'CONSENT_A', b'CONSENT_B', b'CONSENT_C'])
+        for path in ['/history-default', '/history-selected', '/history-cleared']:
+            records = [json.loads(data) for route, data, _ in captures if route == path]
+            assert len(records) == 1
+            body = json.dumps(records[0], ensure_ascii=False)
+            assert '为什么 Nginx 启动失败？' in body if path == '/history-selected' else '为什么 Nginx 启动失败？' not in body
+            assert all(marker not in body for marker in ['image_url', 'syntax error', 'HISTORY_RAW_METADATA_NEVER_SENT', 'HISTORY_TARGET_NEVER_SENT', 'HISTORY_HOST_NEVER_SENT'])
         for _, data, _ in captures:
             assert all(marker not in data for marker in [b'RAW_METADATA_NEVER_SENT', b'USER_NOT_APPROVED', b'DIR_NOT_APPROVED', b'LOCAL_TITLE_ONLY', b'EDITED_QUESTION_NEVER_SENT', b'OTHER_SESSION_NEVER_SENT'])
         tested = [data for path, data, _ in captures if path == '/test']
@@ -236,6 +298,7 @@ def main():
         assert not native_errors, native_errors
         assert len(native_checks) == 52, native_checks
         assert len(provider_checks) == 28, provider_checks
+        assert catalog_checks == ['catalog-a-one', 'catalog-b-one', 'catalog-a-two'], catalog_checks
         facts.update({'nativeProtocolCases': len(native_checks), 'providerCases': len(provider_checks), 'exactApprovedBytes': True, 'noUnapprovedRequests': True, 'noImplicitHistoryOrIdentity': True, 'revokedSourcesAndDerivedResponsesExcluded': True, 'connectionTestFixedScope': True})
         (ROOT / 'validation/ai-transport.json').write_text(json.dumps({'passed': True, 'checks': facts, 'nativeProtocolChecks': native_checks, 'providerChecks': provider_checks, 'requests': [{'path': path, 'sha256': digest, 'bytes': len(data)} for path, data, digest in captures]}, indent=2))
         print('AI transport checks passed:', facts)

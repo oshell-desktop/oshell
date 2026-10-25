@@ -20,6 +20,7 @@ enum FileFeatureTest {
             let known = controller.store.url.deletingLastPathComponent().appendingPathComponent("known_hosts")
             try Data(contentsOf: root.appendingPathComponent("known_hosts")).write(to: known)
             PasswordVault.shared.unlockForTesting(master)
+            profile = try controller.resolvedConnectionProfile(profile)
             let sftp = try SFTPBackend(profile: profile, knownHosts: known), ftpBackend = FTPBackend(profile: ftp, password: password), scp = try SCPTransfer(profile: profile, knownHosts: known)
             DispatchQueue.global(qos: .userInitiated).async {
                 var checks = [String: Bool](), failures = [String]()

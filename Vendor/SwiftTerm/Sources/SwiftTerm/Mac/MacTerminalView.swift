@@ -806,6 +806,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     open override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        setupFocusNotification()
         startWindowMouseMovedFallback()
         updateTextBlinkLifecycle()
 #if canImport(MetalKit) && !OSHELL_LEGACY
@@ -857,14 +858,20 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     func setupFocusNotification() {
-        becomeKeyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: nil) { [unowned self] notification in
+        if let becomeKeyObserver { NotificationCenter.default.removeObserver(becomeKeyObserver) }
+        if let resignKeyObserver { NotificationCenter.default.removeObserver(resignKeyObserver) }
+        becomeKeyObserver = nil; resignKeyObserver = nil
+        // A terminal must not redraw for every other application's/window's
+        // focus transition. Detached tabs own no window subscription at all.
+        guard let window else { return }
+        let refresh: (Notification) -> Void = { [weak self] notification in
+            guard let self, let changed = notification.object as? NSWindow,
+                  changed === self.window, !self.isHiddenOrHasHiddenAncestor else { return }
             self.caretView.updateCursorStyle()
             self.queueMetalDisplay()
         }
-        resignKeyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: nil) { [unowned self] notification in
-            self.caretView.updateCursorStyle()
-            self.queueMetalDisplay()
-        }
+        becomeKeyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: nil, using: refresh)
+        resignKeyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: nil, using: refresh)
     }
 
     private func setupProgressBar() {

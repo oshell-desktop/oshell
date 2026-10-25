@@ -20,7 +20,8 @@ enum TerminalFocusTest {
             pane.onUserInput = { pane, bytes in received[pane.id, default: []].append(String(decoding: bytes, as: UTF8.self)); return false }
         }
         func event(_ pane: TerminalPane, type: NSEvent.EventType, point: NSPoint? = nil, clicks: Int = 1) -> NSEvent {
-            let position = pane.terminal.convert(point ?? NSPoint(x: pane.terminal.bounds.midX, y: pane.terminal.bounds.midY), to: nil)
+            let visible = pane.terminal.visibleRect
+            let position = pane.terminal.convert(point ?? NSPoint(x: visible.midX, y: visible.midY), to: nil)
             return NSEvent.mouseEvent(with: type, location: position, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: clicks, pressure: 1)!
         }
         func hit(_ event: NSEvent) -> NSView? {
@@ -28,6 +29,7 @@ enum TerminalFocusTest {
             return root.hitTest(position)
         }
         func click(_ pane: TerminalPane, count: Int = 1, point: NSPoint? = nil) {
+            pane.view.scrollToVisible(pane.view.bounds); root.layoutSubtreeIfNeeded()
             let down = event(pane, type: .leftMouseDown, point: point, clicks: count)
             let target = hit(down)
             checks["contentHit-\(panes.firstIndex(where: { $0 === pane })!)-\(pane.terminal.isUsingMetalRenderer)"] = target === pane.terminal
@@ -52,13 +54,15 @@ enum TerminalFocusTest {
                         window.makeFirstResponder(other.terminal)
                         click(pane)
                         checks["focus-"+key] = window.firstResponder === pane.terminal && workspace.selectedTab?.activePane === pane
-                        checks["highlight-"+key] = pane.view.layer?.borderWidth == 1.5 && panes.filter { $0 !== pane }.allSatisfy { $0.view.layer?.borderWidth == 0 }
+                        checks["highlight-"+key] = !pane.focusStripe.isHidden && panes.filter { $0 !== pane }.allSatisfy { $0.focusStripe.isHidden }
                         checks["currentSendTarget-"+key] = workspace.quickSendCandidates.first === pane
                         checks["layoutStable-"+key] = tabs.map { ObjectIdentifier($0.layout.view) } == layouts
                         checks["renderer-"+key] = pane.terminal.isUsingMetalRenderer == metal
-                        let marker = "FOCUS_\(metal ? 1 : 0)_\(mode.rawValue)_\(index)"
+                        let marker = "F\(metal ? 1 : 0)\(mode.rawValue)\(index)"
                         let before = received.mapValues(\.count)
-                        (window.firstResponder as? OShellTerminal)?.insertText("printf '\(marker)\\n'\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+                        (window.firstResponder as? OShellTerminal)?.insertText("printf '\(marker)\\n'", replacementRange: NSRange(location: NSNotFound, length: 0))
+                        let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+                        (window.firstResponder as? OShellTerminal)?.keyDown(with: enter)
                         checks["keyboardRouted-"+key] = (received[pane.id]?.count ?? 0) > (before[pane.id] ?? 0) && panes.filter { $0 !== pane }.allSatisfy { (received[$0.id]?.count ?? 0) == (before[$0.id] ?? 0) }
                         markers.append((pane,marker))
                     }
@@ -77,6 +81,13 @@ enum TerminalFocusTest {
             }
             let deadline = Date().addingTimeInterval(12)
             func finish() {
+                for (index, pane) in panes.enumerated() {
+                    click(pane)
+                    let before = received.mapValues(\.count)
+                    let interrupt = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .control, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "c", charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8)!
+                    window.sendEvent(interrupt)
+                    checks["controlCReachesOnlyClickedShell-\(index)"] = received[pane.id]?.last == "\u{3}" && (received[pane.id]?.count ?? 0) > (before[pane.id] ?? 0) && panes.filter { $0 !== pane }.allSatisfy { (received[$0.id]?.count ?? 0) == (before[$0.id] ?? 0) }
+                }
                 checks["ptyProcessesPreserved"] = panes.map { $0.terminal.process.shellPid } == pids && pids.allSatisfy { $0 > 0 }
                 checks["inactiveWindowAcceptsFirstClick"] = panes.allSatisfy { $0.terminal.acceptsFirstMouse(for: nil) }
                 // Selection and TUI mouse reporting must still use SwiftTerm's handlers.
@@ -108,8 +119,20 @@ enum TerminalFocusTest {
                 workspace.shutdown();NSApp.terminate(nil)
             }
             func poll() {
-                let all = markers.allSatisfy { pane,marker in String(decoding:pane.terminal.getTerminal().getBufferAsData(),as:UTF8.self).split(whereSeparator: \.isNewline).contains { $0.trimmingCharacters(in:.whitespaces)==marker } }
-                if all || Date() > deadline { checks["commandsReachedClickedShells"] = all;finish() }
+                // Narrow split panes wrap output. Match logical lines, not the
+                // physical rows returned by getBufferAsData, and exclude echoes.
+                let all = markers.allSatisfy { pane, marker in
+                    let terminal = pane.terminal.getTerminal()
+                    var lines = [String](), row = 0
+                    while let line = terminal.getScrollInvariantLine(row: row) {
+                        let text = line.translateToString(trimRight: true)
+                        if line.isWrapped, !lines.isEmpty { lines[lines.count - 1] += text }
+                        else { lines.append(text) }
+                        row += 1
+                    }
+                    return lines.contains { $0.trimmingCharacters(in: .whitespaces) == marker }
+                }
+                if all || Date() > deadline { checks["commandsReachedClickedShells"] = all; finish() }
                 else { DispatchQueue.main.asyncAfter(deadline:.now()+0.05,execute:poll) }
             };poll()
         }

@@ -164,6 +164,12 @@ enum PopupKeyboard {
     }
     /// Intercept before the workspace's Cmd+W menu action can close an SSH pane.
     @discardableResult static func closeAuxiliaryWindow(with event: NSEvent, in window: NSWindow) -> Bool {
+        if event.type == .keyDown, window.isKeyWindow, NSApp.modalWindow === window,
+           alerts[ObjectIdentifier(window)] != nil, trackingMenus.isEmpty,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "w" {
+            return dismiss(window: window)
+        }
         guard event.type == .keyDown, window.isKeyWindow,
               (window.windowController is RemoteFileWindow || window.windowController is SyncStatusWindow || window.windowController is AIAssistantWindow),
               event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,

@@ -18,7 +18,12 @@ else
     build_dir="${OSHELL_BUILD_DIR:-$project_root/work/build}"
     app_dir="$project_root/dist/OShell.app"
 fi
-mkdir -p "$project_root/validation" "$build_dir" "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$app_dir/Contents/Helpers"
+destination_app="$app_dir"
+mkdir -p "$(dirname "$destination_app")" "$build_dir" "$project_root/validation"
+staging_dir="$(mktemp -d "$(dirname "$destination_app")/.oshell-build-XXXXXX")"
+trap 'build_status=$?; if [ "$build_status" -eq 0 ]; then rm -rf "$staging_dir"; else echo "Build failed; staging preserved: $staging_dir" >&2; fi' EXIT
+app_dir="$staging_dir/OShell.app"
+mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$app_dir/Contents/Helpers"
 export CLANG_MODULE_CACHE_PATH="$build_dir/modules"
 export SWIFTPM_MODULECACHE_OVERRIDE="$build_dir/modules"
 swift build --package-path "$project_root" --scratch-path "$build_dir/swift" --cache-path "$build_dir/cache" --config-path "$build_dir/config" --security-path "$build_dir/security" --disable-sandbox -c release \
@@ -68,6 +73,7 @@ cp "$project_root/Vendor/lrzsz-0.12.20.tar.gz" "$app_dir/Contents/Resources/"
 cp "$project_root/scripts/Info.plist" "$app_dir/Contents/Info.plist"
 if [ "$OSHELL_TEST_HARNESS" = 1 ]; then
     /usr/libexec/PlistBuddy -c 'Add OShellTestHarness bool true' "$app_dir/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c 'Delete NSServices' "$app_dir/Contents/Info.plist"
 fi
 swift "$project_root/scripts/icon.swift" "$build_dir/OShell.iconset"
 iconutil -c icns "$build_dir/OShell.iconset" -o "$app_dir/Contents/Resources/OShell.icns"
@@ -86,4 +92,5 @@ codesign --force --sign - "$file_bridge"
 python3 "$project_root/scripts/embed-sparkle.py" "$app_dir" "$(uname -m)"
 python3 "$project_root/scripts/sign-app.py" "$app_dir"
 python3 "$project_root/scripts/check-public-source.py" --app "$app_dir"
-echo "Built: $app_dir"
+published_app="$(python3 "$project_root/scripts/install-local-app.py" "$app_dir" "$destination_app")"
+echo "Built: $published_app"

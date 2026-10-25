@@ -43,7 +43,7 @@ enum TabBarMenuTest {
         let firstItem = main.items.first { $0.id == first.id }!
         let firstMenu = menu(firstItem.selectButton)
         checks["menuConstructionKeepsSelection"] = workspace.selectedTab === second && workspace.tabs.count == 2
-        checks["existingFeaturesPresent"] = ["新建空白标签页", "新建标签组…", "新建窗口", "会话管理…", "复制会话", "复制 SSH 渠道", "排列", "新建分屏", "移动到新窗口", "专注全屏", "重新连接", "关闭标签页", "默认会话属性…"].allSatisfy { title in firstMenu?.items.contains { $0.title == title } == true }
+        checks["existingFeaturesPresent"] = ["新建空白标签页", "新建标签组…", "新建窗口", "会话管理…", "复制会话", "复制 SSH 渠道", "分组排列", "分屏排列", "新建分屏", "移动到新窗口", "专注全屏", "重新连接", "关闭标签页", "默认会话属性…"].allSatisfy { title in firstMenu?.items.contains { $0.title == title } == true }
         checks["unavailableActionsDisabled"] = firstMenu?.items.first { $0.title == "复制 SSH 渠道" }?.isEnabled == false && firstMenu?.items.first { $0.title == "重新连接" }?.isEnabled == false
         invoke(firstMenu?.items.first { $0.title == "新建分屏" }?.submenu?.items.first)
         checks["splitTargetsClickedTab"] = first.layout.panes.count == 2 && second.layout.panes.count == 1 && workspace.selectedTab === first

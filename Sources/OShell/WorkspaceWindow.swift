@@ -3,9 +3,30 @@
 
 import AppKit
 import OShellCore
+#if canImport(os) && !OSHELL_LEGACY
+import os
+#endif
 
 /// Keep tab navigation out of the PTY, including while xterm owns keyboard focus.
 final class WorkspaceWindow: NSWindow {
+    #if canImport(os) && !OSHELL_LEGACY
+    private static let traceInputLatency = ProcessInfo.processInfo.environment["OSHELL_INPUT_LATENCY"] == "1"
+    private static let latencyLog = OSLog(subsystem: "app.oshell", category: "InputLatency")
+    private var lastKeyActivation = ProcessInfo.processInfo.systemUptime
+    override func becomeKey() {
+        lastKeyActivation = ProcessInfo.processInfo.systemUptime
+        super.becomeKey()
+    }
+    #endif
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if let terminal = responder as? OShellTerminal {
+            // Reject stale key-view targets before AppKit resigns the current
+            // responder. Rejecting only in becomeFirstResponder is too late.
+            guard terminal.window === self, !terminal.isHiddenOrHasHiddenAncestor,
+                  terminal.owner?.isShutdown == false else { return false }
+        }
+        return super.makeFirstResponder(responder)
+    }
     private func navigate(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown, isKeyWindow, attachedSheet == nil, NSApp.modalWindow == nil,
               let workspace = windowController as? WorkspaceController else { return false }
@@ -22,7 +43,7 @@ final class WorkspaceWindow: NSWindow {
         let shortcut = KeyboardShortcut(event: event)
         guard workspace.isSecurityUnlocked, shortcut.isValid else { return false }
         let configured = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: shortcut)
-        if configured == nil, shortcut == (try? AISettings.load().shortcut) {
+        if configured == nil, shortcut == AISettings.shortcutForKeyboardRouting {
             if !event.isARepeat { workspace.toggleAIAssistant() }; return true
         }
         if firstResponder is AIPromptEditor { return false }
@@ -45,6 +66,19 @@ final class WorkspaceWindow: NSWindow {
         navigate(event) || super.performKeyEquivalent(with: event)
     }
     override func sendEvent(_ event: NSEvent) {
+        #if canImport(os) && !OSHELL_LEGACY
+        let began = Self.traceInputLatency && event.type == .keyDown ? ProcessInfo.processInfo.systemUptime : nil
+        defer {
+            if let began {
+                let dispatched = (ProcessInfo.processInfo.systemUptime - began) * 1000
+                let queued = max(0, began - event.timestamp) * 1000
+                if max(queued, dispatched) >= 50 {
+                    // Durations only: never key codes, text, hostnames or credentials.
+                    os_log("input latency queued_ms=%{public}.2f dispatch_ms=%{public}.2f since_activation_ms=%{public}.2f", log: Self.latencyLog, type: .info, queued, dispatched, (began - lastKeyActivation) * 1000)
+                }
+            }
+        }
+        #endif
         if navigate(event) { return }
         super.sendEvent(event)
     }

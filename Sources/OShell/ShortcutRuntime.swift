@@ -90,7 +90,7 @@ enum ShortcutRuntime {
         func update(_ menu: NSMenu) {
             for item in menu.items {
                 if item.action == #selector(WorkspaceController.toggleAIAssistant) {
-                    let binding = try? AISettings.load().shortcut
+                    let binding = AISettings.shortcutForKeyboardRouting
                     let allowed = binding.flatMap { shortcuts.action(for: $0) == nil ? $0 : nil }
                     item.keyEquivalent = allowed?.key?.equivalent ?? ""; item.keyEquivalentModifierMask = allowed?.nativeModifiers ?? []
                 }

@@ -9,9 +9,27 @@ final class WorkspaceToolbar: NSStackView {
     static let compactThreshold: CGFloat = 1180
     var compactButtons = [NSButton]()
     override func layout() {
-        let position: NSControl.ImagePosition = bounds.width < Self.compactThreshold ? .imageOnly : .imageLeading
+        let position: NSControl.ImagePosition = (enclosingScrollView?.contentSize.width ?? bounds.width) < Self.compactThreshold ? .imageOnly : .imageLeading
         for button in compactButtons where button.imagePosition != position { button.imagePosition = position }
         super.layout()
+    }
+}
+
+/// Overflow belongs to the toolbar, never to the terminal workspace's width.
+final class WorkspaceToolbarHost: NSScrollView {
+    init(_ toolbar: WorkspaceToolbar) {
+        super.init(frame: .zero)
+        drawsBackground = false; hasHorizontalScroller = true; hasVerticalScroller = false
+        autohidesScrollers = true; scrollerStyle = .overlay
+        toolbar.translatesAutoresizingMaskIntoConstraints = true
+        documentView = toolbar
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layout() {
+        super.layout()
+        guard let toolbar = documentView as? WorkspaceToolbar else { return }
+        toolbar.layout()
+        toolbar.frame = NSRect(x: 0, y: 0, width: max(contentSize.width, toolbar.fittingSize.width), height: contentSize.height)
     }
 }
 
@@ -87,6 +105,7 @@ extension WorkspaceController {
         topToolbar?.needsLayout = true
     }
     func refreshToolbarActions() {
+        refreshGlobalProxyButton()
         refreshUpdateButton()
         currentPropertiesButton.isEnabled = canEditCurrentSessionProfile
         currentPropertiesButton.toolTip = canEditCurrentSessionProfile ? "当前会话属性：" + (selectedTab?.activePane.profile.name ?? "") + "（保存后新建连接生效）" : "当前会话属性：请先选择 SSH 会话"

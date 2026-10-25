@@ -2626,6 +2626,9 @@ extension TerminalView {
     }
 
     func queueMetalDisplay() {
+#if os(macOS)
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { return }
+#endif
         guard metalView != nil else {
             return
         }
@@ -2637,6 +2640,9 @@ extension TerminalView {
                 deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + UInt64 (fpsDelay))) { [weak self] in
                     guard let self else { return }
                     self.pendingMetalDisplay = false
+#if os(macOS)
+                    guard self.window != nil, !self.isHiddenOrHasHiddenAncestor else { return }
+#endif
                     self.metalView?.setNeedsDisplay(self.metalView?.bounds ?? .zero)
                 }
         }

@@ -21,7 +21,8 @@ def document(release, repository, public_key, flavors=None):
     platforms, builds = {}, set()
     if flavors is None:
         flavors = list(RELEASE_FLAVORS)
-        # This is an alias of the Intel installer, not another build target.
+        # Read aliases already present in historical Releases. New releases
+        # publish only RELEASE_FLAVORS and never synthesize an alias here.
         if '<!-- oshell-update-v1:macOS13-x86_64:' in release.get('body', ''):
             flavors.append('intel')
     for flavor in flavors:

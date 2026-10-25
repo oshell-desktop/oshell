@@ -67,7 +67,8 @@ extension AISettings {
         providerPreset = next == .custom ? nil : next
         guard next != .custom else { return }
         apiType = next.protocolType; endpoint = next.endpoint; model = next.model
-        apiKey = ""; supportsImages = false; recipientNote = next.title
-        outputTokenLimit = 16384
+        apiKey = ""; reasoningEffort = nil; supportsImages = false; recipientNote = next.title
+        outputTokenLimit = AISettings.defaultOutputTokens
+        contextLimit = AISettings.defaultContextCharacters
     }
 }

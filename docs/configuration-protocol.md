@@ -49,3 +49,7 @@ OShell 的 WebDAV 地址支持显式 HTTP 与 HTTPS；该地址及传输选项�
 ### 本机标签标题偏好
 
 `tab-title-settings.json` 保存全局默认和按会话 UUID 绑定的本机标题选择。新增 `sessionName` 只属于此本机文件，不写入 `Configuration` 或共享 `titleMode`；原合同仍只有三种主机识别值。即使选择同步客户端设置，也不传输本机标题偏好；不修改 oshell-desktop 的代码或生成合同。
+
+### 本机全局代理策略
+
+全局代理的开启状态及所选代理 UUID 只存入本机工作目录的 `global-proxy.json`，不加入共享配置。代理条目、上级引用和凭据继续沿用 v2 合同；运行时覆盖路线不修改会话原始代理字段，也不参与编码。Desktop 读取共享文档时仍按各会话配置连接，全局开关不会随同步传播。

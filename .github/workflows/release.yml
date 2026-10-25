@@ -264,16 +264,15 @@ jobs:
           python3 scripts/ci-release.py collect --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" \
             --artifacts work/release-input --updates-artifacts work/update-input --repository "$GITHUB_REPOSITORY" \
             --source "dist/source/OShell-${RELEASE_VERSION}-source.tar.gz" --output dist/github-release
-      - name: Prepare compatibility update tools
+      - name: Prepare original-repository update tools
         if: github.repository == 'oshell-desktop/oshell'
         run: |
           python3 -m venv work/compat-tools
           work/compat-tools/bin/python -m pip install -r scripts/requirements-release.txt
           work/compat-tools/bin/python scripts/test-legacy-updates.py
-      - name: Prepare Intel filename alias and signed compatibility metadata
+      - name: Prepare signed original-repository Pages metadata (two DMGs)
         if: github.repository == 'oshell-desktop/oshell'
         env:
-          GH_TOKEN: ${{ github.token }}
           OSHELL_UPDATE_SIGNING_KEY: ${{ secrets.OSHELL_UPDATE_SIGNING_KEY }}
         run: work/compat-tools/bin/python scripts/publish-legacy-updates.py --tag "$RELEASE_TAG" --release-output dist/github-release --output work/compat-sites
       - name: Upload as draft, verify all assets, then publish Release

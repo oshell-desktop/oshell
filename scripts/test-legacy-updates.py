@@ -10,6 +10,8 @@ import hashlib
 import subprocess
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+import plistlib
 import xml.etree.ElementTree as ET
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
@@ -36,53 +38,123 @@ class CompatibilityTests(unittest.TestCase):
 
     def prepare(self): return LEGACY.prepare(self.release,self.public,self.key)
 
-    def test_both_repositories_accept_all_supported_client_flavors(self):
+    def add_historical_alias(self):
+        # Only a fixture for releases already published by the old workflow.
+        platform = LEGACY.PAGES.document(self.release, LEGACY.CURRENT, self.public)['platforms']['macOS10.13-Intel']
+        name = 'OShell-1.2.3-macOS13-x86_64.dmg'
+        url = f'https://github.com/{LEGACY.CURRENT}/releases/download/v1.2.3/{name}'
+        feed = LEGACY.signed_xml(platform['signedFeed'], self.key, url=url, minimum='13.0')
+        self.release['body'] += '<!-- oshell-update-v1:macOS13-x86_64:' + feed + ' -->\n'
+        self.release['assets'].append(dict(name=name, size=platform['size'], state='uploaded', browser_download_url=url))
+        return feed
+
+    def stage(self, root):
+        (root/'release-manifest.json').write_text(json.dumps(dict(tag='v1.2.3')))
+        (root/'RELEASE_NOTES.md').write_text(self.release['body'])
+        for flavor in ['legacy','arm64']:
+            suffix=LEGACY.PAGES.TARGETS[flavor].suffix
+            (root/f'OShell-1.2.3-{suffix}.dmg').write_bytes(b'synthetic installer '+flavor.encode())
+        (root/'OShell-1.2.3-source.tar.gz').write_bytes(b'synthetic source')
+        files=sorted(p for p in root.iterdir() if p.name != 'RELEASE_NOTES.md')
+        (root/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
+
+    def snapshot(self, root): return {p.name:p.read_bytes() for p in root.iterdir() if p.is_file()}
+
+    def test_new_releases_have_two_platforms_in_both_repositories(self):
         original = copy.deepcopy(self.release)
         body,current,old = self.prepare()
         self.assertEqual(self.release,original)
+        self.assertEqual(body,original['body'])
         for site,repo in [(current,LEGACY.CURRENT),(old,LEGACY.LEGACY)]:
             self.assertEqual(site['repository'],repo)
-            self.assertEqual(set(site['platforms']),{'macOS10.13-Intel','macOS13-arm64','macOS13-x86_64'})
+            self.assertEqual(set(site['platforms']),{'macOS10.13-Intel','macOS13-arm64'})
             for name,platform in site['platforms'].items():
                 xml=ET.fromstring(base64.b64decode(platform['signedFeed']))
                 url=xml.find('./channel/item/enclosure').get('url')
                 self.assertIn('/'+repo+'/releases/download/v1.2.3/',url)
                 self.assertTrue(url.endswith('-'+name+'.dmg'))
-        self.assertTrue(body.startswith(original['body']))
+        for suffix in current['platforms']:
+            first=ET.fromstring(base64.b64decode(current['platforms'][suffix]['signedFeed'])).find('./channel/item')
+            second=ET.fromstring(base64.b64decode(old['platforms'][suffix]['signedFeed'])).find('./channel/item')
+            self.assertEqual(first.find('enclosure').get(LEGACY.NS+'edSignature'),second.find('enclosure').get(LEGACY.NS+'edSignature'))
+            self.assertEqual(first.findtext(LEGACY.NS+'minimumSystemVersion'),second.findtext(LEGACY.NS+'minimumSystemVersion'))
 
-    def test_alias_preserves_installer_signature_and_size(self):
-        _,site,_=self.prepare()
-        base=site['platforms']['macOS10.13-Intel'];alias=site['platforms']['macOS13-x86_64']
-        a=ET.fromstring(base64.b64decode(base['signedFeed'])).find('./channel/item')
-        b=ET.fromstring(base64.b64decode(alias['signedFeed'])).find('./channel/item')
-        self.assertEqual(base['size'],alias['size'])
-        self.assertEqual(a.find('enclosure').get(LEGACY.NS+'edSignature'),b.find('enclosure').get(LEGACY.NS+'edSignature'))
-        self.assertEqual(a.findtext(LEGACY.NS+'minimumSystemVersion'),'10.13')
-        self.assertEqual(b.findtext(LEGACY.NS+'minimumSystemVersion'),'13.0')
-
-    def test_published_alias_is_idempotent(self):
-        body,site,old=self.prepare(); self.release['body']=body
-        platform=site['platforms']['macOS13-x86_64']
-        self.release['assets'].append(dict(name=platform['file'],size=platform['size'],state='uploaded',browser_download_url=f'https://github.com/{LEGACY.CURRENT}/releases/download/v1.2.3/'+platform['file']))
-        self.assertEqual(self.prepare(),(body,site,old))
-
-    def test_alias_prepared_before_immutable_release_publication(self):
+    def test_preparing_pages_does_not_modify_staged_release(self):
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder)
-            (root/'release-manifest.json').write_text(json.dumps(dict(tag='v1.2.3')))
-            (root/'RELEASE_NOTES.md').write_text(self.release['body'])
-            for flavor in ['legacy','arm64']:
-                suffix=LEGACY.PAGES.TARGETS[flavor].suffix
-                (root/f'OShell-1.2.3-{suffix}.dmg').write_bytes(b'synthetic installer '+flavor.encode())
+            root=Path(folder);self.stage(root);before=self.snapshot(root)
             current,old=LEGACY.prepare_local(root,'v1.2.3',self.public,self.key)
-            aliases=json.loads((root/'release-manifest.json').read_text())['compatibilityAliases']
-            self.assertEqual(len(aliases),1)
-            self.assertEqual((root/aliases[0]['file']).read_bytes(),(root/aliases[0]['source']).read_bytes())
-            for line in (root/'SHA256SUMS.txt').read_text().splitlines():
-                digest,name=line.split('  ')
-                self.assertEqual(hashlib.sha256((root/name).read_bytes()).hexdigest(),digest)
-            self.assertEqual(len(current['platforms']),3)
+            self.assertEqual(self.snapshot(root),before)
+            self.assertEqual(len(list(root.glob('*.dmg'))),2)
+            self.assertNotIn('compatibilityAliases',json.loads((root/'release-manifest.json').read_text()))
+            self.assertEqual(len(current['platforms']),2)
             self.assertEqual(old['repository'],'arnolixi/oshell')
+            self.assertEqual(LEGACY.prepare_local(root,'v1.2.3',self.public,self.key),(current,old))
+
+    def test_extra_local_alias_rejected_without_deleting_any_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);self.stage(root)
+            (root/'OShell-1.2.3-macOS13-x86_64.dmg').write_bytes(b'synthetic installer legacy')
+            before=self.snapshot(root)
+            with self.assertRaisesRegex(ValueError,'exactly two'): LEGACY.prepare_local(root,'v1.2.3',self.public,self.key)
+            self.assertEqual(self.snapshot(root),before)
+
+    def test_stale_alias_manifest_or_metadata_rejected(self):
+        for kind in ['manifest','metadata']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);self.stage(root)
+                if kind=='manifest':
+                    (root/'release-manifest.json').write_text(json.dumps(dict(tag='v1.2.3',compatibilityAliases=[{'file':'old.dmg'}])))
+                else:
+                    with (root/'RELEASE_NOTES.md').open('a') as stream: stream.write('<!-- oshell-update-v1:macOS13-x86_64:c3ludGhldGlj -->')
+                before=self.snapshot(root)
+                with self.assertRaises(ValueError): LEGACY.prepare_local(root,'v1.2.3',self.public,self.key)
+                self.assertEqual(self.snapshot(root),before)
+
+    def test_both_local_installer_signatures_are_required(self):
+        for flavor in ['legacy','arm64']:
+            with self.subTest(flavor=flavor), tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);self.stage(root)
+                path=root/f'OShell-1.2.3-{LEGACY.PAGES.TARGETS[flavor].suffix}.dmg'
+                path.write_bytes(b'x'*len(path.read_bytes()))
+                before=self.snapshot(root)
+                with self.assertRaises(Exception): LEGACY.prepare_local(root,'v1.2.3',self.public,self.key)
+                self.assertEqual(self.snapshot(root),before)
+
+    def test_existing_release_with_alias_remains_readable_and_unchanged(self):
+        feed=self.add_historical_alias();before=copy.deepcopy(self.release)
+        current,old=LEGACY.prepare_existing(self.release,'v1.2.3',self.public,self.key)
+        self.assertEqual(self.release,before)
+        self.assertEqual(current['platforms']['macOS13-x86_64']['signedFeed'],feed)
+        self.assertEqual(set(current['platforms']),set(old['platforms']))
+        self.assertEqual(len(current['platforms']),3)
+        self.assertEqual(LEGACY.PAGES.document(self.release,LEGACY.CURRENT,self.public),current)
+
+    def test_existing_two_package_release_does_not_gain_an_alias(self):
+        before=copy.deepcopy(self.release)
+        current,old=LEGACY.prepare_existing(self.release,'v1.2.3',self.public,self.key)
+        self.assertEqual(self.release,before)
+        self.assertEqual(len(current['platforms']),2);self.assertEqual(len(old['platforms']),2)
+        with self.assertRaisesRegex(ValueError,'Latest'): LEGACY.prepare_existing(self.release,'v9.9.9',self.public,self.key)
+
+    def test_repair_cli_only_reads_release_and_writes_local_sites(self):
+        for historical in [False,True]:
+            with self.subTest(historical=historical),tempfile.TemporaryDirectory() as folder:
+                if historical:self.add_historical_alias()
+                before=copy.deepcopy(self.release)
+                root=Path(folder);(root/'scripts').mkdir()
+                (root/'scripts/Info.plist').write_bytes(plistlib.dumps({'SUPublicEDKey':self.public}))
+                key=root/'signing.key';key.touch(mode=0o600)
+                key.write_bytes(base64.b64encode(self.key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption())))
+                output=root/'sites'
+                argv=['publish-legacy-updates.py','--tag','v1.2.3','--output',str(output),'--private-key',str(key)]
+                with patch.object(LEGACY,'ROOT',root),patch('sys.argv',argv),patch.object(LEGACY,'gh',return_value=json.dumps(self.release)) as network:
+                    LEGACY.main()
+                network.assert_called_once_with('api',f'repos/{LEGACY.CURRENT}/releases/latest')
+                self.assertEqual(self.release,before)
+                self.assertEqual(list(output.rglob('*.dmg')),[])
+                for site in ['current','legacy']:
+                    value=json.loads((output/site/'updates/latest.json').read_text())
+                    self.assertEqual(len(value['platforms']),3 if historical else 2)
 
     def test_wrong_key_rejected(self):
         with self.assertRaises(ValueError): LEGACY.prepare(self.release,self.public,Ed25519PrivateKey.generate())

@@ -16,6 +16,21 @@ enum ArrangementScrollTest {
         workspace.configuration.preferences.metal = false
         window.setContentSize(NSSize(width: 760, height: 460))
         for _ in 0..<20 { workspace.newBlankTab() }
+        let originalTabs = workspace.tabs.map(\.id)
+        let originalPanes = workspace.tabs.map { ObjectIdentifier($0.activePane) }
+        let selection = workspace.selectedTab?.id
+        for mode in [TabArrangement.horizontal, .vertical, .tiled] {
+            workspace.arrangeGroups(mode); root.layoutSubtreeIfNeeded()
+            checks["groups-one-tab-\(mode)"] = workspace.customTabLayout?.groups.count == originalTabs.count && workspace.customTabLayout?.groups.allSatisfy { $0.tabs.count == 1 && !$0.isHidden } == true
+            checks["groups-preserve-tabs-\(mode)"] = workspace.tabs.map(\.id) == originalTabs && workspace.tabs.map { ObjectIdentifier($0.activePane) } == originalPanes && workspace.selectedTab?.id == selection
+            checks["groups-have-own-strips-\(mode)"] = workspace.groupStrips.count == originalTabs.count
+            let item = NSMenuItem(); item.tag = mode.rawValue
+            workspace.changeSplitArrangement(item); root.layoutSubtreeIfNeeded()
+            checks["split-shared-strip-\(mode)"] = workspace.customTabLayout == nil && workspace.groupStrips.isEmpty && workspace.visibleTerminalTabs.count == originalTabs.count
+            checks["split-preserves-panes-\(mode)"] = workspace.tabs.map { ObjectIdentifier($0.activePane) } == originalPanes
+        }
+        workspace.arrangeGroups(.tabs)
+        checks["merge-restores-single-selected-tab"] = workspace.customTabLayout == nil && workspace.visibleTerminalTabs.count == 1 && workspace.selectedTab?.id == selection
         for mode in [TabArrangement.horizontal, .vertical, .tiled] {
             workspace.arrange(mode); root.layoutSubtreeIfNeeded()
             guard let scroll = descendants(root).compactMap({ $0 as? TabArrangementView }).first, let document = scroll.documentView else { continue }
@@ -93,6 +108,7 @@ enum ArrangementScrollTest {
             checks["\(mode)-tuiKeepsVerticalWheel"] = scroll.contentView.bounds.origin == tuiBefore
             terminal.feed(text: "\u{1b}[?1000l\u{1b}[?1049l")
             workspace.select(workspace.tabs.last!)
+            geometry.append(["selection": "\(mode)", "pane": NSStringFromRect(workspace.tabs.last!.activePane.view.frame), "bounds": NSStringFromRect(workspace.tabs.last!.activePane.view.bounds), "visible": NSStringFromRect(workspace.tabs.last!.activePane.view.visibleRect), "clip": NSStringFromRect(scroll.contentView.bounds), "document": NSStringFromRect(document.frame)])
             checks["\(mode)-lastTabReachable"] = !workspace.tabs.last!.activePane.view.visibleRect.isEmpty
             workspace.select(workspace.tabs[0])
             checks["\(mode)-firstTabReachable"] = !workspace.tabs[0].activePane.view.visibleRect.isEmpty

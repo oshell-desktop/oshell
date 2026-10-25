@@ -3,7 +3,7 @@
 import AppKit
 import OShellCore
 
-/// One shared timer for visible terminal clocks, stopped when the last detaches.
+/// One shared timer for visible window clocks, stopped when the last detaches.
 final class TerminalClockTicker {
     static let shared = TerminalClockTicker()
     private let views = NSHashTable<TerminalClockView>.weakObjects()
@@ -153,7 +153,7 @@ final class TerminalClockView: NSView {
 }
 
 final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
-    let enabled = NSButton(checkboxWithTitle: "显示本机时钟", target: nil, action: nil)
+    let enabled = NSButton(checkboxWithTitle: "显示窗口时钟", target: nil, action: nil)
     let position = NSPopUpButton(), font = NSPopUpButton(), size = NSComboBox()
     let followColor = NSButton(checkboxWithTitle: "跟随终端文字颜色", target: nil, action: nil)
     let color = PopupColorWell()
@@ -194,8 +194,8 @@ final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
         color.widthAnchor.constraint(equalToConstant: 64).isActive = true; color.heightAnchor.constraint(equalToConstant: 26).isActive = true
         transparency.widthAnchor.constraint(equalToConstant: 280).isActive = true
         opacityLabel.widthAnchor.constraint(equalToConstant: 48).isActive = true
-        let heading = NSTextField(labelWithString: "终端浮动时钟"); heading.font = .systemFont(ofSize: 15, weight: .semibold)
-        let hint = NSTextField(wrappingLabelWithString: "时钟覆盖在终端文字上方，不占用行列，也不拦截点击、选择或滚动。透明度 0% 为不透明，100% 为完全透明。")
+        let heading = NSTextField(labelWithString: "窗口浮动时钟"); heading.font = .systemFont(ofSize: 15, weight: .semibold)
+        let hint = NSTextField(wrappingLabelWithString: "每个 OShell 窗口只显示一个时钟，切换标签或分屏不重复。覆盖在窗口工作区上方，不占用行列，也不拦截点击、选择或滚动。透明度 0% 为不透明，100% 为完全透明。")
         hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
         preview.wantsLayer = true; preview.layer?.backgroundColor = (NSColor(hex: preferences.colorScheme.background) ?? .black).cgColor
         let sample = NSTextField(wrappingLabelWithString: String(repeating: "INFO  Request completed        INFO  Connection established        INFO  Health check passed\n", count: 8))

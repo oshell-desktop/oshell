@@ -11,9 +11,23 @@ enum AppTestHarness {
     && CommandLine.arguments.contains(where: { ["--auth-concurrency-test", "--login-password-save-test", "--third-party-import-test", "--keyboard-shortcuts-test", "--toolbar-actions-test", "--quicksend-groups-test", "--tab-behavior-test", "--layout-test", "--zmodem-progress-test", "--zmodem-regression-test", "--file-feature-test", "--search-test", "--host-identity-test", "--session-links-test", "--session-defaults-test", "--shell-integration-test", "--live-keepalive-test", "--appearance-test", "--quicksend-persistence-test", "--local-password-test", "--management-test", "--startup-protection-test", "--tab-drag-test", "--tab-actions-test", "--master-removal-test", "--update-feature-test", "--update-integration-test", "--terminal-focus-test", "--terminal-symbols-test", "--session-directory-test", "--quicksend-focus-test", "--arrangement-scroll-test", "--tab-number-test", "--links-catalog-test", "--named-tab-groups-test"].contains($0) })
 
     static func prepare() {
+        if CommandLine.arguments.contains("--terminal-interrupt-test") { TerminalInterruptTest.prepare() }
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.install() }
     }
     static func run(_ controller: WorkspaceController) {
+        if CommandLine.arguments.contains("--ai-compaction-test") { AICompactionTest.run(controller); return }
+        GlobalProxyTest.configureNetworkFixture(controller)
+        if CommandLine.arguments.contains("--ai-record-selection-test") { AIRecordSelectionTest.run(controller); return }
+        if CommandLine.arguments.contains("--finder-service-test") { FinderDirectoryServiceTest.run(controller); return }
+        if CommandLine.arguments.contains("--ai-history-scroll-test") { AIHistoryScrollTest.run(controller); return }
+        if CommandLine.arguments.contains("--activation-latency-test") { ActivationLatencyTest.run(controller); return }
+        if CommandLine.arguments.contains("--ai-context-test") { AIConversationContextTest.run(controller); return }
+        if CommandLine.arguments.contains("--tiled-input-test") { TiledInputFocusTest.run(controller); return }
+        if CommandLine.arguments.contains("--terminal-interrupt-test") { TerminalInterruptTest.run(controller); return }
+        if CommandLine.arguments.contains("--ai-history-close-test") { AIHistoryCloseTest.run(controller); return }
+        if CommandLine.arguments.contains("--ai-model-discovery-test") { AIModelDiscoveryTest.run(controller); return }
+        if CommandLine.arguments.contains("--ai-diagnostics-test") { AIDiagnosticsTest.run(controller); return }
+        if CommandLine.arguments.contains("--ai-live-test") { AILiveWorkflowTest.run(controller); return }
         // Older UI fixtures explicitly exercise host-derived titles. Seed their
         // isolated local preference; the title-settings fixture tests the new default.
         if !CommandLine.arguments.contains("--tab-title-settings-test"), ProcessInfo.processInfo.environment["OSHELL_DATA_DIR"] != nil {
@@ -70,6 +84,7 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--terminal-clock-test") { TerminalClockTest.run(controller) }
         if CommandLine.arguments.contains("--navigation-experience-test") { NavigationExperienceTest.run(controller) }
         if CommandLine.arguments.contains("--pane-close-test") { PaneCloseTest.run(controller) }
+        if CommandLine.arguments.contains("--global-proxy-test") { GlobalProxyTest.run(controller) }
         if CommandLine.arguments.contains("--proxy-catalog-test") { ProxyCatalogTest.run(controller) }
         if CommandLine.arguments.contains("--directory-sync-test") { DirectorySyncTest.run(controller) }
         if CommandLine.arguments.contains("--webdav-test") { WebDAVFeatureTest.run(controller) }

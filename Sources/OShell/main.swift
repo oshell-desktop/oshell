@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var controller: WorkspaceController!
     var windows: WorkspaceWindows!
     private var launchServer: ExternalLaunchServer?
+    private var finderServices: FinderDirectoryServices?
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Load the bundled brand explicitly instead of a stale LaunchServices icon.
         if let url = Bundle.main.url(forResource: "OShell", withExtension: "icns"), let icon = NSImage(contentsOf: url) { NSApp.applicationIconImage = icon }
@@ -91,6 +92,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if NSApp.modalWindow == nil { Dialogs.message("本机有尚未处理的同步草稿，请通过“会话 → 处理同步冲突…”选择保留的版本。草稿处理前不会自动载入或覆盖共享数据。") }
             }
         }
+        if !isTestSession {
+            let services = FinderDirectoryServices { [weak self] directories in
+                guard NSApp.modalWindow == nil, let workspace = self?.windows?.externalWorkspace(), workspace.isSecurityUnlocked else {
+                    throw ModelError.invalid("请先完成 OShell 中的对话框或解锁，然后重试。")
+                }
+                workspace.openLocalDirectories(directories)
+            }
+            finderServices = services; NSApp.servicesProvider = services
+            NSUpdateDynamicServices()
+        }
         #if OSHELL_TEST_HARNESS
         AppTestHarness.run(controller)
         #endif
@@ -142,6 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(app, "退出 OShell", #selector(NSApplication.terminate(_:)), "q", target: NSApp)
         let file = menu("会话")
         add(file, "新建窗口", #selector(WorkspaceController.newWindow), "n", [.command, .shift], target: self)
+        add(file, "全局代理设置…", #selector(WorkspaceController.showGlobalProxySettings))
         add(file, "代理管理…", #selector(WorkspaceController.showProxyManager))
         add(file, "会话管理…", #selector(WorkspaceController.showSessionManager), "o", [.command, .shift])
         add(file, "快速切换 / 连接会话…", #selector(WorkspaceController.showQuickSessionSwitcher), "o", [.command, .option])

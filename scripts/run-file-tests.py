@@ -4,6 +4,11 @@
 
 """Run using a Python environment containing Paramiko; fixtures are disposable."""
 import json, os, pathlib, subprocess, sys, tempfile, time
+import importlib.util
+_proxy_spec = importlib.util.spec_from_file_location('global_proxy_fixture', pathlib.Path(__file__).with_name('global-proxy-fixture.py'))
+_proxy_module = importlib.util.module_from_spec(_proxy_spec); _proxy_spec.loader.exec_module(_proxy_module)
+proxy_fixture = _proxy_module.ProxyFixture() if os.environ.get('OSHELL_TEST_GLOBAL_PROXY') == '1' else None
+if proxy_fixture: os.environ['OSHELL_GLOBAL_PROXY_FIXTURE_PORT'] = str(proxy_fixture.port)
 project=pathlib.Path(__file__).resolve().parent.parent
 preview="--preview" in sys.argv
 tabs="--tabs" in sys.argv
@@ -27,6 +32,9 @@ with tempfile.TemporaryDirectory(prefix='oshell-files-',dir='/tmp') as folder:
             client=subprocess.Popen(args,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
             output,_=client.communicate(timeout=None if preview else 150)
             result=json.loads((root/'file-result.json').read_text())
+            if proxy_fixture:
+                result['checks']['globalProxyCarriesSFTPAndSCP'] = proxy_fixture.connections >= 4 and not proxy_fixture.errors
+                result['proxyConnections'] = proxy_fixture.connections
             result['checks']['clientLocaleNotForwarded']=not (root/'locale-requests.log').exists()
             result['passed']=result['passed'] and all(result['checks'].values())
             (project/('validation/filetabs-network-result.json' if tabs else 'validation/file-features-result.json')).write_text(json.dumps(result,indent=2))
