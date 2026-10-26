@@ -66,7 +66,7 @@ final class TabSessionInfoPanel: NSObject {
             value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             value.textColor = field.value == nil ? .secondaryLabelColor : .labelColor
             let copy = NSButton(image: Self.copyIcon, target: self, action: #selector(copyField(_:)))
-            copy.isBordered = false; copy.oshellContentTintColor = .labelColor; copy.imageScaling = .scaleProportionallyDown; copy.tag = index
+            copy.isBordered = false; copy.contentTintColor = .labelColor; copy.imageScaling = .scaleProportionallyDown; copy.tag = index
             copy.identifier = .init("tab.info.copy." + field.id); copy.setAccessibilityLabel("复制" + field.title)
             copy.toolTip = "复制" + field.title; copy.isEnabled = field.value?.isEmpty == false
             copy.widthAnchor.constraint(equalToConstant: 24).isActive = true

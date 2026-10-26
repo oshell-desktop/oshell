@@ -96,7 +96,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('max-parallel: 2', build)
         self.assertNotIn('container:', build)
         entries = re.findall(r'- flavor: (\w+)\n\s+runner: ([\w-]+)', build)
-        self.assertEqual(entries, [('legacy','macos-15-intel'),('arm64','macos-15')])
+        self.assertEqual(entries, [('amd64','macos-15-intel'),('arm64','macos-15')])
         self.assertIn('/Applications/Xcode_16.4.app/Contents/Developer', build)
         self.assertIn('actions/cache/restore@', build)
         self.assertIn('actions/cache/save@', build)
@@ -143,9 +143,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_two_distinct_target_names(self):
         self.assertEqual(len({CI.artifact_name('1.2.3', flavor) for flavor in RELEASE_FLAVORS}), 2)
-        self.assertEqual(TARGETS['legacy'].architectures, ('x86_64',))
-        self.assertEqual(TARGETS['compat'].architectures, ('arm64', 'x86_64'))
-        self.assertEqual(TARGETS['compat'].minimum, '11.0')
+        self.assertEqual(TARGETS['amd64'].architectures, ('x86_64',))
+        self.assertEqual(set(TARGETS), {'arm64', 'amd64'})
+        self.assertTrue(all(target.minimum == '15.0' for target in TARGETS.values()))
 
     def test_stable_tag_must_match_version(self):
         CI.validate_tag('v1.2.3', '1.2.3')
@@ -304,7 +304,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_missing_build_prevents_release(self):
         import shutil
-        shutil.rmtree(self.incoming/'dmg-legacy')
+        shutil.rmtree(self.incoming/'dmg-amd64')
         with self.assertRaises(ValueError): self.collect()
         self.assertFalse(self.output.exists())
 
@@ -313,19 +313,19 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.collect()
 
     def test_wrong_architecture_rejected(self):
-        self.mutate('legacy', lambda record: record['verification'].update(architectures=['arm64']))
+        self.mutate('amd64', lambda record: record['verification'].update(architectures=['arm64']))
         with self.assertRaises(ValueError): self.collect()
 
     def test_wrong_minimum_rejected(self):
-        self.mutate('legacy', lambda record: record['verification'].update(minimumOS='13.0'))
+        self.mutate('amd64', lambda record: record['verification'].update(minimumOS='13.0'))
         with self.assertRaises(ValueError): self.collect()
 
     def test_unverified_payload_rejected(self):
-        self.mutate('legacy', lambda record: record['verification'].update(payloadMatchesStagedApp=False))
+        self.mutate('amd64', lambda record: record['verification'].update(payloadMatchesStagedApp=False))
         with self.assertRaises(ValueError): self.collect()
 
     def test_modified_dmg_rejected(self):
-        next((self.incoming/'dmg-legacy').glob('*.dmg')).write_bytes(b'tampered fixture')
+        next((self.incoming/'dmg-amd64').glob('*.dmg')).write_bytes(b'tampered fixture')
         with self.assertRaises(ValueError): self.collect()
 
     def test_unexpected_files_rejected(self):
@@ -378,7 +378,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_missing_update_architecture_prevents_release(self):
         import shutil
-        updates = self.update_artifacts(); shutil.rmtree(updates/'updates-legacy')
+        updates = self.update_artifacts(); shutil.rmtree(updates/'updates-amd64')
         with self.assertRaises(ValueError): CI.collect(META, self.incoming, self.source, self.output, updates, 'owner/repo')
         self.assertFalse(self.output.exists())
 
@@ -395,9 +395,10 @@ class ReleaseTests(unittest.TestCase):
     def test_ci_signing_requires_secret(self):
         import os, sys
         env = dict(os.environ, OSHELL_UPDATE_SIGNING_KEY='')
-        result = subprocess.run([sys.executable, str(SCRIPTS/'sign-ci-updates.py'), '--flavor', 'arm64', '--tag', 'v1.2.3'], env=env, capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('OSHELL_UPDATE_SIGNING_KEY', result.stderr)
+        for flavor in CI.RELEASE_FLAVORS:
+            result = subprocess.run([sys.executable, str(SCRIPTS/'sign-ci-updates.py'), '--flavor', flavor, '--tag', 'v1.2.3'], env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('OSHELL_UPDATE_SIGNING_KEY', result.stderr)
 
     def test_empty_checksum_list_prevents_publish(self):
         self.collect(); (self.output/'SHA256SUMS.txt').write_text('')
@@ -450,7 +451,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse(any('--draft=false' in call for call in calls))
 
     def add_compatibility_alias(self):
-        source = CI.artifact_name(META['version'], 'legacy')
+        source = CI.artifact_name(META['version'], 'amd64')
         name = f"OShell-{META['version']}-macOS13-x86_64.dmg"
         (self.output/name).write_bytes((self.output/source).read_bytes())
         path = self.output/'release-manifest.json'; manifest = json.loads(path.read_text())
@@ -504,11 +505,11 @@ class ReleaseTests(unittest.TestCase):
 
     def installer_fixture(self):
         root = self.root/'image'; contents = root/'OShell.app/Contents'; contents.mkdir(parents=True)
-        (contents/'Info.plist').write_bytes(plistlib.dumps(dict(CFBundleShortVersionString='1.2.3', CFBundleVersion='45', LSMinimumSystemVersion='13.0')))
+        (contents/'Info.plist').write_bytes(plistlib.dumps(dict(CFBundleShortVersionString='1.2.3', CFBundleVersion='45', LSMinimumSystemVersion='15.0')))
         (contents/'binary').write_bytes(b'unchanged signed payload fixture')
         (contents/'alias').symlink_to('binary'); (root/'Applications').symlink_to('/Applications')
         (root/'安装说明.txt').write_text('安装说明')
-        options = dict(version='1.2.3',build='45',flavor='arm64',minimum='13.0',architectures=['arm64'])
+        options = dict(version='1.2.3',build='45',flavor='arm64',minimum='15.0',architectures=['arm64'])
         installer_metadata.write(root, **options, source_root=self.root)
         return root, options
 
@@ -561,20 +562,20 @@ class ReleaseTests(unittest.TestCase):
         app = self.root/'developer.app'; (app/'Contents').mkdir(parents=True)
         (app/'Contents/Info.plist').write_bytes(plistlib.dumps({'OShellTestHarness': True}))
         with self.assertRaisesRegex(ValueError, 'cannot be packaged'):
-            PACK.package('arm64', ['arm64'], '13.0', app, 'dmg')
+            PACK.package('arm64', ['arm64'], '15.0', app, 'dmg')
 
     def test_dmg_only_skips_pkg_tools(self):
         root = self.root/'package'; root.mkdir(); (root/'LICENSE').write_text('license fixture')
         app = root/'app/OShell.app'; resources = app/'Contents/Resources'; resources.mkdir(parents=True)
         (resources/'OShell-LICENSE.txt').write_text('license fixture')
-        (app/'Contents/Info.plist').write_bytes(plistlib.dumps(dict(CFBundleShortVersionString=PACK.VERSION, CFBundleVersion=PACK.INFO['CFBundleVersion'], LSMinimumSystemVersion='13.0')))
+        (app/'Contents/Info.plist').write_bytes(plistlib.dumps(dict(CFBundleShortVersionString=PACK.VERSION, CFBundleVersion=PACK.INFO['CFBundleVersion'], LSMinimumSystemVersion='15.0')))
         work, out = root/'work', root/'out'; (work/'arm64').mkdir(parents=True); out.mkdir()
         calls = []
         def fake_run(args, **kwargs):
             calls.append(args)
             if args[:2] == ['hdiutil', 'create']: Path(args[-1]).write_bytes(b'fake DMG')
         with patch.multiple(PACK, ROOT=root, WORK=work, OUT=out), patch.object(PACK, 'run', fake_run):
-            artifacts = PACK.package('arm64', ['arm64'], '13.0', app, 'dmg')
+            artifacts = PACK.package('arm64', ['arm64'], '15.0', app, 'dmg')
         self.assertEqual([path.suffix for path in artifacts], ['.dmg'])
         self.assertFalse(any(call[0] in ['pkgbuild', 'productbuild'] for call in calls))
         self.assertTrue(any(call[:2] == ['hdiutil', 'verify'] for call in calls))

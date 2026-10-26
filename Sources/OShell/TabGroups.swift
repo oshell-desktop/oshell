@@ -95,8 +95,8 @@ final class TabDropHost: NSView {
         var title = ""
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func draw(_ dirtyRect: NSRect) {
-            NSColor.oshellAccentColor.withAlphaComponent(0.22).setFill(); NSBezierPath(rect: bounds).fill()
-            NSColor.oshellAccentColor.setStroke(); let border = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1)); border.lineWidth = 2; border.stroke()
+            NSColor.controlAccentColor.withAlphaComponent(0.22).setFill(); NSBezierPath(rect: bounds).fill()
+            NSColor.controlAccentColor.setStroke(); let border = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1)); border.lineWidth = 2; border.stroke()
             let style = NSMutableParagraphStyle(); style.alignment = .center
             (title as NSString).draw(in: NSRect(x: 4, y: bounds.midY - 10, width: bounds.width - 8, height: 25), withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: NSColor.labelColor, .paragraphStyle: style])
         }

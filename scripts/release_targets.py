@@ -10,12 +10,7 @@ class ReleaseTarget:
     suffix: str
 
 TARGETS = {
-    'legacy': ReleaseTarget(('x86_64',), '10.13', 'macOS10.13-Intel'),
-    'compat': ReleaseTarget(('arm64', 'x86_64'), '11.0', 'macOS11-Universal'),
-    'arm64': ReleaseTarget(('arm64',), '13.0', 'macOS13-arm64'),
-    'intel': ReleaseTarget(('x86_64',), '13.0', 'macOS13-x86_64'),
-    # Retain the existing optional modern Universal command for local builds.
-    'modern': ReleaseTarget(('arm64', 'x86_64'), '13.0', 'macOS13-Universal'),
+    'arm64': ReleaseTarget(('arm64',), '15.0', 'macOS15-arm64'),
+    'amd64': ReleaseTarget(('x86_64',), '15.0', 'macOS15-amd64'),
 }
-# Historical targets remain available for explicit local diagnostics only.
-RELEASE_FLAVORS = ('legacy', 'arm64')
+RELEASE_FLAVORS = ('arm64', 'amd64')

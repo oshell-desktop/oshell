@@ -118,12 +118,12 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - flavor: legacy
+          - flavor: amd64
             runner: macos-15-intel
           - flavor: arm64
             runner: macos-15
     env:
-      # Pin a toolchain that includes the macOS 10.13 Swift runtime.
+      # Pin the Swift 6 toolchain for both macOS 15 architectures.
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
       RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
       RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}

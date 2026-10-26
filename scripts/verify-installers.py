@@ -26,7 +26,18 @@ def digest(path):
 def version_parts(value):
     return tuple((list(map(int, value.split('.'))) + [0, 0, 0])[:3])
 
-def verify_app(candidate, staged, target, expected, legacy):
+def verify_deployment(relative, deployment, minimum):
+    assert deployment, (str(relative), 'missing deployment target')
+    expected = version_parts(minimum)
+    versions = [version_parts(value) for value in deployment]
+    # Upstream frameworks may support older systems. Our binaries must carry
+    # the declared floor, so stale pre-migration products cannot pass validation.
+    if relative.parts[0] == 'Frameworks':
+        assert all(value <= expected for value in versions), (str(relative), deployment, minimum)
+    else:
+        assert all(value == expected for value in versions), (str(relative), deployment, minimum)
+
+def verify_app(candidate, staged, target, expected):
     info = plistlib.loads((candidate/'Contents/Info.plist').read_bytes())
     assert not info.get('OShellTestHarness'), 'Release payload contains developer test hooks'
     for key in ['CFBundleShortVersionString', 'CFBundleVersion']:
@@ -34,11 +45,9 @@ def verify_app(candidate, staged, target, expected, legacy):
     assert info['LSMinimumSystemVersion'] == target.minimum
     bridge = plistlib.loads((candidate/'Contents/Helpers/OShell-FileZilla.app/Contents/Info.plist').read_bytes())
     assert bridge['LSMinimumSystemVersion'] == target.minimum
-    if legacy:
-        assert (candidate/'Contents/Frameworks/libswiftCore.dylib').exists()
     for resource in ['OShell-LICENSE.txt', 'OShell.icns', 'oshell-integration.sh', 'THIRD_PARTY_NOTICES.txt', 'ColorSchemes-LICENSE.txt', 'Sparkle-LICENSE.txt']:
         assert digest(candidate/'Contents/Resources'/resource) == digest(staged/'Contents/Resources'/resource)
-    for relative in ['MacOS/OShell', 'MacOS/OShell-ZOC', 'Helpers/OShellSSH', 'Helpers/OShellAskpass', 'Helpers/OShellProxy', 'Helpers/lrz', 'Helpers/lsz', 'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla']:
+    for relative in ['MacOS/OShell', 'MacOS/OShell-ZOC', 'Helpers/OShellAskpass', 'Helpers/OShellProxy', 'Helpers/lrz', 'Helpers/lsz', 'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla']:
         item = candidate/'Contents'/relative
         assert set(run(['lipo', '-archs', item]).split()) == set(target.architectures), (relative, 'wrong architecture')
         assert digest(item) == digest(staged/'Contents'/relative), (relative, 'stale payload')
@@ -53,8 +62,7 @@ def verify_app(candidate, staged, target, expected, legacy):
         assert set(run(['lipo', '-archs', item]).split()) == set(target.architectures), (str(item), 'wrong Mach-O architecture')
         build = run(['vtool', '-show-build', item])
         deployment = re.findall(r'^\s*minos\s+(\d+(?:\.\d+)*)', build, re.M) + re.findall(r'cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version (\d+(?:\.\d+)*)', build)
-        assert deployment, (str(item), 'missing deployment target')
-        assert all(version_parts(value) <= version_parts(target.minimum) for value in deployment), (str(item), deployment, target.minimum)
+        verify_deployment(item.relative_to(candidate/'Contents'), deployment, target.minimum)
     run(['codesign', '--verify', '--deep', '--strict', candidate])
     if info.get(code_signing.MARKER): code_signing.verify(candidate)
     elif __import__('os').environ.get('OSHELL_REQUIRE_FIXED_SIGNING') == '1': raise ValueError('Official installer is not signed with the pinned certificate')
@@ -74,7 +82,7 @@ def main():
         staged = ROOT/'work/release'/flavor/'OShell.app'
         pkg = out/f'OShell-{version}-{target.suffix}.pkg'
         dmg = out/f'OShell-{version}-{target.suffix}.dmg'
-        verify_app(staged, staged, target, expected, flavor == 'legacy')
+        verify_app(staged, staged, target, expected)
         if not args.app_only:
             with tempfile.TemporaryDirectory(prefix='oshell-installer-verify-') as directory:
                 temporary = Path(directory)
@@ -85,12 +93,12 @@ def main():
                     distribution = ET.parse(expanded/'Distribution').getroot()
                     assert distribution.find('.//os-version').attrib['min'] == target.minimum
                     assert set(distribution.find('options').attrib['hostArchitectures'].split(',')) == set(target.architectures)
-                    verify_app(app, staged, target, expected, flavor == 'legacy')
+                    verify_app(app, staged, target, expected)
                 mount = temporary/'mount'; mount.mkdir()
                 attached = False
                 try:
                     run(['hdiutil', 'attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg]); attached = True
-                    verify_app(mount/'OShell.app', staged, target, expected, flavor == 'legacy')
+                    verify_app(mount/'OShell.app', staged, target, expected)
                     assert (mount/'Applications').is_symlink()
                     installer_metadata.verify(mount, version=version, build=str(expected['CFBundleVersion']), flavor=flavor, minimum=target.minimum, architectures=target.architectures)
                 finally:

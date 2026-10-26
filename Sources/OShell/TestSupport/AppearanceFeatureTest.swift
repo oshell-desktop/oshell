@@ -25,7 +25,7 @@ enum AppearanceFeatureTest {
         let missingPicker = NSPopUpButton()
         TerminalFontCatalog.populate(missingPicker, selected: "OShell-Missing-Font-Fixture")
         checks["missingFontSelectionPreserved"] = missingPicker.selectedItem?.representedObject as? String == "OShell-Missing-Font-Fixture"
-        checks["missingFontUsesSystemPreview"] = TerminalFontCatalog.previewFont(missingPicker).fontName == NSFont.oshellMonospacedSystemFont(ofSize: 13, weight: .regular).fontName
+        checks["missingFontUsesSystemPreview"] = TerminalFontCatalog.previewFont(missingPicker).fontName == NSFont.monospacedSystemFont(ofSize: 13, weight: .regular).fontName
         checks["fontSectionHeadersDisabled"] = missingPicker.itemArray.filter { $0.representedObject == nil }.allSatisfy { !$0.isEnabled || $0.isSeparatorItem }
         let additionalSystemFont = catalog.first { $0.system && $0.monospaced && !["Menlo-Regular", "Monaco", "SFMono-Regular", "CourierNewPSMT"].contains($0.name) }
         checks["additionalSystemMonospaceAvailable"] = additionalSystemFont != nil
@@ -65,12 +65,11 @@ enum AppearanceFeatureTest {
             let view = descendants(root).compactMap { $0 as? AppearanceSettingsView }.first!
             let palette = view.preview.nativeBackgroundColor
             let systemAppearance: NSAppearance.Name
-            if #available(macOS 10.14, *) { systemAppearance = NSApp.effectiveAppearance.name }
-            else { systemAppearance = .aqua }
+            systemAppearance = NSApp.effectiveAppearance.name
             for (index, theme) in [InterfaceTheme.dark, .light, .dark, .light, .system].enumerated() {
                 view.theme.selectItem(at: InterfaceTheme.allCases.firstIndex(of: theme)!)
                 view.themeChanged()
-                let expected = theme == .dark ? NSAppearance.Name.oshellDark : (theme == .light ? .aqua : systemAppearance)
+                let expected = theme == .dark ? NSAppearance.Name.darkAqua : (theme == .light ? .aqua : systemAppearance)
                 checks["previewTheme\(index)WholeWindow"] = root.window?.effectiveAppearance.name == expected && view.effectiveAppearance.name == expected
                 checks["previewTheme\(index)ControlsInheritWindow"] = descendants(root).filter { $0 is NSControl || $0 is NSTabView }.allSatisfy { $0.effectiveAppearance.name == expected }
                 checks["previewTheme\(index)NoPageOverride"] = view.appearance == nil
@@ -125,13 +124,13 @@ enum AppearanceFeatureTest {
         checks["savedAcrossReload"] = (try? controller.store.load().preferences.colorSchemeID) == "nord"
         checks["appliesAllOpenTerminals"] = panes.allSatisfy { $0.terminal.nativeBackgroundColor.rgbHex == "#2E3440" }
         checks["doesNotRecreateConnections"] = panes.map { $0.terminal.process.shellPid } == pids
-        checks["appThemeApplied"] = ApplicationAppearance.theme == .dark && controller.window?.appearance?.name == .oshellDark
+        checks["appThemeApplied"] = ApplicationAppearance.theme == .dark && controller.window?.appearance?.name == .darkAqua
         modal { root in
             let view = descendants(root).compactMap { $0 as? AppearanceSettingsView }.first!
             view.theme.selectItem(at: InterfaceTheme.allCases.firstIndex(of: .system)!); view.themeChanged()
             let dark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
-            checks["systemPreviewIgnoresSavedDarkOverride"] = root.window?.effectiveAppearance.name == (dark ? .oshellDark : .aqua)
-            checks["systemPreviewDoesNotApplyEarly"] = ApplicationAppearance.theme == .dark && controller.window?.appearance?.name == .oshellDark
+            checks["systemPreviewIgnoresSavedDarkOverride"] = root.window?.effectiveAppearance.name == (dark ? .darkAqua : .aqua)
+            checks["systemPreviewDoesNotApplyEarly"] = ApplicationAppearance.theme == .dark && controller.window?.appearance?.name == .darkAqua
             if let window = NSApp.modalWindow { _ = PopupKeyboard.dismiss(window: window) }
         }
         controller.showAppearancePreferences()
@@ -193,7 +192,7 @@ enum AppearanceFeatureTest {
         checks["presetHistoryStillWorks"] = controller.configuration.preferences.scrollback == 3000 && panes.allSatisfy { $0.terminal.getTerminal().options.scrollback == 3000 }
         let popup = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
         popup.isReleasedWhenClosed = false; popup.makeKeyAndOrderFront(nil); popup.orderOut(nil)
-        checks["newPopupUsesTheme"] = popup.appearance?.name == .oshellDark; popup.close()
+        checks["newPopupUsesTheme"] = popup.appearance?.name == .darkAqua; popup.close()
         ApplicationAppearance.apply(.system)
         checks["systemModeRemovesOverride"] = controller.window?.appearance == nil
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]

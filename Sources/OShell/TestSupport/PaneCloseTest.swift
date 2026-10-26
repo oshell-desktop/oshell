@@ -40,9 +40,7 @@ enum PaneCloseTest {
         }
         func geometryCases() {
             var renderers = [false]
-            #if !OSHELL_LEGACY
             renderers.append(true)
-            #endif
             let cases = renderers.flatMap { gpu in
                 (0..<5).flatMap { mode in [false, true].map { (gpu, mode, $0) } }
             }

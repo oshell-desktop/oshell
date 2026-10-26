@@ -46,17 +46,7 @@ Complete corresponding unmodified source and build instructions are distributed 
 the binaries; the same archive is embedded in the app's Resources directory.
 Built using Apple clang, -Os -std=gnu89, NLS and timesync disabled.
 
-Legacy macOS build only: CryptoSwift 1.10.0 (tag f2a627b).
-https://github.com/krzyzanowskim/CryptoSwift/releases/tag/1.10.0
-This product includes software developed by the "Marcin Krzyzanowski" (http://krzyzanowskim.com/).
-Full license is included as CryptoSwift-LICENSE.txt in the legacy application.
-OShell alteration: prefer Foundation over FoundationEssentials under OSHELL_LEGACY,
-for pre-10.14 deployment. Cryptographic algorithms are unchanged. Used only for
-AES-256-GCM on macOS 10.13; PBKDF2 remains CommonCrypto, and modern builds use CryptoKit.
 
-Additional SwiftTerm alterations for OShell legacy builds: disable Metal and os
-signpost instrumentation, provide CoreGraphics-compatible rendering entry points,
-backport find icons/accent colors.
 
 Additional SwiftTerm search changes: Unicode whole-word and wrapped-line matching fixes,
 regex anchor preservation and bounded execution, compiled-pattern/result caching,
@@ -89,7 +79,7 @@ OShell arrangement scrolling: the macOS terminal wheel handler is overridable so
 
 SwiftTerm display buffer: expose the read-only displayBuffer accessor so host-side repeated word selection uses the same buffer as SwiftTerm's native mouse handlers.
 
-SwiftTerm package manifest: allow the OShell release build to supply its deployment target, including the macOS 11 Universal compatibility flavor. Default development and macOS 10.13 behavior are retained.
+SwiftTerm package manifest and macOS API paths target macOS 15.0; pre-15 availability fallbacks and OShell's legacy-system rendering exclusions are removed.
 
 DejaVu Sans Mono 2.37
 --------------------

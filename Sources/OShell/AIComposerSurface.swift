@@ -96,7 +96,7 @@ final class AIComposerSurface: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 22, yRadius: 22)
         var background = NSColor.textBackgroundColor
-        if #available(macOS 10.14, *), effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+        if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
             background = NSColor.controlBackgroundColor.blended(withFraction: 0.08, of: .labelColor) ?? .controlBackgroundColor
         }
         background.setFill(); path.fill()

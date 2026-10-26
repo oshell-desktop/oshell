@@ -14,7 +14,6 @@ class InterfaceSurfaceView: NSView {
         NSColor.windowBackgroundColor.setFill()
         NSBezierPath(rect: bounds).fill()
     }
-    @available(macOS 10.14, *)
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         func invalidate(_ view: NSView) {

@@ -3,9 +3,7 @@
 import AppKit
 import LocalAuthentication
 import OShellCore
-#if !OSHELL_LEGACY
 import CryptoKit
-#endif
 
 enum BiometricUnlockTest {
     private final class Records: BiometricRecordStore {
@@ -62,8 +60,7 @@ enum BiometricUnlockTest {
 
             let view = SecuritySettingsView(workspace: workspace)
             checks["requiresMasterBeforeEnabling"] = !view.touchID.isEnabled
-#if !OSHELL_LEGACY
-            if #available(macOS 10.15, *), BiometricUnlock.shared.unavailableReason == nil {
+            if BiometricUnlock.shared.unavailableReason == nil {
                 // This fixture's isolated bundle ID and data directory scope
                 // ensure no existing user Keychain item is queried or modified.
                 checks["enableMasterFixture"] = try workspace.enableMasterProtection(password)
@@ -117,9 +114,6 @@ enum BiometricUnlockTest {
                 try BiometricUnlock.shared.disable()
                 checks["explicitDisableRemovesLocalRecord"] = (try? local.read(account: currentScope)) == nil && !BiometricUnlock.shared.enabled
             }
-#else
-            checks["legacyHasManualFallback"] = BiometricUnlock.shared.unavailableReason != nil
-#endif
         } catch { checks["fixtureSucceeded"] = false; print("Biometric test error:", (error as NSError).domain, (error as NSError).code) }
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
         if let output = ProcessInfo.processInfo.environment["OSHELL_BIOMETRIC_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: output)) }

@@ -18,12 +18,12 @@ public final class LocalCredentialStore {
     public func load(expectedID: UUID? = nil, repairPermissions: Bool = false) throws -> LocalCredentialKey {
         let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard fd >= 0 else { throw ModelError.invalid("无法读取 OShell 本机密钥。请恢复原数据目录中的 local-credential-key.json，或重新输入并保存密码。"); }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? handle.oshellClose() }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? handle.close() }
         var info = stat()
         guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(), ((info.st_mode & 0o077) == 0 || repairPermissions), info.st_size <= 4096 else {
             throw ModelError.invalid("本机密钥文件类型、所有者或权限不正确；文件需仅当前用户可读写（600）。")
         }
-        let data = try handle.oshellRead(upToCount: 4097) ?? Data()
+        let data = try handle.read(upToCount: 4097) ?? Data()
         guard let key = try? JSONDecoder().decode(LocalCredentialKey.self, from: data), let secret = Data(base64Encoded: key.secret), secret.count == 32 else {
             throw ModelError.invalid("OShell 本机密钥文件损坏，已保留原文件，请从备份恢复。")
         }

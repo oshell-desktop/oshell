@@ -155,10 +155,10 @@ public enum SharedDataFile {
         }
         let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard fd >= 0 else { throw ModelError.invalid("无法读取数据文件：\(url.lastPathComponent)") }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? handle.oshellClose() }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? handle.close() }
         var info = stat()
         guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size <= 64 * 1024 * 1024 else { throw ModelError.invalid("数据文件类型或大小不正确：\(url.lastPathComponent)") }
-        return try handle.oshellRead(upToCount: 64 * 1024 * 1024 + 1)
+        return try handle.read(upToCount: 64 * 1024 * 1024 + 1)
     }
     public static func create(_ data: Data, at url: URL) throws {
         let staging = url.deletingLastPathComponent().appendingPathComponent(".oshell-copy-" + UUID().uuidString)

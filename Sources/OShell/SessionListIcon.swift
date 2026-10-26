@@ -42,8 +42,7 @@ enum SessionListIcon: Hashable {
         let size = NSSize(width: max(36, baseSize.width), height: baseSize.height)
         let icon = NSImage(size: size, flipped: false) { _ in
             let dark: Bool
-            if #available(macOS 10.14, *) { dark = NSAppearance.current.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
-            else { dark = false }
+            dark = NSAppearance.current.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let source = self.image(dark: dark)
             source.draw(at: NSPoint(x: (size.width - source.size.width) / 2, y: 0), from: .zero, operation: .sourceOver, fraction: 1)
             return true
@@ -153,11 +152,9 @@ final class SessionListIconView: NSImageView {
     var style: SessionListIcon? { didSet { refresh() } }
     private func refresh() {
         let dark: Bool
-        if #available(macOS 10.14, *) { dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
-        else { dark = false }
+        dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         image = style?.image(dark: dark)
         setAccessibilityLabel(style?.label)
     }
-    @available(macOS 10.14, *)
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refresh() }
 }

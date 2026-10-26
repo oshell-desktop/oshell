@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 KEEP_REPORTS = {'.gitkeep', 'latest-build.log', 'latest-checks.json', 'latest-cleanup.json'}
-BUILD_NAME = re.compile(r'build(?:-tests|-legacy|-compat-(?:arm64|x86_64)|-modern-(?:arm64|x86|x86_64)|-test-[a-z]+-(?:arm64|x86_64))?')
+BUILD_NAME = re.compile(r'build(?:-amd64|-arm64|-tests|-legacy|-compat-(?:arm64|x86_64)|-modern-(?:arm64|x86|x86_64)|-test-[a-z]+-(?:arm64|x86_64))?')
 OLD_WORK = {
     'legacy-validation', 'presentation-flush', 'fullscreen-chrome',
     'release','test-release','test-app','command-editor-modules','public-source-checkout',

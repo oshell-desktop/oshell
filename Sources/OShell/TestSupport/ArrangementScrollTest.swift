@@ -118,11 +118,9 @@ enum ArrangementScrollTest {
         workspace.select(workspace.tabs[0]); root.layoutSubtreeIfNeeded()
         if let scroll = descendants(root).compactMap({ $0 as? TabArrangementView }).first {
             let pane = workspace.tabs[0].activePane
-            #if !OSHELL_LEGACY
             var preferences = workspace.configuration.preferences; preferences.metal = true
             for tab in workspace.tabs { tab.activePane.apply(preferences) }
             checks["gpuRendererEnabled"] = pane.terminal.isUsingMetalRenderer
-            #endif
             pane.terminal.feed(text: "\u{1b}c"); root.layoutSubtreeIfNeeded()
             let position = pane.terminal.convert(NSPoint(x: pane.terminal.bounds.midX, y: pane.terminal.bounds.midY), to: root.superview)
             let target = root.hitTest(position)

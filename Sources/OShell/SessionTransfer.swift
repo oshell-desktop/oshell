@@ -33,7 +33,7 @@ enum SessionTransfer {
                 archive = try result.get()
             }
             let data = try archive.encoded()
-            let panel = NSSavePanel(); panel.title = "导出 OShell 会话"; panel.oshellJSONFilesOnly()
+            let panel = NSSavePanel(); panel.title = "导出 OShell 会话"; panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = "OShell-sessions.oshell.json"; panel.canCreateDirectories = true
             guard panel.runPopupModal() == .OK, let url = panel.url else { return }
             try PrivateFile.write(data, to: url)
@@ -51,7 +51,7 @@ enum SessionTransfer {
         guard source.runModal() == .alertFirstButtonReturn else { return }
         let panel = NSOpenPanel()
         if kinds.indexOfSelectedItem == 0 {
-            panel.title = "导入 OShell 会话"; panel.oshellJSONFilesOnly()
+            panel.title = "导入 OShell 会话"; panel.allowedContentTypes = [.json]
             panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
             guard panel.runPopupModal() == .OK, let url = panel.url else { return }
             importArchive(at: url, workspace: workspace, directory: directory)

@@ -66,7 +66,6 @@ final class SyncStatusView: NSView {
         NSColor.controlBackgroundColor.withAlphaComponent(0.5).setFill(); shape.fill()
         NSColor.gridColor.withAlphaComponent(0.6).setStroke(); shape.lineWidth = 0.6; shape.stroke()
     }
-    @available(macOS 10.14, *)
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); displayedMark = nil; refresh() }
     func refresh() {
         let presentation = SyncStatusPresentation(sync: sync)

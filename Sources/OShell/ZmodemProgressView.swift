@@ -28,7 +28,7 @@ final class TransferProgressBar: NSView {
         NSColor.secondaryLabelColor.withAlphaComponent(0.18).setFill(); track.fill()
         guard fillRect.width > 0 else { return }
         NSGraphicsContext.saveGraphicsState(); track.addClip()
-        NSColor.oshellAccentColor.setFill(); NSBezierPath(rect: fillRect).fill()
+        NSColor.controlAccentColor.setFill(); NSBezierPath(rect: fillRect).fill()
         NSGraphicsContext.restoreGraphicsState()
     }
 }

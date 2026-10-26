@@ -70,13 +70,11 @@ enum UnicodeDisplayTest {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
         }
-        #if !OSHELL_LEGACY
         do {
             try view.setUseMetal(true); feed("😀 👩🏽‍💻 中文 \u{e0a0}\r\u{1b}[?25h\u{1b}[2 q")
             view.drawMetalFrameNow(); checks["metalEmojiAndBlockCursorRender"] = view.isUsingMetalRenderer
             try view.setUseMetal(false)
         } catch { checks["metalEmojiAndBlockCursorRender"] = false }
-        #endif
         func views(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(views) }
         func modal(_ action: @escaping (NSView) -> Void) {
             let timer = Timer(timeInterval: 0.15, repeats: false) { _ in if let root = NSApp.modalWindow?.contentView { action(root) } }

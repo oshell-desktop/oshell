@@ -9,26 +9,25 @@ from incremental_cache import IncrementalCache, affected_products
 
 PROGRAMS = {'OShell':'MacOS/OShell', 'OShell-ZOC':'MacOS/OShell-ZOC',
     'OShell-FileZilla':'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla',
-    'OShellAskpass':'Helpers/OShellAskpass', 'OShellProxy':'Helpers/OShellProxy', 'OShellSSH':'Helpers/OShellSSH'}
+    'OShellAskpass':'Helpers/OShellAskpass', 'OShellProxy':'Helpers/OShellProxy'}
 
 def build_swift(root, logs, run, flavor, arch, minimum, tests=False):
-    base = root / ('work/build-legacy' if flavor == 'legacy' else f'work/build-compat-{arch}' if flavor == 'compat' else f'work/build-modern-{arch}')
+    base = root / f'work/build-{flavor}'
     if tests: base = root / f'work/build-test-{flavor}-{arch}'
     variant = dict(flavor=flavor, arch=arch, minimum=minimum, tests=tests)
-    sources = swift_source_inputs(root, legacy=flavor == 'legacy', tests=tests)
-    configuration = swift_configuration_inputs(legacy=flavor == 'legacy')
+    sources = swift_source_inputs(root, tests=tests)
+    configuration = swift_configuration_inputs()
     cache = CompilationCache(root, f'swift-{flavor}-{arch}-{minimum}', sources, variant)
     restored = base/'cached-products'
     if restored.exists(): shutil.rmtree(restored)
     products = [*PROGRAMS, 'OShellCoreChecks']
     if cache.restore(restored, products): return restored
-    env = dict(os.environ, OSHELL_LEGACY='1' if flavor == 'legacy' else '0', OSHELL_MACOS_MINIMUM=minimum, OSHELL_TEST_HARNESS='1' if tests else '0')
+    env = dict(os.environ, OSHELL_TEST_HARNESS='1' if tests else '0')
     args = ['swift','build','--package-path',root,'--scratch-path',base/'swift','--cache-path',base/'cache',
         '--config-path',base/'config','--security-path',base/'security','--disable-sandbox','-c','release',
         '--triple',f'{arch}-apple-macosx{minimum}', '-Xlinker','-rpath','-Xlinker','@executable_path/../Frameworks',
         '-Xlinker','-rpath','-Xlinker','@executable_path/../../../../Frameworks']
     args += ['-Xswiftc','-file-prefix-map','-Xswiftc',f'{root}=/OShell','-Xswiftc','-debug-prefix-map','-Xswiftc',f'{root}=/OShell','-Xswiftc','-file-compilation-dir','-Xswiftc','/OShell','-Xcc',f'-ffile-prefix-map={root}=/OShell']
-    if flavor == 'legacy': args += ['-Xswiftc','-DOSHELL_LEGACY']
     print('Building',flavor,arch,flush=True)
     incremental = IncrementalCache(root, f'{flavor}-{arch}-{minimum}',
         configuration, sources, variant)

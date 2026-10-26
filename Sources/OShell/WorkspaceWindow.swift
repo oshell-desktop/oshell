@@ -3,7 +3,7 @@
 
 import AppKit
 import OShellCore
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
 import os
 #endif
 
@@ -17,7 +17,7 @@ final class WorkspaceWindow: NSWindow {
         }
         super.toggleFullScreen(sender)
     }
-    #if canImport(os) && !OSHELL_LEGACY
+    #if canImport(os)
     private static let traceInputLatency = ProcessInfo.processInfo.environment["OSHELL_INPUT_LATENCY"] == "1"
     private static let latencyLog = OSLog(subsystem: "app.oshell", category: "InputLatency")
     private var lastKeyActivation = ProcessInfo.processInfo.systemUptime
@@ -74,7 +74,7 @@ final class WorkspaceWindow: NSWindow {
         navigate(event) || super.performKeyEquivalent(with: event)
     }
     override func sendEvent(_ event: NSEvent) {
-        #if canImport(os) && !OSHELL_LEGACY
+        #if canImport(os)
         let began = Self.traceInputLatency && event.type == .keyDown ? ProcessInfo.processInfo.systemUptime : nil
         defer {
             if let began {

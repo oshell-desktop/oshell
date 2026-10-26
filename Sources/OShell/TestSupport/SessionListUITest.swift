@@ -20,7 +20,7 @@ enum SessionListUITest {
         guard let window = manager.window, let root = window.contentView else { return }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         guard let table = descendants(root).compactMap({ $0 as? NSTableView }).first else { return }
-        for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             window.appearance = NSAppearance(named: appearance)
             for width in [720, 880, 1120] {
                 let key = "\(appearance.rawValue)-\(width)"
@@ -78,7 +78,7 @@ enum SessionListUITest {
         let links = profiles.prefix(4).map { SessionLink(profileID: $0.id, name: $0.kind.title + " 快捷引用", folder: "") }
         controller.configuration.sessionLinks.entries = links
         controller.configuration.profiles.append(SessionProfile(name: "实际 SSH 会话", group: "Links", host: "192.0.2.50", username: "ops"))
-        for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             window.appearance = NSAppearance(named: appearance)
             window.setContentSize(NSSize(width: 880, height: 550))
             for (index, link) in links.enumerated() {

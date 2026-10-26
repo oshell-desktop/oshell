@@ -3,8 +3,6 @@
 # Copyright (c) 2026 OShell contributors
 
 set -euo pipefail
-export OSHELL_LEGACY=0
-export OSHELL_MACOS_MINIMUM=13.0
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 export OSHELL_TEST_HARNESS=0
 if [ "$#" -gt 0 ]; then
@@ -32,17 +30,17 @@ swift build --package-path "$project_root" --scratch-path "$build_dir/swift" --c
     -Xswiftc -file-compilation-dir -Xswiftc /OShell \
     -Xcc "-ffile-prefix-map=$project_root=/OShell"
 helper_source="$build_dir/lrzsz-0.12.20"
-if [ ! -x "$helper_source/src/lrz" ] || [ ! -f "$helper_source/.oshell-macos13-public-paths" ]; then
+if [ ! -x "$helper_source/src/lrz" ] || [ ! -f "$helper_source/.oshell-macos15-public-paths" ]; then
     if [ ! -d "$helper_source" ]; then tar -xzf "$project_root/Vendor/lrzsz-0.12.20.tar.gz" -C "$build_dir"; fi
     (
         cd "$helper_source"
         helper_arch="$(uname -m)"
         if [ "$helper_arch" = arm64 ]; then helper_host=arm-apple-darwin; else helper_host="$helper_arch-apple-darwin"; fi
-        CC=clang CFLAGS="-Os -mmacosx-version-min=13.0 -std=gnu89 -Wno-error=implicit-function-declaration -Wno-error=incompatible-function-pointer-types -ffile-prefix-map=$project_root=/OShell -fdebug-prefix-map=$project_root=/OShell" \
+        CC=clang CFLAGS="-Os -mmacosx-version-min=15.0 -std=gnu89 -Wno-error=implicit-function-declaration -Wno-error=incompatible-function-pointer-types -ffile-prefix-map=$project_root=/OShell -fdebug-prefix-map=$project_root=/OShell" \
           ./configure --disable-nls --disable-timesync --host="$helper_host" --prefix=/usr > "$build_dir/helpers-configure.log" 2>&1
         make clean > "$build_dir/helpers-clean.log" 2>&1
         make -j4 > "$build_dir/helpers-build.log" 2>&1
-        touch .oshell-macos13-public-paths
+        touch .oshell-macos15-public-paths
     )
 fi
 binary_dir="$(swift build --package-path "$project_root" --scratch-path "$build_dir/swift" -c release --show-bin-path)"
@@ -52,7 +50,6 @@ file_bridge="$app_dir/Contents/Helpers/OShell-FileZilla.app"
 mkdir -p "$file_bridge/Contents/MacOS"
 cp "$binary_dir/OShell-FileZilla" "$file_bridge/Contents/MacOS/OShell-FileZilla"
 cp "$project_root/scripts/FileZilla-Info.plist" "$file_bridge/Contents/Info.plist"
-cp "$binary_dir/OShellSSH" "$app_dir/Contents/Helpers/OShellSSH"
 cp "$binary_dir/OShellProxy" "$app_dir/Contents/Helpers/OShellProxy"
 cp "$binary_dir/OShellAskpass" "$app_dir/Contents/Helpers/OShellAskpass"
 cp "$helper_source/src/lrz" "$helper_source/src/lsz" "$app_dir/Contents/Helpers/"
@@ -79,13 +76,12 @@ swift "$project_root/scripts/icon.swift" "$build_dir/OShell.iconset"
 iconutil -c icns "$build_dir/OShell.iconset" -o "$app_dir/Contents/Resources/OShell.icns"
 # Drop debug maps and local linker names from shipped executables. Keep external
 # symbols and runtime metadata; never apply this to bundled third-party frameworks.
-for executable in "$app_dir/Contents/MacOS/OShell" "$app_dir/Contents/MacOS/OShell-ZOC" "$file_bridge/Contents/MacOS/OShell-FileZilla" "$app_dir/Contents/Helpers/OShellSSH" "$app_dir/Contents/Helpers/OShellProxy" "$app_dir/Contents/Helpers/OShellAskpass" "$app_dir/Contents/Helpers/lrz" "$app_dir/Contents/Helpers/lsz"; do
+for executable in "$app_dir/Contents/MacOS/OShell" "$app_dir/Contents/MacOS/OShell-ZOC" "$file_bridge/Contents/MacOS/OShell-FileZilla" "$app_dir/Contents/Helpers/OShellProxy" "$app_dir/Contents/Helpers/OShellAskpass" "$app_dir/Contents/Helpers/lrz" "$app_dir/Contents/Helpers/lsz"; do
     xcrun strip -S -x "$executable"
 done
 codesign --force --sign - "$app_dir/Contents/Helpers/lrz"
 codesign --force --sign - "$app_dir/Contents/Helpers/lsz"
 codesign --force --sign - "$app_dir/Contents/Helpers/OShellAskpass"
-codesign --force --sign - "$app_dir/Contents/Helpers/OShellSSH"
 codesign --force --sign - "$app_dir/Contents/Helpers/OShellProxy"
 codesign --force --sign - "$app_dir/Contents/MacOS/OShell-ZOC"
 codesign --force --sign - "$file_bridge"

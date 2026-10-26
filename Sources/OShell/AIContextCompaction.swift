@@ -9,8 +9,7 @@ enum AIContextBudget {
     static func tokens(_ text: String) -> Int {
         var ascii = 0, other = 0
         // Every non-ASCII scalar consists solely of bytes >= 0x80. Counting
-        // String.UTF8View preserves the estimate without macOS 10.15's
-        // Unicode.Scalar.UTF8View API or allocating a String per scalar.
+        // Count UTF-8 bytes directly without allocating a String per scalar.
         for byte in text.utf8 { if byte < 0x80 { ascii += 1 } else { other += 1 } }
         return (ascii + 2) / 3 + (other + 1) / 2
     }

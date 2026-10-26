@@ -185,7 +185,7 @@ final class FullscreenActivationTest: NSObject {
         if let screen = window.screen, let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
             metrics["builtInDisplay"] = CGDisplayIsBuiltin(id.uint32Value) != 0 ? 1 : 0
             metrics["displayScale"] = screen.backingScaleFactor
-            if #available(macOS 12.0, *) { metrics["displayMaximumFPS"] = Double(screen.maximumFramesPerSecond) }
+            metrics["displayMaximumFPS"] = Double(screen.maximumFramesPerSecond)
         }
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "metrics": metrics, "state": state, "metalActive": pane.terminal.isUsingMetalRenderer, "scope": "Requires unlocked desktop. Native fullscreen, separate AppKit app, synthetic ASCII input, real local PTY echo and application draw completion; excludes physical display latency, SSH and human IME composition"]
         if let path = ProcessInfo.processInfo.environment["OSHELL_FULLSCREEN_ACTIVATION_OUTPUT"], let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: URL(fileURLWithPath: path)) }

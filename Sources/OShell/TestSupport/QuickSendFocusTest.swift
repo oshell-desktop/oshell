@@ -38,9 +38,7 @@ enum QuickSendFocusTest {
         }
         func layoutCases() {
             var renderers = [false]
-            #if !OSHELL_LEGACY
             renderers.append(true)
-            #endif
             for gpu in renderers {
                 for mode in ["tabs", "tiled", "groups"] {
                     workspace.configuration.preferences.metal = gpu

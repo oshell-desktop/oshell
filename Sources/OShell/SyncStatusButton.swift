@@ -50,7 +50,6 @@ final class SyncStatusButton: NSButton {
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); updateRing() }
     override func viewDidHide() { super.viewDidHide(); updateRing() }
     override func viewDidUnhide() { super.viewDidUnhide(); updateRing() }
-    @available(macOS 10.14, *)
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance(); updateImage(); updateRing()
     }

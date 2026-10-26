@@ -15,7 +15,7 @@
 
 ## Touch ID 快捷解锁
 
-现代版与 macOS 11+ 通用版可在支持 Touch ID 和 Secure Enclave 的 Mac 上启用。macOS 10.13 构建保留手动主密码解锁，不提供该选项。
+macOS 15+ 版本可在支持 Touch ID 和 Secure Enclave 的 Mac 上启用。缺少相关硬件或未配置指纹时使用手动主密码解锁。
 
 启用前验证当前主密码。主密码使用 P-256 密钥协商、HKDF-SHA256 和 AES-256-GCM 包装后保存在本机私有目录 `~/Library/Application Support/OShell/TouchID/`；文件仅包含密文、随机盐、公钥和设备绑定的 Secure Enclave 密钥表示，不包含明文主密码。Secure Enclave 私钥的使用受 `biometryCurrentSet` 约束，解锁通过受保护的密钥协商完成，而非仅检查一次指纹认证的布尔结果。取消或认证失败不释放主密码，也不退化为无认证读取。
 

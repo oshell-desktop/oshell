@@ -171,7 +171,7 @@ final class AIAssistantTest {
                 // Give both complete turns room in the design preview, rather
                 // than capturing only the scrolled bottom of the AI answer.
                 workspace.window?.setContentSize(NSSize(width: 1440, height: 1400)); workspace.window?.contentView?.layoutSubtreeIfNeeded()
-                for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
                     assistant.appearance = NSAppearance(named: appearance); assistant.layoutSubtreeIfNeeded()
                     let previous = NSAppearance.current; NSAppearance.current = assistant.effectiveAppearance
                     if let bitmap = assistant.bitmapImageRepForCachingDisplay(in: assistant.bounds) {
@@ -267,7 +267,7 @@ final class AIAssistantTest {
                 }
             }
             if let output = ProcessInfo.processInfo.environment["OSHELL_AI_OUTPUT"] {
-                for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
                     review.appearance = NSAppearance(named: appearance); review.layoutSubtreeIfNeeded()
                     let previous = NSAppearance.current; NSAppearance.current = review.effectiveAppearance
                     if let bitmap = review.bitmapImageRepForCachingDisplay(in: review.bounds) {

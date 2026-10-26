@@ -212,7 +212,7 @@ extension WorkspaceController {
             let all = menu.addItem(withTitle: "显示全部标签组", action: #selector(showAllTabGroups), keyEquivalent: ""); all.target = self
         }
         let hiddenUnread = customTabLayout?.groups.filter { group in group.isHidden && tabs.contains { group.tabs.contains($0.id) && $0.hasUnreadOutput } }.count ?? 0
-        tabGroupButton.oshellContentTintColor = hiddenUnread > 0 ? .systemOrange : nil
+        tabGroupButton.contentTintColor = hiddenUnread > 0 ? .systemOrange : nil
         tabGroupButton.toolTip = hiddenUnread > 0 ? "\(hiddenUnread) 个隐藏标签组有新输出；连接仍在运行" : "新建、命名和显示/隐藏标签组；隐藏不会断开连接"
         tabGroupButton.menu = menu
     }

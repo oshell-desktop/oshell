@@ -66,7 +66,7 @@ enum UnreadOutputTest {
                 wait("windowFocusClearsSelectedTab", { controller.isObservingSelectedTab && !first.hasUnreadOutput }) {
                     controller.select(second); pane.shutdown(); pane.receive(Data("late output".utf8))
                     checks["shutdownCannotMarkUnread"] = !pane.hasUnreadOutput
-                    for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+                    for appearance in [NSAppearance.Name.aqua, .darkAqua] {
                         controller.window?.appearance = NSAppearance(named: appearance)
                         for size in [NSSize(width: 760, height: 460), NSSize(width: 1180, height: 760)] {
                             controller.window?.setContentSize(size); controller.window?.contentView?.layoutSubtreeIfNeeded()

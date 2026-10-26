@@ -21,8 +21,8 @@ struct TerminalClipboardImage {
             guard urls.count == 1, let url = urls.first, extensions.contains(url.pathExtension.lowercased()) else { return nil }
             let info = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
             guard info.isRegularFile == true, let size = info.fileSize, size <= maximumBytes else { throw ModelError.invalid("图片文件过大或不可读取，单张最多 20 MiB。") }
-            let file = try FileHandle(forReadingFrom: url); defer { try? file.oshellClose() }
-            return try decode(file.oshellRead(upToCount: maximumBytes + 1) ?? Data())
+            let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
+            return try decode(file.read(upToCount: maximumBytes + 1) ?? Data())
         }
         for type in [NSPasteboard.PasteboardType.png, .tiff, .init("public.jpeg")] {
             if let data = clipboard.data(forType: type) { return try decode(data) }

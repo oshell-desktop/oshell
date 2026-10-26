@@ -67,7 +67,7 @@ final class TerminalClockView: NSView {
     private(set) var position: TerminalClockPosition = .topRight
     private(set) var text = ""
     private(set) var foreground = NSColor.white
-    private(set) var clockFont = NSFont.oshellMonospacedSystemFont(ofSize: 12, weight: .medium)
+    private(set) var clockFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
     private var disposed = false
     private weak var terminalArea: NSView?
     private var placement = [NSLayoutConstraint]()
@@ -92,7 +92,7 @@ final class TerminalClockView: NSView {
         var preferences = preferences; preferences.clampClockStyle()
         enabled = preferences.terminalClockEnabled; position = preferences.terminalClockPosition
         let chosen = preferences.terminalClockFontName.isEmpty ? nil : NSFont(name: preferences.terminalClockFontName, size: CGFloat(preferences.terminalClockFontSize))
-        clockFont = chosen ?? .oshellMonospacedSystemFont(ofSize: CGFloat(preferences.terminalClockFontSize), weight: .medium)
+        clockFont = chosen ?? .monospacedSystemFont(ofSize: CGFloat(preferences.terminalClockFontSize), weight: .medium)
         foreground = NSColor(hex: preferences.terminalClockColor) ?? NSColor(hex: preferences.colorScheme.foreground) ?? .white
         alphaValue = CGFloat(preferences.terminalClockOpacity)
         invalidateIntrinsicContentSize()
@@ -199,7 +199,7 @@ final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
         hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
         preview.wantsLayer = true; preview.layer?.backgroundColor = (NSColor(hex: preferences.colorScheme.background) ?? .black).cgColor
         let sample = NSTextField(wrappingLabelWithString: String(repeating: "INFO  Request completed        INFO  Connection established        INFO  Health check passed\n", count: 8))
-        sample.font = .oshellMonospacedSystemFont(ofSize: 12, weight: .regular)
+        sample.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         sample.textColor = NSColor(hex: preferences.colorScheme.foreground)
         sample.translatesAutoresizingMaskIntoConstraints = false; preview.addSubview(sample)
         previewClock.translatesAutoresizingMaskIntoConstraints = false; preview.addSubview(previewClock); previewClock.constrain(to: preview)

@@ -2,14 +2,14 @@
 
 ## GitHub Actions 自动发布
 
-流水线位于 [release.yml](../.github/workflows/release.yml)。将配置和源码提交到 GitHub 后，推送 `vX.Y.Z` 标签会先自动转发到默认分支（通常是 `main`）的发布工作流，再按该不可变标签构建并发布。也可在 Actions 从默认分支手动运行，按当前版本自动创建标签。不同版本共用默认分支的编译缓存，标签始终锁定实际源码提交。
+流水线位于 [release.yml](../.github/workflows/release.yml)。将配置和源码提交到 GitHub 后，推送 `vX.Y.Z` 标签会先自动转发到默认分支的发布工作流，再按该不可变标签构建并发布。也可在 Actions 从默认分支手动运行，按当前版本自动创建标签。不同版本共用默认分支的编译缓存，标签始终锁定实际源码提交。
 
 | 构建目标 | 最低系统 | 架构 | DMG 文件后缀 |
 | --- | --- | --- | --- |
-| `legacy` | macOS 10.13 | Intel x86_64 | `macOS10.13-Intel` |
-| `arm64` | macOS 13 | Apple Silicon arm64 | `macOS13-arm64` |
+| `arm64` | macOS 15.0 | Apple Silicon arm64 | `macOS15-arm64` |
+| `amd64` | macOS 15.0 | Intel x86_64 | `macOS15-amd64` |
 
-现代版本以 macOS 13 为最低运行目标，可以用于更新系统；并非限制只能在 macOS 13 使用。两种包共用源码，最低系统和名称统一定义在 `scripts/release_targets.py`。Intel 包统一以 macOS 10.13 为最低目标；后续 Release 只上传两个 DMG 和对应源码包，不再生成旧名称 Intel 兼容副本，也不单独发布 Universal 或现代 Intel 包。已有 Release 的附件、说明和标签保持原样。
+从 0.4.0 开始，`master` 只构建上述两个目标，定义统一位于 `scripts/release_targets.py`。旧系统源码保存在 `codex/legacy-macos-10.13` 分支（迁移前快照 `f66af85`），不参与主线构建。历史 Release、附件和标签保持原样。
 
 所有任务均使用 GitHub 托管 Runner：元数据检查、Release 发布和更新站点使用 `ubuntu-24.04`；ARM64 DMG 使用 `macos-15`，Intel DMG 使用 `macos-15-intel`。两个目标最多并行执行两个 job，不依赖本机或组织的自托管节点。
 
@@ -18,19 +18,19 @@
 发布步骤：
 
 1. 更新 `scripts/Info.plist` 的 `CFBundleShortVersionString`，递增 `CFBundleVersion`，在 `CHANGELOG.md` 中添加对应版本的变更内容，再提交所有源码和流水线文件。Release 说明会自动提取该版本章节，放在“本次变更”中；缺失、空白或重复的版本章节会阻止发布。
-2. 将提交推送到 GitHub。手动发布时进入 **Actions → Build and publish macOS DMGs → Run workflow**，选择默认分支（通常是 `main`）（通常为 `main`），**tag 留空**。流程读取该提交的 Info.plist，例如版本 `0.2.61` 会创建 `v0.2.61`；也可明确填写匹配版本。已有同名标签必须指向所选提交，流程不会移动或覆盖它。若需重试旧版本，请选择原标签作为运行来源。标签与源码版本不匹配时，会在创建标签和编译前报错。也可以自行创建并推送匹配的 `vX.Y.Z` 标签来触发发布。
+2. 将提交推送到 GitHub。手动发布时进入 **Actions → Build and publish macOS DMGs → Run workflow**，选择默认分支，**tag 留空**。流程读取该提交的 Info.plist，例如版本 `0.2.61` 会创建 `v0.2.61`；也可明确填写匹配版本。已有同名标签必须指向所选提交，流程不会移动或覆盖它。若需重试旧版本，请选择原标签作为运行来源。标签与源码版本不匹配时，会在创建标签和编译前报错。也可以自行创建并推送匹配的 `vX.Y.Z` 标签来触发发布。
 3. 标签确定后，Actions 会运行两个独立构建任务。两个任务全部完成核心测试、DMG 挂载检查、全部 Mach-O 的架构/最低系统检查和签名完整性检查后，才进入发布阶段。
 4. Release 先以草稿创建，上传两个 DMG 和对应源码包，并在 Release 说明中嵌入两种目标的签名更新信息。`SHA256SUMS.txt` 和 `release-manifest.json` 放在每个 DMG 内，不再单独上传为 Release 附件。确认远端附件完整后才公开发布并设为 Latest。
 
 GitHub API 只使用自动提供的 `GITHUB_TOKEN`，无需额外 PAT。发布前还需在仓库 **Settings → Secrets and variables → Actions** 配置 `OSHELL_UPDATE_SIGNING_KEY`，内容为现有 Sparkle Ed25519 私钥文件中的 Base64 种子。该密钥必须与应用的 `SUPublicEDKey` 匹配，不能重新生成替代。密钥仅在签名步骤写入临时 0600 文件，完成后清理；不写入源码、日志或发布附件。缺少密钥时停止发布，避免生成会导致检查更新失败的不完整 Release。仓库需允许 Actions 运行；构建阶段仅有 `contents: read`，准备标签和发布 job 申请 `contents: write`。如果组织策略禁止写权限，需要仓库管理员允许该工作流发布 Release。工作流不读取开发者本机 `.release-private`，由维护者配置加密 Secret，也不设置默认更新仓库。
 
-准备阶段创建的标签在后续构建失败时会保留，以便重试相同源码；若要改动源码，应使用新版本，不能将原标签移动到新提交。旧失败记录的 **Re-run jobs** 仍使用当时的工作流；升级流程后应从 `main` 新建一次 **Run workflow**。
+准备阶段创建的标签在后续构建失败时会保留，以便重试相同源码；若要改动源码，应使用新版本，不能将原标签移动到新提交。旧失败记录的 **Re-run jobs** 仍使用当时的工作流；升级流程后应从默认分支新建一次 **Run workflow**。
 
 失败不会发布残缺 Release；日志保留为各构建任务的 `diagnostics-*` Artifact。同一 tag 的运行会串行排队。上传中断后可以重跑：只续传带有同一提交标记的自有草稿；已公开的 Release 和其他草稿不会被覆盖。发布成功后应递增版本并使用新标签，而不是覆盖旧附件。
 
-macOS 构建固定使用 `/Applications/Xcode_16.4.app/Contents/Developer`，保留 macOS 10.13 所需的旧 Swift 运行库；预检确认本机架构能运行对应目标的核心检查。Runner 镜像更新导致工具链缺失时会明确失败，不静默切换工具链或降低安装包校验要求。第三方 Actions 固定到官方版本提交。
+macOS 构建固定使用 `/Applications/Xcode_16.4.app/Contents/Developer`，两种架构均以 macOS 15.0 为最低目标；预检确认本机架构能运行对应目标的核心检查。Runner 镜像更新导致工具链缺失时会明确失败，不静默切换工具链或降低安装包校验要求。第三方 Actions 固定到官方版本提交。
 
-正式构建使用固定自签名代码签名证书，**没有 Developer ID 签名和 Apple 公证**，Release 说明会明确标注。部署目标校验不等于真实 macOS 10.13/11 的运行验收。流水线发布的 DMG 同时用于手动安装和内置更新；也可按下方步骤在本机签名。不会自动创建或更换发布密钥。
+正式构建使用固定自签名代码签名证书，**没有 Developer ID 签名和 Apple 公证**，Release 说明会明确标注。部署目标校验不等于真实 macOS 15 设备的运行验收。流水线发布的 DMG 同时用于手动安装和内置更新；也可按下方步骤在本机签名。不会自动创建或更换发布密钥。
 
 参考：[GitHub 托管 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)、[macOS 15 工具链清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)、[GitHub CLI Release 命令](https://cli.github.com/manual/gh_release_create)。
 
@@ -43,7 +43,7 @@ macOS 构建固定使用 `/Applications/Xcode_16.4.app/Contents/Developer`，保
 
 Release 保持整模块优化，因此一个文件的变化可能重编其所属模块以及必要的依赖者，不能保证只编译单个文件；未受影响的模块和独立的 rz/sz 辅助程序可继续复用。核心检查、固定签名、DMG 挂载、全部 Mach-O 架构与最低系统版本校验每次仍完整执行。参考 [Swift 整模块优化说明](https://www.swift.org/blog/whole-module-optimizations/)。
 
-正式构建缓存不包含 `Sources/OShell/TestSupport`，但始终包含核心检查源码；只有 Intel 兼容目标纳入 CryptoSwift。Swift 编译、lrzsz 编译和安装包组装使用独立脚本，调整版本号、DMG 组装或 UI 测试不会无故重编正式 Swift 产物。核心检查仍在每次构建执行，缓存命中也不会跳过。
+正式构建缓存不包含 `Sources/OShell/TestSupport`，但始终包含核心检查源码，加密统一使用系统 CryptoKit。Swift 编译、lrzsz 编译和安装包组装使用独立脚本，调整版本号、DMG 组装或 UI 测试不会无故重编正式 Swift 产物。核心检查仍在每次构建执行，缓存命中也不会跳过。
 
 更新签名工具固定使用 Python 3.12，并由 setup-python 缓存 pip 下载和 wheel。当前固定的 cryptography 版本没有 macOS Intel wheel，Intel 第一次运行仍需本地构建，随后复用已构建 wheel。仅构建模式也安装依赖并执行离线签名验证测试（合成密钥），便于公平比较耗时；实际发布更新签名仍仅在发布模式读取 Secret。
 
@@ -51,7 +51,7 @@ Release 保持整模块优化，因此一个文件的变化可能重编其所属
 
 ## 本地构建与 CI 安装包
 
-日常开发仅运行 `bash scripts/build.sh`，保留本机架构的 `dist/OShell.app`。两种兼容安装包通过上方 Actions 流程生成；需要构建但暂不发布时关闭 `publish`。
+日常开发仅运行 `bash scripts/build.sh`，保留本机架构的 `dist/OShell.app`。两种架构的安装包通过上方 Actions 流程生成；需要构建但暂不发布时关闭 `publish`。
 
 流水线使用 `package-release.py --flavor <目标> --format dmg --test-core`，并用 `verify-installers.py` 校验。高级手动打包命令仍可用于排查 CI，但不会由本地默认构建触发。带 UI 测试标记的应用不能打包或通过发布验证。
 
@@ -79,9 +79,9 @@ GitHub Actions 使用仓库 Secret `OSHELL_CODESIGN_P12`（加密 PKCS#12 的 Ba
 
 Sparkle 2.9.6 负责校验签名、下载、安装及重启。客户端通过随机路径的本机回环适配通道交给 Sparkle 处理，保留 `SURequireSignedFeed`、`SUVerifyUpdateBeforeExtraction` 及原有公钥。校验失败不降级。更新签名不等同于 Apple Developer ID 签名或公证。
 
-Apple Silicon 的 macOS 13+ 使用 arm64 包；所有受支持的 Intel 系统统一使用 macOS 10.13 Intel 包。Apple Silicon 的 macOS 11/12 不再提供新版安装包。客户端只下载匹配目标的 DMG。
+macOS 15+ 的 Apple Silicon 使用 arm64 包，Intel 使用 amd64 包；客户端只下载匹配目标的 DMG。两个目标均使用新的 `macOS15-*` 更新标识，避免旧系统误装。
 
-已安装的旧版现代 Intel 客户端仍查找 `macOS13-x86_64` 更新。后续 Release 不再提供该文件名，依赖它的客户端需手动安装一次 macOS 10.13 Intel 包，之后使用统一更新通道。历史 Release 中已有的兼容附件和签名元数据保持原样，站点工具仍能读取；不会补建或删除。历史目标定义仅保留用于读取旧发布和手动排查，不参与默认构建或发布。
+旧版用户需要在 macOS 15+ 上手动安装一次新版，随后使用新更新通道。旧系统停留在兼容分支对应版本。配置及凭据格式不随系统支持范围改变；共享配置仍须通过 Swift 与 Go 双向互通测试。
 
 CI 使用 `OSHELL_UPDATE_SIGNING_KEY` Secret。维护者本地的 `.release-private/` 不属于构建缓存，清理脚本不会删除其中的私钥。现有发行线不能随意替换公钥或生成新密钥；独立 fork 应使用自己的更新密钥。
 
@@ -97,11 +97,11 @@ CI 使用 `OSHELL_UPDATE_SIGNING_KEY` Secret。维护者本地的 `.release-priv
 
 ```sh
 python3 scripts/check-public-source.py --index
-python3 scripts/check-public-source.py --history main
+python3 scripts/check-public-source.py --history master
 python3 scripts/export-public-source.py --ref HEAD --output dist/source/OShell-source.tar.gz
 ```
 
-源码包只导出审核过的 Git 提交，不包含工作目录、私钥或构建缓存。`Vendor/` 包含 SwiftTerm 与 CryptoSwift 源码，以及 lrzsz 和 Sparkle 的上游源码归档。第三方调整记录见 `THIRD_PARTY_NOTICES.txt`。应用内“开源许可…”可查看 GPL-3.0 与第三方声明。
+源码包只导出审核过的 Git 提交，不包含工作目录、私钥或构建缓存。`Vendor/` 包含 SwiftTerm 源码，以及 lrzsz 和 Sparkle 的上游源码归档。第三方调整记录见 `THIRD_PARTY_NOTICES.txt`。应用内“开源许可…”可查看 GPL-3.0 与第三方声明。
 
 参考：[GPL-3.0 原文](../LICENSE)、[Sparkle 文档](https://sparkle-project.org/documentation/)、[GitHub Release 下载链接](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)。
 
@@ -126,17 +126,11 @@ Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按两种平�
 
 如果 Release 已发布但 Pages 部署失败，旧站点不被替换。修复原因后单独重跑“Publish static update site”，不要覆盖已有正式 Release。默认 GitHub Pages 的域名与地域可达性仍受网络条件影响，此方案解决 REST API 匿名额度问题，不保证所有网络均能访问。
 
-## 旧仓库更新入口
+## 旧发行线与仓库迁移
 
-`arnolixi/oshell` 作为兼容更新仓库继续使用。旧客户端请求 `https://arnolixi.github.io/oshell/updates/latest.json`，该站点由公开仓库 `arnolixi/arnolixi.github.io` 的 `master` 分支承载，仅包含公开更新信息。不要重建 `arnolixi/oshell` 仓库，以免移除 GitHub 到新仓库的迁移跳转。
+旧系统构建保留在 `codex/legacy-macos-10.13` 分支，不能覆盖已有标签或正式 Release。主线不再生成旧系统平台或旧安装包名称的别名。
 
-正式发布前，`publish-legacy-updates.py --release-output` 只读取并验证本地已校验的两份 DMG 及 Ed25519 签名，生成独立的 Pages 输出；不复制安装包，不修改发布说明、清单或校验和。暂存目录若包含额外 DMG、旧兼容别名清单或第三个平台的更新标记，会在发布前拒绝处理。发布器也只允许两个 DMG 和对应源码包，不能通过手工添加别名清单扩大附件集合。
-
-脚本继续使用现有 `OSHELL_UPDATE_SIGNING_KEY`，为旧仓库名生成两种平台的签名元数据；当前仓库的原始签名信息不变。旧站点保留旧仓库下载地址，由 GitHub 将下载跳转到新仓库。不会降低客户端仓库名、系统目标或签名校验。
-
-`deploy-legacy-pages.py` 通过专用 `OSHELL_LEGACY_PAGES_DEPLOY_KEY` 更新旧站点的 `.nojekyll`、`oshell/index.html` 和 `oshell/updates/latest.json`。该部署密钥仅对旧 Pages 仓库有写权限；更新签名私钥不进入该仓库。旧站点由 Pages 的分支发布处理，无定时轮询。相同内容不产生额外提交；旧版本拒绝覆盖新版本。
-
-手动修复使用 **Repair legacy update entry (no builds)** 工作流。它只读取最新正式 Release、重新生成签名元数据并部署新旧 Pages；不会改动不可变 Release、追加附件、重新编译、创建版本或移动标签。修复时只根据最新 Release 实际存在的已签名平台生成站点：旧发布已有兼容附件则继续读取，新发布只有两种包则不合成第三种入口。不能追加附件或承诺下一版本恢复旧别名。macOS 11/12 的 Apple Silicon 已不属于新版本支持范围，不通过伪造最低系统版本提供更新。
+仓库迁移与系统兼容是独立事项：已有配置中的 `arnolixi/oshell` 更新源仍受支持。`publish-legacy-updates.py` 和 `deploy-legacy-pages.py` 只维护原仓库的 Pages 入口，签名和发布的目标同样只有 macOS 15 的 arm64、amd64 两种，不构建旧系统版本。旧站点部署继续使用专用 `OSHELL_LEGACY_PAGES_DEPLOY_KEY`，不复制安装包、不修改已有 Release。**Repair legacy update entry (no builds)** 可从最新现代 Release 修复新旧站点；历史系统版本的站点维护请使用兼容分支。
 
 ## Actions 历史记录保留
 

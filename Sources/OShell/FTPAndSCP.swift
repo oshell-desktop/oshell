@@ -134,8 +134,8 @@ final class FTPBackend: RemoteFileBackend {
         let fd = Darwin.open(local.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { throw ModelError.invalid("本地文件已存在或无法写入。") }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); var complete = false
-        defer { try? handle.oshellClose(); if !complete { try? FileManager.default.removeItem(at: local) } }
-        _ = try curl(remote, directory: false, sink: handle) { bytes in progress(bytes, info?.size ?? 0) }; try handle.oshellClose(); complete = true
+        defer { try? handle.close(); if !complete { try? FileManager.default.removeItem(at: local) } }
+        _ = try curl(remote, directory: false, sink: handle) { bytes in progress(bytes, info?.size ?? 0) }; try handle.close(); complete = true
     }
     func cancel() { rateLimiter.cancel(); lock.lock(); cancelled = true; let task = active; lock.unlock(); task?.cancel() }
 }

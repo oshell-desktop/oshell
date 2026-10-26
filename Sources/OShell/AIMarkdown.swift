@@ -192,7 +192,7 @@ enum AIMarkdown {
                 let start = source.index(index, offsetBy: count)
                 if let end = source.range(of: marker, range: start..<source.endIndex) {
                     let code = String(source[start..<end.lowerBound]).replacingOccurrences(of: "\n", with: " ")
-                    result.append(NSAttributedString(string: code, attributes: [.font: NSFont.oshellMonospacedSystemFont(ofSize: font.pointSize - 1, weight: .regular), .foregroundColor: color, .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.14)]))
+                    result.append(NSAttributedString(string: code, attributes: [.font: NSFont.monospacedSystemFont(ofSize: font.pointSize - 1, weight: .regular), .foregroundColor: color, .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.14)]))
                     index = end.upperBound; continue
                 }
             }
@@ -241,7 +241,7 @@ enum AIMarkdown {
 }
 
 /// Native selectable text, sized from TextKit at the actual panel width. Works
-/// on macOS 10.13 as well as modern systems without a separate renderer process.
+/// without a separate renderer process.
 final class AIMarkdownTextView: NSTextView, NSTextViewDelegate {
     private let ownedStorage = NSTextStorage()
     private var measuredWidth: CGFloat = 0, measuredHeight: CGFloat = 20

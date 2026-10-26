@@ -40,7 +40,7 @@ enum ResumableTransferChecks {
         checks["downloadPartialRemovedOnSuccess"] = !FileManager.default.fileExists(atPath:down.localPartial.path)
         let corrupt = ResumableFileTransfer(local:source,remote:"/resume-corrupt.bin",upload:true)
         _ = try interrupted(corrupt)
-        let handle = try FileHandle(forWritingTo:remoteFile(corrupt.remotePartial)); try handle.oshellWrite(contentsOf:Data([255])); try handle.oshellClose()
+        let handle = try FileHandle(forWritingTo:remoteFile(corrupt.remotePartial)); try handle.write(contentsOf:Data([255])); try handle.close()
         let before = try Data(contentsOf:remoteFile(corrupt.remotePartial))
         checks["changedRemotePrefixRejected"] = try rejects(corrupt)
         checks["rejectedUploadDoesNotModifyPartial"] = try Data(contentsOf:remoteFile(corrupt.remotePartial)) == before
@@ -52,7 +52,7 @@ enum ResumableTransferChecks {
         checks["existingRemoteDestinationPreserved"] = try rejects(collision) && Data(contentsOf:remoteFile(collision.remote)) == Data("existing".utf8)
         let badDown = ResumableFileTransfer(local:local.appendingPathComponent("resume-bad-down.bin"),remote:up.remote,upload:false)
         _ = try interrupted(badDown)
-        let edit = try FileHandle(forWritingTo:badDown.localPartial); try edit.oshellWrite(contentsOf:Data([255])); try edit.oshellClose()
+        let edit = try FileHandle(forWritingTo:badDown.localPartial); try edit.write(contentsOf:Data([255])); try edit.close()
         checks["changedLocalPrefixRejected"] = try rejects(badDown)
         let link = ResumableFileTransfer(local:local.appendingPathComponent("resume-link-down.bin"),remote:up.remote,upload:false)
         _ = try interrupted(link)

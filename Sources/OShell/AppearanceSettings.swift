@@ -2,17 +2,18 @@
 // Copyright (c) 2026 OShell contributors
 
 import AppKit
+import UniformTypeIdentifiers
 import SwiftTerm
 import OShellCore
 
 enum ApplicationAppearance {
     static var theme = InterfaceTheme.system
     static var appearance: NSAppearance? {
-        switch theme { case .system: return nil; case .light: return NSAppearance(named: .aqua); case .dark: return NSAppearance(named: .oshellDark) }
+        switch theme { case .system: return nil; case .light: return NSAppearance(named: .aqua); case .dark: return NSAppearance(named: .darkAqua) }
     }
     static func apply(_ value: InterfaceTheme) {
         theme = value
-        if #available(macOS 10.14, *) { NSApp.appearance = appearance }
+        NSApp.appearance = appearance
         NSApp.windows.filter { $0.parent == nil }.forEach { PopupPresentation.applyAppearance(appearance, to: $0) }
     }
 }
@@ -36,7 +37,7 @@ extension TerminalColorScheme {
 /// Edits a local draft. The terminal preview has no PTY or network connection.
 final class AppearanceSettingsView: NSView {
     let theme = NSPopUpButton(), schemes = NSPopUpButton(), name = NSTextField()
-    let preview = TerminalView(frame: .zero, font: .oshellMonospacedSystemFont(ofSize: 12, weight: .regular))
+    let preview = TerminalView(frame: .zero, font: .monospacedSystemFont(ofSize: 12, weight: .regular))
     let deleteButton = NSButton(), copyButton = NSButton()
     private let note = NSTextField(labelWithString: "修改预设颜色会自动创建自定义副本；应用后更新全部终端，取消则不保存。")
     private(set) var wells = [NSColorWell]()
@@ -166,7 +167,7 @@ final class AppearanceSettingsView: NSView {
     @objc private func exportScheme() {
         do {
             stashName(); try selected.validate()
-            let panel = NSSavePanel(); panel.title = "导出终端配色"; panel.oshellJSONFilesOnly(); panel.nameFieldStringValue = "OShell-colors.json"
+            let panel = NSSavePanel(); panel.title = "导出终端配色"; panel.allowedContentTypes = [.json]; panel.nameFieldStringValue = "OShell-colors.json"
             guard panel.runPopupModal() == .OK, let url = panel.url else { return }
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; try PrivateFile.write(encoder.encode(selected), to: url)
         } catch { Dialogs.message(error.localizedDescription) }

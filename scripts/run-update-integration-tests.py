@@ -40,17 +40,17 @@ for mode in args.modes:
     item=ET.SubElement(channel,'item');ET.SubElement(item,'title').text='Test update'
     ET.SubElement(item,f'{{{NS}}}version').text=str(old_build if mode in ['no-update','static-no-update'] else new_build)
     ET.SubElement(item,f'{{{NS}}}shortVersionString').text=info['CFBundleShortVersionString']
-    ET.SubElement(item,f'{{{NS}}}minimumSystemVersion').text='13.0'
+    ET.SubElement(item,f'{{{NS}}}minimumSystemVersion').text='15.0'
     uses_release = mode in ['no-update','unsigned-feed','tampered-feed','static-no-update','static-tampered']
-    name=f"OShell-{info['CFBundleShortVersionString']}-macOS13-arm64.dmg"
+    name=f"OShell-{info['CFBundleShortVersionString']}-macOS15-arm64.dmg"
     archive_url=f"https://github.com/example-org/OShell/releases/download/v{info['CFBundleShortVersionString']}/{name}" if uses_release else f'http://127.0.0.1:{port}/update.dmg'
     ET.SubElement(item,'enclosure',{'url':archive_url,'length':str(archive.stat().st_size),'type':'application/octet-stream',f'{{{NS}}}edSignature':signature})
     ET.ElementTree(rss).write(feed,encoding='utf-8',xml_declaration=True)
     if mode!='unsigned-feed': run([SIGN,'--ed-key-file',key,'-p',feed])
     if mode in ['tampered-feed','static-tampered']:feed.write_bytes(feed.read_bytes().replace(b'Test update',b'Changed update'))
-    release=web/'release.json';release.write_text(json.dumps(dict(draft=False,prerelease=False,tag_name='v'+info['CFBundleShortVersionString'],body='<!-- oshell-update-v1:macOS13-arm64:'+base64.b64encode(feed.read_bytes()).decode()+' -->',assets=[dict(name=name,size=archive.stat().st_size,state='uploaded',browser_download_url=archive_url)])))
+    release=web/'release.json';release.write_text(json.dumps(dict(draft=False,prerelease=False,tag_name='v'+info['CFBundleShortVersionString'],body='<!-- oshell-update-v1:macOS15-arm64:'+base64.b64encode(feed.read_bytes()).decode()+' -->',assets=[dict(name=name,size=archive.stat().st_size,state='uploaded',browser_download_url=archive_url)])))
     if mode in ['static-no-update','static-tampered']:
-        release.write_text(json.dumps(dict(format='OShell.static-updates.v1',repository='example-org/OShell',version=info['CFBundleShortVersionString'],build=str(old_build if mode=='static-no-update' else new_build),platforms={'macOS13-arm64':dict(file=name,size=archive.stat().st_size,signedFeed=base64.b64encode(feed.read_bytes()).decode())})))
+        release.write_text(json.dumps(dict(format='OShell.static-updates.v1',repository='example-org/OShell',version=info['CFBundleShortVersionString'],build=str(old_build if mode=='static-no-update' else new_build),platforms={'macOS15-arm64':dict(file=name,size=archive.stat().st_size,signedFeed=base64.b64encode(feed.read_bytes()).decode())})))
     config_file=config/'configuration.json';config_file.write_text('{"profiles":[],"preferences":{}}');config_digest=hash_file(config_file)
     env=os.environ.copy();env.update(OSHELL_DATA_DIR=str(config),OSHELL_BACKGROUND_TEST='1',OSHELL_UPDATE_INTEGRATION_ROOT=folder,OSHELL_UPDATE_INTEGRATION_MODE=mode)
     env['OSHELL_UPDATE_INTEGRATION_RELEASE' if uses_release else 'OSHELL_UPDATE_INTEGRATION_FEED_FILE']=str(release if uses_release else (web/'missing.xml' if mode=='network-error' else feed))

@@ -49,7 +49,7 @@ final class ResumableFileTransfer {
     }
     func checkLocalSource(_ file: FileHandle) throws {
         let stamp = LocalStamp(try Self.info(file.fileDescriptor))
-        let current = try Self.openLocal(local, flags: O_RDONLY); defer { try? current.oshellClose() }
+        let current = try Self.openLocal(local, flags: O_RDONLY); defer { try? current.close() }
         guard stamp == localSource, LocalStamp(try Self.info(current.fileDescriptor)) == localSource else { throw ModelError.invalid("本地源文件已变化，请重新发起上传；已有片段保留。") }
     }
 }

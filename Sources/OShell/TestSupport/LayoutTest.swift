@@ -41,7 +41,7 @@ enum LayoutTest {
             originalPanes.enumerated().forEach { index, pane in
                 pane.terminal.process.send(data: Array("printf 'LAYOUT_MARKER_\(index)\\n'\r".utf8)[...])
             }
-            for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
                 window.appearance = NSAppearance(named: appearance)
                 for size in [NSSize(width: 760, height: 460), NSSize(width: 1180, height: 760)] {
                     window.setContentSize(size)

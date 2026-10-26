@@ -15,9 +15,7 @@ enum MarkedTextOverlayTest {
         terminal.nativeBackgroundColor = NSColor(srgbRed: 0.12, green: 0.13, blue: 0.17, alpha: 1)
         terminal.nativeForegroundColor = .white
         var renderers = [false]
-        #if !OSHELL_LEGACY
         renderers.append(true)
-        #endif
         let cases = renderers.flatMap { gpu in [(gpu, "ji", false), (gpu, "zhongwen", false), (gpu, "中文🙂", false), (gpu, String(repeating: "ni hao ", count: 24), true)] }
         var index = 0
         func overlay() -> NSTextView? { terminal.subviews.compactMap { $0 as? NSTextView }.first }

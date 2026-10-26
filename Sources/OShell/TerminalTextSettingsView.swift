@@ -11,7 +11,7 @@ final class TerminalTextSettingsView: NSView {
     static let sample = "ASCII   |AB|  中文 |中文|  全角 |ＡＢ|\r\nEmoji   |😀|  |❤️|  |👩🏽‍💻|  |🇨🇳|\r\n图标    |\u{e0a0}| main  |\u{f07b}| project\r\n模糊宽度 |Ω·α|\r\n文本样式 |♥\u{fe0e}|  彩色样式 |♥\u{fe0f}|\r\n\u{1b}[31m错误 RED\u{1b}[0m  \u{1b}[33m警告 YELLOW\u{1b}[0m  \u{1b}[38;2;70;180;240m24 位真彩色\u{1b}[0m"
     init(_ preferences: Preferences) {
         BundledTerminalFonts.register()
-        let font = NSFont(name: preferences.fontName, size: preferences.fontSize) ?? .oshellMonospacedSystemFont(ofSize: preferences.fontSize, weight: .regular)
+        let font = NSFont(name: preferences.fontName, size: preferences.fontSize) ?? .monospacedSystemFont(ofSize: preferences.fontSize, weight: .regular)
         preview = TerminalView(frame: NSRect(x: 0, y: 0, width: 760, height: 200), font: font,
                                options: TerminalOptions(scrollback: 0, enableSixelReported: false))
         super.init(frame: NSRect(x: 0, y: 0, width: 820, height: 520))

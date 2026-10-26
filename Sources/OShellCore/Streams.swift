@@ -143,7 +143,7 @@ public final class SessionLogger {
         queuedBytes += bytes.count; lock.unlock()
         queue.async { [self] in
             defer { lock.lock(); queuedBytes -= bytes.count; lock.unlock() }
-            do { try handle?.oshellWrite(contentsOf: filter.consume(bytes)) }
+            do { try handle?.write(contentsOf: filter.consume(bytes)) }
             catch {
                 lock.lock(); accepting = false; lock.unlock(); closeHandle()
                 DispatchQueue.main.async { [weak self] in self?.onError?("日志写入失败：\(error.localizedDescription)") }
@@ -155,5 +155,5 @@ public final class SessionLogger {
         queue.async { [self] in closeHandle() }
     }
     public func waitUntilFlushed() { queue.sync {} }
-    private func closeHandle() { try? handle?.oshellClose(); handle = nil }
+    private func closeHandle() { try? handle?.close(); handle = nil }
 }

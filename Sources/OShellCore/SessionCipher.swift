@@ -2,11 +2,7 @@
 // Copyright (c) 2026 OShell contributors
 
 import Foundation
-#if OSHELL_LEGACY
-import CryptoSwift
-#else
 import CryptoKit
-#endif
 import Security
 import CommonCrypto
 
@@ -78,15 +74,8 @@ public enum SessionCipher {
         var result = EncryptedPassword(salt: salt.base64EncodedString(), ciphertext: "", identity: identity)
         var derived = try key(master, salt: salt, iterations: result.iterations)
         defer { derived.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } }
-        #if OSHELL_LEGACY
-        let nonce = try random(12)
-        let mode = GCM(iv: Array(nonce), additionalAuthenticatedData: Array(binding(profile, result)), tagLength: 16, mode: .combined)
-        let cipher = try CryptoSwift.AES(key: derived, blockMode: mode, padding: .noPadding)
-        result.ciphertext = (nonce + Data(try cipher.encrypt(Array(password.utf8)))).base64EncodedString()
-        #else
         let sealed = try AES.GCM.seal(Data(password.utf8), using: SymmetricKey(data: derived), authenticating: binding(profile, result))
         result.ciphertext = sealed.combined!.base64EncodedString()
-        #endif
         return result
     }
     public static func decrypt(_ envelope: EncryptedPassword, master: String, profile: SessionProfile) throws -> String {
@@ -98,13 +87,7 @@ public enum SessionCipher {
             guard combined.count >= 28 else { throw ModelError.invalid("加密密码格式无效。") }
             var derived = try key(master, salt: salt, iterations: envelope.iterations)
             defer { derived.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } }
-            #if OSHELL_LEGACY
-            let mode = GCM(iv: Array(combined.prefix(12)), additionalAuthenticatedData: Array(binding(profile, envelope)), tagLength: 16, mode: .combined)
-            let cipher = try CryptoSwift.AES(key: derived, blockMode: mode, padding: .noPadding)
-            let data = Data(try cipher.decrypt(Array(combined.dropFirst(12))))
-            #else
             let data = try AES.GCM.open(AES.GCM.SealedBox(combined: combined), using: SymmetricKey(data: derived), authenticating: binding(profile, envelope))
-            #endif
             guard let password = String(data: data, encoding: .utf8) else { throw ModelError.invalid("密码编码无效。") }
             return password
         } catch { throw ModelError.invalid(envelope.localKeyID == nil ? "主密码不正确，或会话密码/连接信息已被修改。" : "本机密钥与密码或连接信息不匹配，无法解密。") }

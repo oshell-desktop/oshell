@@ -4,9 +4,7 @@ import AppKit
 import LocalAuthentication
 import Security
 import OShellCore
-#if !OSHELL_LEGACY
 import CryptoKit
-#endif
 
 protocol BiometricRecordStore {
     func read(account: String) throws -> Data
@@ -39,7 +37,7 @@ final class BiometricKeychainStore: BiometricRecordStore {
     init(service: String = (Bundle.main.bundleIdentifier ?? "app.oshell") + ".touch-id") { self.service = service }
     private func query(_ account: String) -> [String: Any] {
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        if #available(macOS 10.15, *) { query[kSecUseDataProtectionKeychain as String] = false }
+        query[kSecUseDataProtectionKeychain as String] = false
         return query
     }
     func read(account: String) throws -> Data {
@@ -89,8 +87,6 @@ struct BiometricEnvelope: Codable {
     }
 }
 
-#if !OSHELL_LEGACY
-@available(macOS 10.15, *)
 enum BiometricCipher {
     static func seal(_ master: String, scope: String, context: LAContext) throws -> Data {
         var error: Unmanaged<CFError>?
@@ -122,7 +118,6 @@ enum BiometricCipher {
         return master
     }
 }
-#endif
 
 /// Cancellation is checked before delivering a password; late hardware replies
 /// must never override manual input or reopen a dismissed unlock window.
@@ -172,15 +167,10 @@ final class BiometricUnlock: BiometricAuthenticating {
         return PlatformDigest.sha256(data).map { String(format: "%02x", $0) }.joined()
     }
     var unavailableReason: String? {
-#if !OSHELL_LEGACY
-        if #available(macOS 10.15, *) {
-            guard SecureEnclave.isAvailable else { return "此 Mac 不支持 Secure Enclave，请使用主密码解锁。" }
-            var error: NSError?
-            guard LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else { return "Touch ID 当前不可用，请先在 macOS 系统设置中配置指纹，或使用主密码。" }
-            return nil
-        }
-#endif
-        return "此兼容版本不支持 Touch ID 快捷解锁，请使用主密码；支持的 Mac 可安装 macOS 11 或更新系统的 OShell 版本。"
+        guard SecureEnclave.isAvailable else { return "此 Mac 不支持 Secure Enclave，请使用主密码解锁。" }
+        var error: NSError?
+        guard LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else { return "Touch ID 当前不可用，请先在 macOS 系统设置中配置指纹，或使用主密码。" }
+        return nil
     }
     func savePrepared(_ data: Data, binding: String, expectedScope: String) throws {
         guard scope == expectedScope else { throw BiometricFailure(message: "数据目录已变化，请重试。") }
@@ -204,34 +194,27 @@ final class BiometricUnlock: BiometricAuthenticating {
             BiometricDelivery.onMain { if !request.isCancelled { completion(.failure(error)) } }
             return request
         }
-#if !OSHELL_LEGACY
-        if #available(macOS 10.15, *) {
-            let context = LAContext(); context.localizedReason = "使用 Touch ID 解锁 OShell 主密码"
-            context.localizedFallbackTitle = "输入主密码"; context.touchIDAuthenticationAllowableReuseDuration = 0
-            let request = BiometricRequest(cancellation: { context.invalidate() })
-            let store = self.store
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = Result {
-                    try request.check()
-                    let data = try store.read(account: scope)
-                    try request.check()
-                    let password = try BiometricCipher.open(data, scope: scope, context: context)
-                    try request.check(); return password
-                }
-                context.invalidate()
-                BiometricDelivery.onMain {
-                    guard !request.isCancelled else { return }
-                    guard self.scope == scope, self.bindings[scope] == binding else {
-                        completion(.failure(BiometricFailure(message: "指纹解锁设置已变化，请输入主密码。"))); return
-                    }
-                    completion(result)
-                }
+        let context = LAContext(); context.localizedReason = "使用 Touch ID 解锁 OShell 主密码"
+        context.localizedFallbackTitle = "输入主密码"; context.touchIDAuthenticationAllowableReuseDuration = 0
+        let request = BiometricRequest(cancellation: { context.invalidate() })
+        let store = self.store
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                try request.check()
+                let data = try store.read(account: scope)
+                try request.check()
+                let password = try BiometricCipher.open(data, scope: scope, context: context)
+                try request.check(); return password
             }
-            return request
+            context.invalidate()
+            BiometricDelivery.onMain {
+                guard !request.isCancelled else { return }
+                guard self.scope == scope, self.bindings[scope] == binding else {
+                    completion(.failure(BiometricFailure(message: "指纹解锁设置已变化，请输入主密码。"))); return
+                }
+                completion(result)
+            }
         }
-#endif
-        let request = BiometricRequest()
-        BiometricDelivery.onMain { if !request.isCancelled { completion(.failure(BiometricFailure(message: "此版本请使用主密码解锁。"))) } }
         return request
     }
     static func message(for error: Error) -> String {

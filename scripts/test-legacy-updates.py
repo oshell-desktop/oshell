@@ -25,7 +25,7 @@ class CompatibilityTests(unittest.TestCase):
         self.key = Ed25519PrivateKey.generate()
         self.public = base64.b64encode(self.key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode()
         self.release = dict(draft=False,prerelease=False,tag_name='v1.2.3',body='Original release notes\n',assets=[])
-        for flavor in ['legacy','arm64']:
+        for flavor in ['arm64','amd64']:
             target = LEGACY.PAGES.TARGETS[flavor]
             name = f'OShell-1.2.3-{target.suffix}.dmg'
             url = f'https://github.com/{LEGACY.CURRENT}/releases/download/v1.2.3/{name}'
@@ -40,7 +40,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def add_historical_alias(self):
         # Only a fixture for releases already published by the old workflow.
-        platform = LEGACY.PAGES.document(self.release, LEGACY.CURRENT, self.public)['platforms']['macOS10.13-Intel']
+        platform = LEGACY.PAGES.document(self.release, LEGACY.CURRENT, self.public)['platforms']['macOS15-amd64']
         name = 'OShell-1.2.3-macOS13-x86_64.dmg'
         url = f'https://github.com/{LEGACY.CURRENT}/releases/download/v1.2.3/{name}'
         feed = LEGACY.signed_xml(platform['signedFeed'], self.key, url=url, minimum='13.0')
@@ -51,7 +51,7 @@ class CompatibilityTests(unittest.TestCase):
     def stage(self, root):
         (root/'release-manifest.json').write_text(json.dumps(dict(tag='v1.2.3')))
         (root/'RELEASE_NOTES.md').write_text(self.release['body'])
-        for flavor in ['legacy','arm64']:
+        for flavor in ['arm64','amd64']:
             suffix=LEGACY.PAGES.TARGETS[flavor].suffix
             (root/f'OShell-1.2.3-{suffix}.dmg').write_bytes(b'synthetic installer '+flavor.encode())
         (root/'OShell-1.2.3-source.tar.gz').write_bytes(b'synthetic source')
@@ -67,7 +67,7 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(body,original['body'])
         for site,repo in [(current,LEGACY.CURRENT),(old,LEGACY.LEGACY)]:
             self.assertEqual(site['repository'],repo)
-            self.assertEqual(set(site['platforms']),{'macOS10.13-Intel','macOS13-arm64'})
+            self.assertEqual(set(site['platforms']),{'macOS15-amd64','macOS15-arm64'})
             for name,platform in site['platforms'].items():
                 xml=ET.fromstring(base64.b64decode(platform['signedFeed']))
                 url=xml.find('./channel/item/enclosure').get('url')
@@ -111,7 +111,7 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertEqual(self.snapshot(root),before)
 
     def test_both_local_installer_signatures_are_required(self):
-        for flavor in ['legacy','arm64']:
+        for flavor in ['arm64','amd64']:
             with self.subTest(flavor=flavor), tempfile.TemporaryDirectory() as folder:
                 root=Path(folder);self.stage(root)
                 path=root/f'OShell-1.2.3-{LEGACY.PAGES.TARGETS[flavor].suffix}.dmg'
@@ -120,13 +120,13 @@ class CompatibilityTests(unittest.TestCase):
                 with self.assertRaises(Exception): LEGACY.prepare_local(root,'v1.2.3',self.public,self.key)
                 self.assertEqual(self.snapshot(root),before)
 
-    def test_existing_release_with_alias_remains_readable_and_unchanged(self):
+    def test_historical_alias_is_not_republished_or_mutated(self):
         feed=self.add_historical_alias();before=copy.deepcopy(self.release)
         current,old=LEGACY.prepare_existing(self.release,'v1.2.3',self.public,self.key)
         self.assertEqual(self.release,before)
-        self.assertEqual(current['platforms']['macOS13-x86_64']['signedFeed'],feed)
+        self.assertNotIn('macOS13-x86_64', current['platforms'])
         self.assertEqual(set(current['platforms']),set(old['platforms']))
-        self.assertEqual(len(current['platforms']),3)
+        self.assertEqual(len(current['platforms']),2)
         self.assertEqual(LEGACY.PAGES.document(self.release,LEGACY.CURRENT,self.public),current)
 
     def test_existing_two_package_release_does_not_gain_an_alias(self):
@@ -154,7 +154,7 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertEqual(list(output.rglob('*.dmg')),[])
                 for site in ['current','legacy']:
                     value=json.loads((output/site/'updates/latest.json').read_text())
-                    self.assertEqual(len(value['platforms']),3 if historical else 2)
+                    self.assertEqual(len(value['platforms']),2)
 
     def test_wrong_key_rejected(self):
         with self.assertRaises(ValueError): LEGACY.prepare(self.release,self.public,Ed25519PrivateKey.generate())
@@ -190,7 +190,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_no_extra_compilation_job(self):
         from release_targets import RELEASE_FLAVORS
-        self.assertEqual(RELEASE_FLAVORS,('legacy','arm64'))
+        self.assertEqual(RELEASE_FLAVORS,('arm64','amd64'))
         workflow=Path(__file__).resolve().parents[1]/'.github/workflows/repair-update-compatibility.yml'
         self.assertNotIn('package-release.py',workflow.read_text())
         self.assertNotIn('macos-',workflow.read_text())

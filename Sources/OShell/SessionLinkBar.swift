@@ -55,7 +55,7 @@ final class SessionLinkBar: NSView {
         var folder = false
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func draw(_ dirtyRect: NSRect) {
-            NSColor.oshellAccentColor.withAlphaComponent(folder ? 0.22 : 1).setFill()
+            NSColor.controlAccentColor.withAlphaComponent(folder ? 0.22 : 1).setFill()
             NSBezierPath(roundedRect: bounds, xRadius: 3, yRadius: 3).fill()
         }
     }
@@ -140,7 +140,7 @@ final class SessionLinkBar: NSView {
         addButton.toolTip = sessionName.map { "添加到链接栏：" + $0 } ?? "添加到链接栏（请先选择会话标签）"
     }
     private static func addLinkImage() -> NSImage {
-        // Template artwork also works on macOS 10.13, without SF Symbols.
+        // Template artwork follows the surrounding control tint.
         let image = NSImage(size: NSSize(width: 24, height: 20), flipped: false) { _ in
             NSColor.black.setStroke()
             let back = NSBezierPath(); back.lineWidth = 1.6; back.lineCapStyle = .round; back.lineJoinStyle = .round
@@ -160,7 +160,7 @@ final class SessionLinkBar: NSView {
             button.isBordered = false; button.font = .systemFont(ofSize: 12); button.lineBreakMode = .byTruncatingTail
             let symbol: String
             switch entry.target { case .folder: symbol = "folder"; case .link: symbol = "link"; case .session: symbol = "terminal" }
-            button.image = NSImage(oshellSymbolName: symbol, accessibilityDescription: nil)
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             button.imagePosition = .imageLeading; button.imageScaling = .scaleProportionallyDown
             button.toolTip = entry.detail; button.setAccessibilityLabel(entry.title)
             button.target = button; button.action = #selector(LinkButton.activate)

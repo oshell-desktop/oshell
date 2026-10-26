@@ -9,7 +9,7 @@
 import Foundation
 import CoreGraphics
 import CoreText
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
 import MetalKit
 #endif
 #if canImport(ImageIO)
@@ -653,7 +653,7 @@ extension TerminalView {
                                                   object: nil, queue: .main) { [weak self] _ in
             self?.textBlinkApplicationActive = true
             self?.updateTextBlinkLifecycle()
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
             if self?.isMetalRendererEligibleForRetry == true {
                 self?.requestMetalDisplay()
             }
@@ -681,7 +681,7 @@ extension TerminalView {
                                                object: nil, queue: .main) { [weak self] _ in
             self?.textBlinkApplicationActive = true
             self?.updateTextBlinkLifecycle()
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
             if self?.isMetalRendererEligibleForRetry == true {
                 self?.requestMetalDisplay()
             }
@@ -855,7 +855,7 @@ extension TerminalView {
                 caretView.caretTextColor = caretView.defaultCaretTextColor
             }
         }
-#if canImport(MetalKit) && !OSHELL_LEGACY && os(macOS)
+#if canImport(MetalKit) && os(macOS)
         queueMetalDisplay()
 #endif
     }
@@ -2392,7 +2392,7 @@ extension TerminalView {
             // time, and MTKView is paused — without an explicit redraw the
             // cursor stays at its old screen position until something else
             // dirties a row. Trigger a redraw if the cursor moved.
-            #if canImport(MetalKit) && !OSHELL_LEGACY
+            #if canImport(MetalKit)
             if metalView != nil {
                 let buffer = terminal.displayBuffer
                 let cursor = (x: buffer.x, y: buffer.yBase + buffer.y, hidden: terminal.cursorHidden)
@@ -2467,7 +2467,7 @@ extension TerminalView {
                 region = CGRect (x: 0, y: newY, width: frame.width, height: region.maxY - newY)
             }
         }
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
         if metalView != nil {
             let buffer = displayBuffer
             if buffer.lines.count == 0 {
@@ -2507,7 +2507,7 @@ extension TerminalView {
         #else
         // TODO iOS: need to update the code above, but will do that when I get some real
         // life data being fed into it.
-        #if canImport(MetalKit) && !OSHELL_LEGACY
+        #if canImport(MetalKit)
         if metalView != nil {
             metalDirtyRange = metalVisibleRange()
             let buffer = terminal.displayBuffer
@@ -2617,7 +2617,7 @@ extension TerminalView {
         }
     }
 
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
     func requestMetalDisplay() {
         guard let metalView = metalView else {
             return

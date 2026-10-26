@@ -17,9 +17,6 @@ enum Dialogs {
         size.selectItem(withTitle: String(Int(current.fontSize)))
         let history = ScrollbackSettingsControl(value: current.scrollback)
         let gpu = NSButton(checkboxWithTitle: "启用 GPU 加速", target: nil, action: nil); gpu.state = current.metal ? .on : .off
-        #if OSHELL_LEGACY
-        gpu.state = .off; gpu.isEnabled = false; gpu.title = "旧系统使用标准终端渲染"
-        #endif
         let clock = TerminalClockSettingsView(current)
         defer { clock.dispose() }
         let zmodem = NSButton(checkboxWithTitle: "自动识别 rz/sz 文件传输", target: nil, action: nil); zmodem.state = current.autoZmodem ? .on : .off
@@ -73,9 +70,6 @@ enum Dialogs {
         prefs.fontName = font.selectedItem?.representedObject as? String ?? ""
         prefs.fontSize = Double(size.titleOfSelectedItem ?? "13") ?? 13
         prefs.metal = gpu.state == .on; prefs.autoZmodem = zmodem.state == .on
-        #if OSHELL_LEGACY
-        prefs.metal = current.metal
-        #endif
         prefs.copyOnSelect = autoCopy.state == .on; prefs.rightClickPaste = rightPaste.state == .on; prefs.confirmMultilinePaste = previewPaste.state == .on
         prefs.copyTrimLeadingWhitespace = trimLeading.state == .on; prefs.copyTrimTrailingWhitespace = trimTrailing.state == .on
         textView.apply(to: &prefs)

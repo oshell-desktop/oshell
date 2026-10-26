@@ -160,7 +160,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
                   self.tabs.contains(where: { $0.layout.panes.contains { $0.aiSession === session } }) else { return }
             self.refreshTabTitles()
             let unread = self.tabs.contains { $0.layout.panes.contains { $0.aiSession?.unread == true } }
-            self.aiButton.oshellContentTintColor = unread ? .systemOrange : .labelColor
+            self.aiButton.contentTintColor = unread ? .systemOrange : .labelColor
             self.aiButton.setAccessibilityValue(unread ? "有 AI 结果待查看" : "")
         }
         pinsObserver = NotificationCenter.default.addObserver(forName: SessionPins.didChange, object: nil, queue: .main) { [weak self] _ in
@@ -199,7 +199,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     }
     private func iconButton(_ title: String, _ symbol: String, _ action: Selector) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
-        button.image = NSImage(oshellSymbolName: symbol, accessibilityDescription: title)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         button.imagePosition = .imageLeading; button.bezelStyle = .texturedRounded; button.controlSize = .regular
         return button
     }
@@ -237,7 +237,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         tools.menu = toolsMenu
         let find = iconButton("搜索", "magnifyingglass", #selector(findInTerminal))
         recordButton.title = "记录"; recordButton.target = self; recordButton.action = #selector(toggleLogging)
-        recordButton.image = NSImage(oshellSymbolName: "record.circle", accessibilityDescription: "日志记录")
+        recordButton.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "日志记录")
         recordButton.imagePosition = .imageLeading; recordButton.bezelStyle = .texturedRounded
         let settings = iconButton("", "gearshape", #selector(showPreferences)); settings.toolTip = "设置"
         configurePropertyButtons(); configureSyncStatusButton()
@@ -251,7 +251,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         updateButton.target = self; updateButton.action = #selector(checkForUpdates)
         updateButton.image = NSImage(named: NSImage.refreshTemplateName)
         updateButton.imagePosition = .imageLeading; updateButton.bezelStyle = .texturedRounded
-        sessionSidebarButton.image = NSImage(oshellSymbolName: "sidebar.left", accessibilityDescription: "会话列表")
+        sessionSidebarButton.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "会话列表")
         sessionSidebarButton.bezelStyle = .texturedRounded; sessionSidebarButton.setButtonType(.toggle)
         sessionSidebarButton.target = self; sessionSidebarButton.action = #selector(toggleSessionSidebar)
         sessionSidebarButton.identifier = .init("toolbar.sessionSidebar"); sessionSidebarButton.setAccessibilityLabel("显示 / 隐藏会话列表")
@@ -269,7 +269,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let toolbarHost = WorkspaceToolbarHost(toolbar)
         let workspace = wrapWithAI(wrapWithSessionSidebar(makeWorkspace()))
         syncIndicator.textColor = .systemOrange; syncIndicator.font = .systemFont(ofSize: 11, weight: .semibold)
-        stopSyncButton.image = NSImage(oshellSymbolName: "stop.circle.fill", accessibilityDescription: "停止同步输入"); stopSyncButton.isBordered = false; stopSyncButton.oshellContentTintColor = .systemOrange; stopSyncButton.toolTip = "停止同步输入"; stopSyncButton.setAccessibilityLabel("停止同步输入"); stopSyncButton.target = self; stopSyncButton.action = #selector(stopSyncInput)
+        stopSyncButton.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "停止同步输入"); stopSyncButton.isBordered = false; stopSyncButton.contentTintColor = .systemOrange; stopSyncButton.toolTip = "停止同步输入"; stopSyncButton.setAccessibilityLabel("停止同步输入"); stopSyncButton.target = self; stopSyncButton.action = #selector(stopSyncInput)
         syncIndicator.isHidden = true; stopSyncButton.isHidden = true
         syncIndicator.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         stopSyncButton.widthAnchor.constraint(equalToConstant: 22).isActive = true

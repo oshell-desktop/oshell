@@ -152,7 +152,7 @@ final class TerminalProgressBarView: ProgressBarBaseView {
             return .systemOrange
         default:
             #if os(macOS)
-            return .swiftTermAccentColor
+            return .controlAccentColor
             #else
             return tintColor ?? .systemBlue
             #endif

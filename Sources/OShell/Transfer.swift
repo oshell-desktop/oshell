@@ -88,7 +88,7 @@ final class ZmodemTransfer {
             guard let self else { return }
             self.trace("exit \(process.terminationStatus)")
             self.lock.lock(); self.stopped = true; self.exitStatus = process.terminationStatus; self.lock.unlock()
-            self.writer.async { try? self.input.fileHandleForWriting.oshellClose() }
+            self.writer.async { try? self.input.fileHandleForWriting.close() }
             self.completeIfDrained()
         }
         try task.run()
@@ -170,7 +170,7 @@ final class ZmodemTransfer {
         let packet = protocolData
         writer.async { [self] in
             defer { lock.lock(); pendingBytes -= packet.count; lock.unlock() }
-            do { try input.fileHandleForWriting.oshellWrite(contentsOf: packet) }
+            do { try input.fileHandleForWriting.write(contentsOf: packet) }
             catch { cancel() }
         }
         return true

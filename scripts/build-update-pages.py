@@ -19,12 +19,7 @@ def document(release, repository, public_key, flavors=None):
         raise ValueError('A published stable Release is required')
     key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key, validate=True))
     platforms, builds = {}, set()
-    if flavors is None:
-        flavors = list(RELEASE_FLAVORS)
-        # Read aliases already present in historical Releases. New releases
-        # publish only RELEASE_FLAVORS and never synthesize an alias here.
-        if '<!-- oshell-update-v1:macOS13-x86_64:' in release.get('body', ''):
-            flavors.append('intel')
+    if flavors is None: flavors = RELEASE_FLAVORS
     for flavor in flavors:
         target = TARGETS[flavor]
         matches = re.findall(r'<!-- oshell-update-v1:' + re.escape(target.suffix) + r':([A-Za-z0-9+/=]+) -->', release.get('body', ''))

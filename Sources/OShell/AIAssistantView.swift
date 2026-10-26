@@ -109,9 +109,9 @@ final class AIAssistantView: InterfaceSurfaceView, NSTextViewDelegate {
         func icon(_ symbol: String, _ title: String, _ id: String, _ action: @escaping () -> Void) -> NSButton {
             let control = button(title, action); control.identifier = .init(id)
             control.bezelStyle = .recessed; (control.cell as? NSButtonCell)?.showsBorderOnlyWhileMouseInside = true
-            control.image = NSImage(oshellSymbolName: symbol, accessibilityDescription: title)
+            control.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
             control.image?.size = NSSize(width: 15, height: 15); control.imagePosition = .imageOnly
-            control.imageScaling = .scaleProportionallyDown; control.oshellContentTintColor = .secondaryLabelColor
+            control.imageScaling = .scaleProportionallyDown; control.contentTintColor = .secondaryLabelColor
             control.toolTip = title; control.setAccessibilityLabel(title)
             NSLayoutConstraint.activate([control.widthAnchor.constraint(equalToConstant: 28), control.heightAnchor.constraint(equalToConstant: 26)])
             return control
@@ -136,9 +136,9 @@ final class AIAssistantView: InterfaceSurfaceView, NSTextViewDelegate {
         }
         approval.identifier = .init("ai.approval"); approval.target = self; approval.action = #selector(showApprovalMenu)
         approval.isBordered = false; approval.font = AIComposerTypography.controlFont
-        approval.image = NSImage(oshellSymbolName: "checkmark.shield", accessibilityDescription: "SSH 审批")
+        approval.image = NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: "SSH 审批")
         approval.image?.size = NSSize(width: 15, height: 15); approval.imagePosition = .imageLeading
-        approval.oshellContentTintColor = .secondaryLabelColor
+        approval.contentTintColor = .secondaryLabelColor
         modelPicker.cell = AIComposerPickerCell(textCell: "", pullsDown: false)
         let effortCell = AIComposerPickerCell(textCell: "", pullsDown: false); effortCell.showsEffort = true; effortPicker.cell = effortCell
         (modelPicker.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
@@ -655,7 +655,7 @@ final class AIAssistantView: InterfaceSurfaceView, NSTextViewDelegate {
     private func clear(_ stack: NSStackView) { stack.arrangedSubviews.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() } }
     private func add(_ view: NSView, to stack: NSStackView) { stack.addArrangedSubview(view); view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
     private func codeCard(language: String, source: String, closed: Bool, session: AIAssistantSession, allowCommand: Bool) -> NSView {
-        let code = AIMarkdownTextView(NSAttributedString(string: source, attributes: [.font: NSFont.oshellMonospacedSystemFont(ofSize: 12, weight: .regular), .foregroundColor: NSColor.labelColor]))
+        let code = AIMarkdownTextView(NSAttributedString(string: source, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular), .foregroundColor: NSColor.labelColor]))
         code.identifier = .init("ai.markdown.code")
         let languageLabel = label(language.isEmpty ? "代码" : String(language.prefix(40)), font: .systemFont(ofSize: 10, weight: .medium)); languageLabel.textColor = .secondaryLabelColor
         let copy = AIActionButton("复制代码") { [weak self] in self?.copy(source) }; copy.identifier = .init("ai.code.copy")

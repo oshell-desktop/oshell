@@ -58,7 +58,7 @@ work/test-tools/bin/python scripts/run-webdav-tests.py
 
 这些脚本默认使用测试应用和一次性本地账号。保存密码认证及明文不落盘检查统一由 `run-session-tests.py` 覆盖，移除了需手工启动固定端口服务的旧密码测试入口。更新、文件传输、代理、隧道和内存循环等专用脚本继续保留；它们与通用 UI 检查的测试服务需求不同。加密启动测试会自行生成临时样本，不依赖维护者工作目录中的文件。
 
-确实需要单独调试 Intel 兼容 UI 时，可使用 `package-release.py --flavor legacy --apps-only --tests`，输出 `work/test-release/legacy/OShell.app`；测试应用禁止打包或发布。常规开发无需执行此步骤。
+需要单独调试 Intel UI 时，可使用 `package-release.py --flavor amd64 --apps-only --tests`，输出 `work/test-release/amd64/OShell.app`；测试应用禁止打包或发布。常规开发无需执行此步骤。
 
 ## 更新 README 截图
 
@@ -111,7 +111,7 @@ AI 发送授权验证：`bash scripts/build.sh --tests` 后执行 `python3 scrip
 
 渠道预设由 `AIProviderPreset.swift` 提供本机配置与兼容参数，`AIProviderPresetTest.swift` 验证预设切换清空旧密钥、同一预设与自定义编辑保留、v1/v2 迁移及 v3 加密存储、输出上限授权失效、真实客户端标识、服务端拒绝后不回退。回环接收端逐渠道核对密钥归属和 max_tokens；不得用其他工具的 User-Agent 伪装 OShell，也不把本机测试当成套餐客户端授权或真实供应商联调。
 
-AI Markdown 使用本机 AppKit / TextKit 渲染，不使用 WebView 或 HTML 导入器，不加载远程图片；仅接受用户主动点击的 HTTP/HTTPS 链接。`AIMarkdownTest.swift` 随 `run-ai-tests.py` 检查排版、表格、窄面板、代码原文和围栏边界，并由真实助手界面验证命令卡、授权与回复顺序。发布仍需保留 macOS 10.13 的编译兼容性。
+AI Markdown 使用本机 AppKit / TextKit 渲染，不使用 WebView 或 HTML 导入器，不加载远程图片；仅接受用户主动点击的 HTTP/HTTPS 链接。`AIMarkdownTest.swift` 随 `run-ai-tests.py` 检查排版、表格、窄面板、代码原文和围栏边界，并由真实助手界面验证命令卡、授权与回复顺序。主线部署目标为 macOS 15.0，发布前须验证 arm64 与 amd64 两种架构。旧系统维护使用 `codex/legacy-macos-10.13` 分支。
 
 `AIHistoryContinuationTest.swift` 覆盖真实 v1 加密文件读取、v2 文字来源和依赖恢复、图片与派生回答剔除、撤回／清空的持久化、独立续聊切换及 UI 授权。`run-ai-tests.py` 在回环服务端额外核对续聊默认不重发历史、选中资料才发送、清空后不再发送，并继续逐请求比较授权摘要。AI 历史 v2 是本机格式，不是共享配置 v2。
 

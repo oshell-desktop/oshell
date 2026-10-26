@@ -5,18 +5,16 @@ import Foundation
 import Darwin
 
 public enum UpdateFlavor: String {
-    case intel = "macOS10.13-Intel", arm64 = "macOS13-arm64", intelModern = "macOS13-x86_64", universal = "macOS11-Universal"
-    public static func select(appleSilicon: Bool, majorOS: Int) -> UpdateFlavor {
-        if appleSilicon { return majorOS >= 13 ? .arm64 : .universal }
-        // One Intel package supports macOS 10.13 and later.
-        return .intel
+    case arm64 = "macOS15-arm64", amd64 = "macOS15-amd64"
+    public static func select(appleSilicon: Bool) -> UpdateFlavor {
+        appleSilicon ? .arm64 : .amd64
     }
     public static var current: UpdateFlavor {
         var value: Int32 = 0, size = MemoryLayout<Int32>.size
         let appleSilicon = sysctlbyname("hw.optional.arm64", &value, &size, nil, 0) == 0 && value == 1
-        return select(appleSilicon: appleSilicon, majorOS: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+        return select(appleSilicon: appleSilicon)
     }
-    public var minimumOS: String { self == .intel ? "10.13" : (self == .universal ? "11.0" : "13.0") }
+    public var minimumOS: String { "15.0" }
 }
 public struct UpdateSource: Equatable {
     public let repository: String

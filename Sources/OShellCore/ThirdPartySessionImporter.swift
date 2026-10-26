@@ -65,10 +65,10 @@ public enum ThirdPartySessionImporter {
             guard format.extensions.contains(ext) else { return }
             let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
             guard descriptor >= 0 else { builder.issue(path, "文件无法读取或是符号链接。", skipped: true); return }
-            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true); defer { try? handle.oshellClose() }
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true); defer { try? handle.close() }
             var info = stat()
             guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size >= 0, info.st_size <= maximumBytes else { throw ModelError.invalid("请选择普通会话文件，单次导入总大小不超过 64 MiB。") }
-            let data = try handle.oshellRead(upToCount: min(maximumBytes - bytesRead + 1, Int(info.st_size) + 1)) ?? Data()
+            let data = try handle.read(upToCount: min(maximumBytes - bytesRead + 1, Int(info.st_size) + 1)) ?? Data()
             bytesRead += data.count
             guard bytesRead <= maximumBytes else { throw ModelError.invalid("单次导入总大小超过 64 MiB。") }
             guard data.count == Int(info.st_size) else { throw ModelError.invalid("文件在读取期间发生变化，请先保存并关闭源客户端，再重新导入。") }

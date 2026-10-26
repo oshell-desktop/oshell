@@ -44,7 +44,7 @@ extension WorkspaceController {
     }
     func configureGlobalProxyButton() {
         globalProxyButton.bezelStyle = .texturedRounded; globalProxyButton.setButtonType(.toggle)
-        globalProxyButton.image = NSImage(oshellSymbolName: "network", accessibilityDescription: "全局代理")
+        globalProxyButton.image = NSImage(systemSymbolName: "network", accessibilityDescription: "全局代理")
         globalProxyButton.imagePosition = .imageOnly
         globalProxyButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         globalProxyButton.identifier = .init("toolbar.globalProxy")
@@ -62,12 +62,12 @@ extension WorkspaceController {
             let validation = GlobalProxySettings(enabled: true, proxyID: value.proxyID)
             let valid = proxy != nil && (try? validation.resolve(SessionProfile.localForProxyValidation, configuration: configuration)) != nil
             globalProxyButton.state = value.enabled ? .on : .off
-            globalProxyButton.oshellContentTintColor = value.enabled ? (valid ? .systemBlue : .systemOrange) : .secondaryLabelColor
+            globalProxyButton.contentTintColor = value.enabled ? (valid ? .systemBlue : .systemOrange) : .secondaryLabelColor
             let state = value.enabled ? (valid ? "已开启 · " + proxy!.name : "配置失效，连接将被阻止") : (valid ? "已关闭 · " + proxy!.name : "未配置")
             globalProxyButton.setAccessibilityLabel("全局代理：" + state)
             globalProxyButton.toolTip = "全局代理：" + state + "\n点击开关；右键或 Option 点击设置。仅新连接生效，已有连接及复用通道需重连才能切换。"
         } catch {
-            globalProxyButton.oshellContentTintColor = .systemOrange
+            globalProxyButton.contentTintColor = .systemOrange
             globalProxyButton.setAccessibilityLabel("全局代理设置无法读取")
             globalProxyButton.toolTip = error.localizedDescription
         }

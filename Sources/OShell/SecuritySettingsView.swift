@@ -35,19 +35,15 @@ final class SecuritySettingsView: NSView {
         guard let binding = BiometricUnlock.binding(workspace.configuration), let scope = BiometricUnlock.shared.scope else { throw ModelError.invalid("请先设置主密码。") }
         guard let password = PasswordVault.promptMaster(title: "输入当前主密码以启用 Touch ID", creating: false) else { return }
         let snapshot = workspace.configuration, revision = workspace.configurationRevision
-#if !OSHELL_LEGACY
-        if #available(macOS 10.15, *) {
-            let context = LAContext(); defer { context.invalidate() }
-            guard let result = CredentialTask.run(title: "正在启用 Touch ID…", message: "验证主密码并准备仅限此 Mac 的指纹解锁记录。", work: { token in
-                try MasterPasswordProtection.verifyStartup(snapshot, password: password)
-                try token.check()
-                let data = try BiometricCipher.seal(password, scope: scope, context: context)
-                try token.check(); return data
-            }) else { return }
-            let data = try result.get()
-            guard revision == workspace.configurationRevision else { throw ModelError.invalid("配置已变化，Touch ID 未启用，请重试。") }
-            try BiometricUnlock.shared.savePrepared(data, binding: binding, expectedScope: scope)
-        }
-#endif
+        let context = LAContext(); defer { context.invalidate() }
+        guard let result = CredentialTask.run(title: "正在启用 Touch ID…", message: "验证主密码并准备仅限此 Mac 的指纹解锁记录。", work: { token in
+            try MasterPasswordProtection.verifyStartup(snapshot, password: password)
+            try token.check()
+            let data = try BiometricCipher.seal(password, scope: scope, context: context)
+            try token.check(); return data
+        }) else { return }
+        let data = try result.get()
+        guard revision == workspace.configurationRevision else { throw ModelError.invalid("配置已变化，Touch ID 未启用，请重试。") }
+        try BiometricUnlock.shared.savePrepared(data, binding: binding, expectedScope: scope)
     }
 }

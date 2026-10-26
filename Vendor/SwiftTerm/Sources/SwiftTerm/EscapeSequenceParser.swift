@@ -15,7 +15,7 @@
 //     and this could be one of those.   Would be a little stricter, and probably better
 
 import Foundation
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
 import os
 #endif
 
@@ -135,7 +135,7 @@ protocol  DcsHandler {
 /// to implement custom communication channels.
 ///
 public class EscapeSequenceParser {
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
     private static let profileLog = OSLog(subsystem: "org.tirania.SwiftTerm", category: "ParserProfile")
     private static let profileEnabled = ProcessInfo.processInfo.environment["SWIFTTERM_PROFILE"] == "1"
 #endif
@@ -667,7 +667,7 @@ public class EscapeSequenceParser {
     
     func parse (data: ArraySlice<UInt8>)
     {
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
         let signpostID = OSSignpostID(log: EscapeSequenceParser.profileLog)
         if EscapeSequenceParser.profileEnabled {
             os_signpost(.begin, log: EscapeSequenceParser.profileLog, name: "Parser.Parse", signpostID: signpostID)

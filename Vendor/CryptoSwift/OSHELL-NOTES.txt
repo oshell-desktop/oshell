@@ -1,2 +1,0 @@
-CryptoSwift 1.10.0, official source archive. OShell modification: FoundationEssentials import guards exclude OSHELL_LEGACY, using Foundation on old macOS. Algorithms unmodified. See LICENSE.
-OShell uses only the SwiftPM library, resources and tests. Removed unused upstream Xcode projects/test host, CocoaPods/framework packaging, website and repository-maintenance files. Algorithm sources, Package.swift, SwiftPM tests, privacy resources, LICENSE and contributor attribution remain unchanged.

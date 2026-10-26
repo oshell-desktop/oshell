@@ -13,7 +13,7 @@ final class SessionDirectoryTree: NSView, NSOutlineViewDataSource, NSOutlineView
             identifier = .init("session.directory.cell")
             let label = NSTextField(labelWithString: ""), icon = NSImageView()
             label.font = .systemFont(ofSize: 13); label.lineBreakMode = .byTruncatingMiddle
-            icon.image = NSImage(oshellSymbolName: "folder", accessibilityDescription: nil)
+            icon.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
             textField = label; imageView = icon
             for view in [icon, label] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
             NSLayoutConstraint.activate([icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3), icon.centerYAnchor.constraint(equalTo: centerYAnchor), icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16), label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6), label.centerYAnchor.constraint(equalTo: centerYAnchor), label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)])
@@ -45,7 +45,7 @@ final class SessionDirectoryTree: NSView, NSOutlineViewDataSource, NSOutlineView
         let column = NSTableColumn(identifier: .init("directory")); column.width = 414
         outline.addTableColumn(column); outline.outlineTableColumn = column; outline.headerView = nil
         outline.rowHeight = 28; outline.indentationPerLevel = 16; outline.allowsMultipleSelection = false
-        if #available(macOS 11, *) { outline.style = .plain }
+        outline.style = .plain
         outline.dataSource = self; outline.delegate = self; outline.setAccessibilityLabel("会话目录树")
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 28, width: bounds.width, height: bounds.height - 28))
         scroll.autoresizingMask = [.width, .height]

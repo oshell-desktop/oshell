@@ -56,7 +56,7 @@ final class AIProviderPresetTest {
         checks["providerCustomDoesNotRedirectOrErase"] = try page.values().provider == .custom && keyField.stringValue == currentKey && endpointField.stringValue == currentEndpoint
         choose(.deepseek)
         if let output = ProcessInfo.processInfo.environment["OSHELL_AI_OUTPUT"] {
-            for name in [NSAppearance.Name.aqua, .oshellDark] {
+            for name in [NSAppearance.Name.aqua, .darkAqua] {
                 page.appearance = NSAppearance(named: name); page.layoutSubtreeIfNeeded()
                 let previous = NSAppearance.current; NSAppearance.current = page.effectiveAppearance
                 if let bitmap = page.bitmapImageRepForCachingDisplay(in: page.bounds) {

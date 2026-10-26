@@ -49,9 +49,8 @@ final class FileProcess {
     private let usesSSHLocale: Bool
     init(executable: String, arguments: [String], environment: [String: String]? = nil) {
         usesSSHLocale = ["/usr/bin/ssh", "/usr/bin/scp"].contains(executable)
-        let legacyClient = OpenSSHCapabilities.current.needsLegacyAskpass && ["/usr/bin/ssh", "/usr/bin/scp"].contains(executable)
-        task.executableURL = legacyClient ? ZmodemTransfer.helperDirectory.appendingPathComponent("OShellSSH") : URL(fileURLWithPath: executable)
-        task.arguments = (legacyClient && executable == "/usr/bin/scp" ? ["--scp"] : []) + arguments
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = arguments
         task.environment = environment; task.standardInput = input; task.standardOutput = output; task.standardError = errors
     }
     func start() throws {
@@ -122,11 +121,11 @@ final class FileProcess {
             let data = Data(bytes.prefix(size))
             if let sink, let limiter {
                 try limiter.paced(data, checkCancellation: self.checkCancelled) { chunk in
-                    try self.checkCancelled(); try sink.oshellWrite(contentsOf:chunk)
+                    try self.checkCancelled(); try sink.write(contentsOf:chunk)
                     total += UInt64(chunk.count); progress?(total)
                 }
             } else {
-                if let sink { try sink.oshellWrite(contentsOf:data) } else { result.append(data) }
+                if let sink { try sink.write(contentsOf:data) } else { result.append(data) }
                 total += UInt64(size); progress?(total)
             }
         }
@@ -134,7 +133,7 @@ final class FileProcess {
         guard task.terminationStatus == 0 else { throw ModelError.invalid(errorText.isEmpty ? "文件操作失败（\(task.terminationStatus)）。" : errorText) }
         return result
     }
-    func closeInput() { try? input.fileHandleForWriting.oshellClose() }
+    func closeInput() { try? input.fileHandleForWriting.close() }
     func cancel() {
         lock.lock(); let wasCancelled = cancelled; cancelled = true; lock.unlock()
         guard !wasCancelled else { return }
@@ -143,7 +142,7 @@ final class FileProcess {
             DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [task] in if task.isRunning { kill(task.processIdentifier, SIGKILL) } }
         }
     }
-    deinit { errors.fileHandleForReading.readabilityHandler = nil; if task.isRunning { task.terminate() }; try? input.fileHandleForWriting.oshellClose(); try? output.fileHandleForReading.oshellClose(); try? errors.fileHandleForReading.oshellClose() }
+    deinit { errors.fileHandleForReading.readabilityHandler = nil; if task.isRunning { task.terminate() }; try? input.fileHandleForWriting.close(); try? output.fileHandleForReading.close(); try? errors.fileHandleForReading.close() }
 }
 
 enum FileSSH {
@@ -331,7 +330,7 @@ final class SFTPBackend: ResumableFileBackend {
         else { try resumeDownload(job, progress: progress) }
     }
     private func resumeUpload(_ job: ResumableFileTransfer, progress: @escaping (UInt64, UInt64) -> Void) throws {
-        let local = try ResumableFileTransfer.openLocal(job.local, flags: O_RDONLY); defer { try? local.oshellClose() }
+        let local = try ResumableFileTransfer.openLocal(job.local, flags: O_RDONLY); defer { try? local.close() }
         let stamp = ResumableFileTransfer.LocalStamp(try ResumableFileTransfer.info(local.fileDescriptor))
         if job.localSource == nil { job.localSource = stamp }
         try job.checkLocalSource(local)
@@ -348,7 +347,7 @@ final class SFTPBackend: ResumableFileBackend {
                 while offset < before.size {
                     let count = try rateLimiter.grant(upTo: Int(min(32768, before.size-offset)))
                     let bytes = try resumeRead(remote, offset: offset, count: count)
-                    guard try local.oshellRead(upToCount: bytes.count) == bytes else { throw ModelError.invalid("已上传片段与源文件不一致，请重新发起上传；不会修改该片段。") }
+                    guard try local.read(upToCount: bytes.count) == bytes else { throw ModelError.invalid("已上传片段与源文件不一致，请重新发起上传；不会修改该片段。") }
                     offset += UInt64(bytes.count)
                 }
                 guard try ResumableFileTransfer.RemoteStamp(resumeAttributes(handle: remote)) == before else { throw ModelError.invalid("远程片段在校验期间发生变化。") }
@@ -360,7 +359,7 @@ final class SFTPBackend: ResumableFileBackend {
         var closed = false; defer { if !closed { try? close(remote) } }
         progress(offset, size)
         while offset < size {
-            guard let bytes = try local.oshellRead(upToCount: Int(min(32768,size-offset))), !bytes.isEmpty else { throw ModelError.invalid("本地源文件在传输时缩短。") }
+            guard let bytes = try local.read(upToCount: Int(min(32768,size-offset))), !bytes.isEmpty else { throw ModelError.invalid("本地源文件在传输时缩短。") }
             try rateLimiter.paced(bytes) { chunk in
                 try status(6) { $0.bytes(remote); $0.u64(offset); $0.bytes(chunk) }
                 offset += UInt64(chunk.count); progress(offset,size)
@@ -382,7 +381,7 @@ final class SFTPBackend: ResumableFileBackend {
         let remote = try handle(3,path:job.remote,flags:1); var closed = false; defer { if !closed { try? close(remote) } }
         guard try ResumableFileTransfer.RemoteStamp(resumeAttributes(handle:remote)) == source else { throw ModelError.invalid("远程源文件在打开时发生变化。") }
         let local = try ResumableFileTransfer.openLocal(job.localPartial, flags: job.ownsPartial ? O_RDWR : O_RDWR | O_CREAT | O_EXCL)
-        defer { try? local.oshellClose() }
+        defer { try? local.close() }
         let partialInfo = try ResumableFileTransfer.info(local.fileDescriptor)
         guard partialInfo.st_nlink == 1 else { throw ModelError.invalid("本地临时片段存在其他硬链接，无法安全续传。") }
         let stamp = ResumableFileTransfer.LocalStamp(partialInfo)
@@ -392,19 +391,19 @@ final class SFTPBackend: ResumableFileBackend {
         while offset < UInt64(stamp.size) {
             let count = try rateLimiter.grant(upTo: Int(min(32768,UInt64(stamp.size)-offset)))
             let bytes = try resumeRead(remote,offset:offset,count:count)
-            guard try local.oshellRead(upToCount:bytes.count) == bytes else { throw ModelError.invalid("本地片段与远程源文件不一致，请重新发起下载。") }
+            guard try local.read(upToCount:bytes.count) == bytes else { throw ModelError.invalid("本地片段与远程源文件不一致，请重新发起下载。") }
             offset += UInt64(bytes.count)
         }
         progress(offset,source.size)
         while offset < source.size {
             let bytes = try resumeRead(remote,offset:offset,count:min(rateLimiter.readChunkSize,Int(min(UInt64(Int.max),source.size-offset))))
-            try rateLimiter.paced(bytes) { chunk in try local.oshellWrite(contentsOf:chunk); offset += UInt64(chunk.count); progress(offset,source.size) }
+            try rateLimiter.paced(bytes) { chunk in try local.write(contentsOf:chunk); offset += UInt64(chunk.count); progress(offset,source.size) }
         }
         guard try ResumableFileTransfer.RemoteStamp(resumeAttributes(handle:remote)) == source,
               try ResumableFileTransfer.RemoteStamp(resumeAttributes(job.remote)) == source else { throw ModelError.invalid("远程源文件在下载期间发生变化，未完成最终保存。") }
         try close(remote); closed = true
         guard fsync(local.fileDescriptor) == 0 else { throw ModelError.invalid("无法写入本地下载文件。") }
-        let check = try ResumableFileTransfer.openLocal(job.localPartial, flags: O_RDONLY); defer { try? check.oshellClose() }
+        let check = try ResumableFileTransfer.openLocal(job.localPartial, flags: O_RDONLY); defer { try? check.close() }
         let final = ResumableFileTransfer.LocalStamp(try ResumableFileTransfer.info(check.fileDescriptor))
         guard final.device == stamp.device, final.inode == stamp.inode, UInt64(final.size) == source.size else { throw ModelError.invalid("本地片段在下载期间被替换。") }
         guard renamex_np(job.localPartial.path, job.local.path, UInt32(RENAME_EXCL)) == 0 else {
@@ -425,9 +424,9 @@ final class SFTPBackend: ResumableFileBackend {
         }
         // EXCL protects existing remote files, including races after listing.
         let handle = try handle(3, path: remote, flags: 2 | 8 | 32); var closed = false; defer { if !closed { try? close(handle) } }
-        let file = try FileHandle(forReadingFrom: local); defer { try? file.oshellClose() }
+        let file = try FileHandle(forReadingFrom: local); defer { try? file.close() }
         var offset: UInt64 = 0
-        while let bytes = try file.oshellRead(upToCount: 32768), !bytes.isEmpty {
+        while let bytes = try file.read(upToCount: 32768), !bytes.isEmpty {
             try rateLimiter.paced(bytes) { chunk in
                 try status(6) { $0.bytes(handle); $0.u64(offset); $0.bytes(chunk) }
                 offset += UInt64(chunk.count); progress(offset, UInt64(attributes.fileSize ?? 0))
@@ -449,7 +448,7 @@ final class SFTPBackend: ResumableFileBackend {
         let fd = Darwin.open(local.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { throw ModelError.invalid("无法创建本地文件或文件已存在：\(local.lastPathComponent)") }
         let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true); var complete = false
-        defer { try? file.oshellClose(); if !complete { try? FileManager.default.removeItem(at: local) } }
+        defer { try? file.close(); if !complete { try? FileManager.default.removeItem(at: local) } }
         var offset: UInt64 = 0
         while true {
             do {
@@ -457,11 +456,11 @@ final class SFTPBackend: ResumableFileBackend {
                 var response = try request(5) { $0.bytes(handle); $0.u64(offset); $0.u32(UInt32(chunkSize)) }
                 guard response.0 == 103 else { throw ModelError.invalid("SFTP 文件数据无效。") }
                 let bytes = try response.1.readBytes(); guard !bytes.isEmpty else { throw ModelError.invalid("SFTP 返回空数据块。") }
-                try rateLimiter.paced(bytes) { chunk in try file.oshellWrite(contentsOf:chunk); offset += UInt64(chunk.count); progress(offset,info.size) }
+                try rateLimiter.paced(bytes) { chunk in try file.write(contentsOf:chunk); offset += UInt64(chunk.count); progress(offset,info.size) }
             } catch let error as SFTPStatus where error.code == 1 { break }
         }
         try close(handle); closed = true
-        try file.oshellClose(); complete = true
+        try file.close(); complete = true
     }
     func cancel() { rateLimiter.cancel(); process.cancel(); lease?.release(); DispatchQueue.main.async { [broker] in broker?.stop() } }
     deinit { process.cancel(); lease?.release(); let broker = broker; DispatchQueue.main.async { broker?.stop() } }

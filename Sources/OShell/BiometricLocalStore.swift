@@ -44,11 +44,11 @@ final class BiometricLocalStore: BiometricRecordStore {
             if errno == ENOENT { return nil }
             throw ModelError.invalid("无法安全读取本机指纹记录。请手动解锁后重新启用 Touch ID。")
         }
-        let handle = FileHandle(fileDescriptor:file,closeOnDealloc:true); defer { try? handle.oshellClose() }
+        let handle = FileHandle(fileDescriptor:file,closeOnDealloc:true); defer { try? handle.close() }
         var info = stat()
         guard fstat(file,&info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == geteuid(), info.st_mode & 0o077 == 0,
               info.st_nlink == 1, info.st_size > 0, info.st_size <= 16384 else { throw ModelError.invalid("本机指纹记录类型、权限或大小异常，请重新启用 Touch ID。") }
-        let data = try handle.oshellRead(upToCount:16385) ?? Data()
+        let data = try handle.read(upToCount:16385) ?? Data()
         _ = try BiometricEnvelope.decode(data,scope:scope)
         return data
     }
@@ -58,9 +58,9 @@ final class BiometricLocalStore: BiometricRecordStore {
         let file = openat(fd,temporary,O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,0o600)
         guard file >= 0 else { throw ModelError.invalid("无法保存本机指纹记录。") }
         let handle = FileHandle(fileDescriptor:file,closeOnDealloc:true)
-        defer { try? handle.oshellClose(); unlinkat(fd,temporary,0) }
+        defer { try? handle.close(); unlinkat(fd,temporary,0) }
         guard fchmod(file,0o600) == 0 else { throw ModelError.invalid("无法限制指纹记录权限。") }
-        try handle.oshellWrite(contentsOf:data); try handle.oshellSynchronize()
+        try handle.write(contentsOf:data); try handle.synchronize()
         guard renameat(fd,temporary,fd,name) == 0 else { throw ModelError.invalid("无法提交本机指纹记录。") }
     }
     func read(account: String) throws -> Data {

@@ -21,17 +21,30 @@ def load(name, filename):
 
 PACK = load('release_pack', 'package-release.py')
 CHECK = load('release_check', 'check-release-toolchain.py')
+VERIFY = load('release_verify', 'verify-installers.py')
 
 
 class ReleaseBuildTests(unittest.TestCase):
+    def test_stale_or_too_new_app_binaries_are_rejected(self):
+        for minimum in ['10.13', '13.0', '16.0']:
+            with self.assertRaises(AssertionError):
+                VERIFY.verify_deployment(Path('MacOS/OShell'), [minimum], '15.0')
+        VERIFY.verify_deployment(Path('MacOS/OShell'), ['15.0'], '15.0')
+
+    def test_framework_floor_must_not_exceed_supported_system(self):
+        VERIFY.verify_deployment(Path('Frameworks/Sparkle'), ['10.13'], '15.0')
+        for versions in [[], ['16.0']]:
+            with self.assertRaises(AssertionError):
+                VERIFY.verify_deployment(Path('Frameworks/Sparkle'), versions, '15.0')
+
     def test_intel_core_checks_are_executed_via_rosetta(self):
         binary = Path('/synthetic/intel')
         self.assertEqual(PACK.core_check_command({'x86_64': binary}, 'arm64'),
                          ['/usr/bin/arch', '-x86_64', binary/'OShellCoreChecks'])
 
-    def test_universal_core_checks_prefer_native_slice(self):
+    def test_native_core_checks_run_directly(self):
         native = Path('/synthetic/arm64')
-        self.assertEqual(PACK.core_check_command({'arm64': native, 'x86_64': Path('/synthetic/intel')}, 'arm64'),
+        self.assertEqual(PACK.core_check_command({'arm64': native}, 'arm64'),
                          [native/'OShellCoreChecks'])
 
     def test_unsupported_host_does_not_skip_core_checks(self):
@@ -51,14 +64,7 @@ class ReleaseBuildTests(unittest.TestCase):
 
     def test_wrong_host_architecture_is_rejected_before_cache_export(self):
         with self.assertRaisesRegex(RuntimeError, 'native target architecture'):
-            CHECK.check('intel', self.env_file)
-        self.assertFalse(self.env_file.exists())
-
-    def test_legacy_requires_bundled_runtime_before_export(self):
-        swiftc = self.developer/'usr/bin/swiftc'
-        with patch.object(CHECK.platform, 'machine', return_value='x86_64'), patch.object(CHECK.subprocess, 'run'), patch.object(CHECK.subprocess, 'check_output', return_value=str(swiftc)):
-            with self.assertRaisesRegex(RuntimeError, 'pre-Swift-OS runtime'):
-                CHECK.check('legacy', self.env_file)
+            CHECK.check('amd64', self.env_file)
         self.assertFalse(self.env_file.exists())
 
     def test_valid_toolchain_exports_cache_keys_without_global_changes(self):
@@ -85,7 +91,7 @@ class ReleaseBuildTests(unittest.TestCase):
             self.assertNotEqual(key, next_key)
             manifest.write_text('changed manifest')
             self.assertNotEqual(prefix, CHECK.cache_keys('arm64')[0])
-            self.assertNotEqual(CHECK.cache_keys('arm64')[0], CHECK.cache_keys('compat')[0])
+            self.assertNotEqual(CHECK.cache_keys('arm64')[0], CHECK.cache_keys('amd64')[0])
 
     def test_packaging_changes_reuse_cache_but_helper_source_updates_archive(self):
         (self.developer/'scripts').mkdir()
@@ -104,9 +110,9 @@ class ReleaseBuildTests(unittest.TestCase):
         self.assertIn('max-parallel: 2', build)
         self.assertNotIn('container:', build)
         self.assertNotIn('OSHELL_ALLOW_ADHOC', build)
-        for flavor in ['legacy', 'arm64']:
+        for flavor in ['amd64', 'arm64']:
             self.assertIn(f'- flavor: {flavor}\n', build)
-        for flavor in ['compat', 'intel']:
+        for flavor in ['legacy', 'compat', 'intel', 'modern']:
             self.assertNotIn(f'- flavor: {flavor}\n', build)
         for expected in ['--format dmg --test-core', 'scripts/verify-installers.py', 'OSHELL_REQUIRE_FIXED_SIGNING: "1"']:
             self.assertIn(expected, build)

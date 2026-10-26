@@ -304,7 +304,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         default: if let modified = entry.modified { text = DateFormatter.localizedString(from: modified, dateStyle: .short, timeStyle: .short) } else { text = "—" }
         }
         let label = NSTextField(labelWithString: text)
-        if tableColumn?.identifier.rawValue == "permissions" { label.font = .oshellMonospacedSystemFont(ofSize: 12, weight: .regular) }
+        if tableColumn?.identifier.rawValue == "permissions" { label.font = .monospacedSystemFont(ofSize: 12, weight: .regular) }
         label.lineBreakMode = .byTruncatingMiddle; label.toolTip = text; return label
     }
     @objc private func go() { navigate(path.stringValue) }

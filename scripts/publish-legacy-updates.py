@@ -49,7 +49,7 @@ def gh(*args):
 def legacy_document(release, current, public, key):
     old = copy.deepcopy(release); old['body'] = ''
     flavors = []
-    for flavor in ('legacy', 'arm64', 'intel', 'compat'):
+    for flavor in FLAVORS:
         target = PAGES.TARGETS[flavor]
         if target.suffix not in current['platforms']: continue
         flavors.append(flavor)
@@ -88,12 +88,9 @@ def prepare_local(output, tag, public, key):
 
 
 def prepare_existing(release, tag, public, key):
-    # An existing Release may contain historical aliases. Preserve its actual
-    # signed platforms in Pages without creating or changing any Release asset.
+    # Only republish the current platform catalog; leave historical assets intact.
     if release['tag_name'] != tag: raise ValueError('Only Latest may update compatibility Pages')
-    flavors = [f for f in ('legacy','arm64','intel','compat') if '<!-- oshell-update-v1:'+PAGES.TARGETS[f].suffix+':' in release['body']]
-    if not set(FLAVORS).issubset(flavors): raise ValueError('Release is missing a required installer')
-    _,current,legacy = prepare(release,public,key,flavors=flavors)
+    _,current,legacy = prepare(release,public,key)
     return current,legacy
 
 
@@ -120,8 +117,6 @@ def main():
         # mutate their assets, notes, tags or original signed feeds.
         release = json.loads(gh('api',f'repos/{CURRENT}/releases/latest'))
         current,legacy = prepare_existing(release,args.tag,public,key)
-        if 'macOS13-x86_64' not in current['platforms']:
-            print('Old Intel clients requiring the retired filename must install the macOS 10.13 Intel package manually once.')
     PAGES.write_site(current,args.output/'current')
     PAGES.write_site(legacy,args.output/'legacy')
     print('Prepared signed current and legacy update sites for',args.tag,'; no installer compilation performed.')

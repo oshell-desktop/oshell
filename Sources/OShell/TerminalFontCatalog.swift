@@ -74,6 +74,6 @@ enum TerminalFontCatalog {
     }
     static func previewFont(_ popup: NSPopUpButton) -> NSFont {
         let name = popup.selectedItem?.representedObject as? String ?? ""
-        return (name.isEmpty ? nil : NSFont(name: name, size: 13)) ?? .oshellMonospacedSystemFont(ofSize: 13, weight: .regular)
+        return (name.isEmpty ? nil : NSFont(name: name, size: 13)) ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
     }
 }

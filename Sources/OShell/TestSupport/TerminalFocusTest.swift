@@ -38,9 +38,7 @@ enum TerminalFocusTest {
         }
         DispatchQueue.main.asyncAfter(deadline: .now()+0.6) {
             var renderers = [false]
-            #if !OSHELL_LEGACY
             renderers.append(true)
-            #endif
             for metal in renderers {
                 var preferences = workspace.configuration.preferences; preferences.metal = metal
                 workspace.configuration.preferences = preferences

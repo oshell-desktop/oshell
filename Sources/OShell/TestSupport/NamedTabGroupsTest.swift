@@ -87,10 +87,8 @@ enum NamedTabGroupsTest {
                                 checks["renameKeepsGroupAndSSHIdentity"] = workspace.groupTitles[background.id] == "后台监控" && pane.terminal.process.shellPid == pid && pane.sshConnectionGroup === transport
                                 do { _ = try workspace.createTabGroup(name: "生产"); checks["duplicateNameRejected"] = false } catch { checks["duplicateNameRejected"] = true }
                                 do { _ = try workspace.createTabGroup(name: " \n "); checks["emptyNameRejected"] = false } catch { checks["emptyNameRejected"] = true }
-                                #if !OSHELL_LEGACY
                                 var prefs = workspace.configuration.preferences; prefs.metal = true; pane.apply(prefs)
                                 checks["gpuEnabledForGroupTest"] = pane.terminal.isUsingMetalRenderer
-                                #endif
                                 for index in 0..<3 {
                                     workspace.setTabGroupHidden(background.id, hidden: true)
                                     workspace.setTabGroupHidden(background.id, hidden: false)

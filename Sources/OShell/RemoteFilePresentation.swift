@@ -80,7 +80,7 @@ enum RemoteFileKind: String, CaseIterable {
     var icon: NSImage {
         if let cached = Self.images[self] { return cached }
         let image: NSImage
-        if #available(macOS 11, *), let symbol = NSImage(systemSymbolName: symbol, accessibilityDescription: rawValue) {
+        if let symbol = NSImage(systemSymbolName: symbol, accessibilityDescription: rawValue) {
             image = symbol
         } else {
             // Native type icons also work on the oldest supported macOS, without SF Symbols.
@@ -117,7 +117,7 @@ final class RemoteFileNameCell: NSTableCellView {
         let kind = RemoteFileKind(entry)
         textField?.stringValue = entry.name
         imageView?.image = kind.icon
-        imageView?.oshellContentTintColor = kind.color
+        imageView?.contentTintColor = kind.color
         imageView?.setAccessibilityLabel(kind.rawValue)
         toolTip = "\(entry.name)\n\(kind.rawValue)" + (kind == .unknown ? "（服务器未提供类型）" : "")
     }

@@ -33,7 +33,7 @@ class CompilationCacheTests(unittest.TestCase):
             self.addCleanup(context.stop)
 
     def cache(self, **variant):
-        return CACHE.CompilationCache(self.root, 'swift-arm64-13.0', ['Sources', 'Package.resolved'], variant)
+        return CACHE.CompilationCache(self.root, 'swift-arm64-15.0', ['Sources', 'Package.resolved'], variant)
 
     def store(self, cache):
         cache.store(self.products, ['app', 'Resources.bundle'])
@@ -63,14 +63,14 @@ class CompilationCacheTests(unittest.TestCase):
         self.assertNotEqual(second, self.cache().key)
 
     def test_architecture_minimum_and_test_mode_are_isolated(self):
-        variants = [dict(arch='arm64', minimum='13.0', tests=False),
-                    dict(arch='x86_64', minimum='13.0', tests=False),
+        variants = [dict(arch='arm64', minimum='15.0', tests=False),
+                    dict(arch='x86_64', minimum='15.0', tests=False),
                     dict(arch='arm64', minimum='11.0', tests=False),
-                    dict(arch='arm64', minimum='13.0', tests=True)]
+                    dict(arch='arm64', minimum='15.0', tests=True)]
         self.assertEqual(len({self.cache(**v).key for v in variants}), 4)
 
-    def production_key(self, legacy=False, tests=False):
-        return CACHE.source_key(self.root, CACHE.swift_source_inputs(self.root, legacy, tests), {}, {'swift':'fixture'})
+    def production_key(self, tests=False):
+        return CACHE.source_key(self.root, CACHE.swift_source_inputs(self.root, tests=tests), {}, {'swift':'fixture'})
 
     def write_input(self, name, value):
         path = self.root/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(value)
@@ -96,10 +96,10 @@ class CompilationCacheTests(unittest.TestCase):
         self.assertNotEqual(first, self.production_key())
 
     def test_core_checks_and_relevant_dependencies_still_invalidate(self):
-        first, intel = self.production_key(), self.production_key(legacy=True)
-        self.write_input('Vendor/CryptoSwift/Sources/Crypto.swift', 'legacy only')
-        self.assertEqual(first, self.production_key())
-        self.assertNotEqual(intel, self.production_key(legacy=True))
+        first = self.production_key()
+        self.write_input('Vendor/SwiftTerm/Sources/Terminal.swift', 'renderer change')
+        self.assertNotEqual(first, self.production_key())
+        first = self.production_key()
         self.write_input('Tests/OShellCoreTests/CoreTests.swift', 'new assertion')
         self.assertNotEqual(first, self.production_key())
 

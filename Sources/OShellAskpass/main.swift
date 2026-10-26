@@ -16,5 +16,5 @@ do {
     }
     let result = try AuthIPC.request(socketPath: endpoint, request: AuthRequest(token: token, prompt: CommandLine.arguments[1], hint: environment["SSH_ASKPASS_PROMPT"] ?? "", proxyID: environment["OSHELL_AUTH_PROXY_ID"].flatMap(UUID.init(uuidString:))))
     guard result.success, !result.answer.contains("\0"), !result.answer.contains("\n"), !result.answer.contains("\r") else { exit(1) }
-    try FileHandle.standardOutput.oshellWrite(contentsOf: Data((result.answer + "\n").utf8))
+    try FileHandle.standardOutput.write(contentsOf: Data((result.answer + "\n").utf8))
 } catch { exit(1) }

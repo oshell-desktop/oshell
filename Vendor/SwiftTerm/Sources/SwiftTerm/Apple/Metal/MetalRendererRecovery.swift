@@ -1,7 +1,7 @@
 #if os(macOS) || os(iOS) || os(visionOS)
 import Foundation
 import Metal
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
 import os
 #endif
 
@@ -103,7 +103,7 @@ struct MetalAutomaticRecoveryPolicy: Sendable {
     }
 }
 
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
 enum MetalRecoverySignpost {
     static let log = OSLog(subsystem: "org.tirania.SwiftTerm", category: "MetalProfile")
     static let isEnabled = ProcessInfo.processInfo.environment["SWIFTTERM_PROFILE"] == "1"

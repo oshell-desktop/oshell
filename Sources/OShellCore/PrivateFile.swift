@@ -13,9 +13,9 @@ public enum PrivateFile {
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let temporary = String(cString: template)
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        defer { try? handle.oshellClose(); unlink(temporary) }
+        defer { try? handle.close(); unlink(temporary) }
         guard fchmod(fd, 0o600) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        try handle.oshellWrite(contentsOf: data); try handle.oshellSynchronize()
+        try handle.write(contentsOf: data); try handle.synchronize()
         guard rename(temporary, url.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
 }

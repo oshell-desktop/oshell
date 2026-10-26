@@ -14,7 +14,7 @@ import AppKit
 import CoreText
 import CoreGraphics
 import Carbon.HIToolbox
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
 import MetalKit
 
 // OShell: rendering surfaces must not intercept terminal mouse input.
@@ -22,7 +22,7 @@ private final class TerminalMetalSurface: MTKView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 #endif
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
 import os.log
 #endif
 
@@ -47,7 +47,7 @@ import os.log
  * defaults, otherwise, this uses its own set of defaults colors.
  */
 open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, TerminalDelegate {
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
     // Default to throttling Metal redraws during live-resize; set SWIFTTERM_METAL_LIVE_RESIZE_THROTTLE=0 to disable.
     private static let metalLiveResizeThrottleEnabled: Bool = {
         let value = ProcessInfo.processInfo.environment["SWIFTTERM_METAL_LIVE_RESIZE_THROTTLE"]
@@ -159,11 +159,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let boldItalic: NSFont
         
         static var defaultFont: NSFont {
-            if #available(macOS 10.15, *)  {
-                return NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            } else {
-                return NSFont(name: "Menlo Regular", size: NSFont.systemFontSize) ?? NSFont(name: "Courier", size: NSFont.systemFontSize)!
-            }
+            return NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         }
         
         public init(font baseFont: NSFont, fontSize: CGFloat? = nil) {
@@ -199,7 +195,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         set {
             caretView.tracksFocus = newValue
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
             queueMetalDisplay()
 #endif
         }
@@ -225,13 +221,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// read from the (possibly background) feed thread.
     let userInputLock = NSLock()
     let interactiveInputDisplayWindowNs: UInt64 = 150_000_000
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
     var metalView: MTKView?
     var metalRenderer: MetalTerminalRenderer?
     private var retiredMetalRenderers: [MetalTerminalRenderer] = []
     private var automaticMetalRecoveryPolicy = MetalAutomaticRecoveryPolicy()
     private var metalWindowRecoveryObservers: [NSObjectProtocol] = []
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
     private var metalRecoverySignpostID: OSSignpostID?
 #endif
 #if DEBUG
@@ -336,12 +332,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var colors: [NSColor?] = Array(repeating: nil, count: 256)
     var trueColors: [Attribute.Color:NSColor] = [:]
     var transparent = TTColor.transparent ()
-    var isBigSur = true
     
-    /// This flag is automatically set to true after the initializer is called, if running on a system older than BigSur.
-    /// Starting with BigSur any screen updates will invoke the draw() method with the whole region, regardless
-    /// of how much changed.   Setting this to true, will disable this OS behavior, setting it to false, will keep
-    /// the original BigSur behavior to redraw the whole region.
+    /// Enabled during setup to preserve partial invalidation rather than
+    /// letting AppKit expand every update to the whole terminal region.
     ///
     /// For more details on this see:
     /// https://gist.github.com/lukaskubanek/9a61ac71dc0db8bb04db2028f2635779
@@ -414,13 +407,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     private func setup()
     {
         wantsLayer = true
-        isBigSur = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 11, minorVersion: 0, patchVersion: 0))
-        if isBigSur {
-            disableFullRedrawOnAnyChanges = true
-        }
-        if #available(macOS 14, *) {
-            self.clipsToBounds = true
-        }
+        disableFullRedrawOnAnyChanges = true
+        self.clipsToBounds = true
         setupScroller()
         setupOptions()
         setupProgressBar()
@@ -428,7 +416,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         setupTextBlinking()
     }
 
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
     /// Enables or disables GPU-accelerated rendering via Metal.
     ///
     /// When enabled, the terminal view replaces its CoreGraphics rendering
@@ -600,7 +588,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         newView.delegate = newRenderer
         updateMetalRendererStatus(state: .recovering)
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
         metalRecoverySignpostID = metalRecoverySignpostID ?? MetalRecoverySignpost.begin()
 #endif
 
@@ -626,7 +614,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// after an unrecoverable rebind failure. Keeps the terminal usable when
     /// the GPU path can't be restored.
     private func disableMetalRendererAfterRebindFailure(error: Error) {
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
         os_log("SwiftTerm: Metal renderer rebind failed; falling back to CoreGraphics: %{public}@",
                type: .error, String(describing: error))
 #endif
@@ -643,7 +631,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         needsDisplay = true
         updateMetalRendererStatus(state: .fellBackToCoreGraphics)
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
         MetalRecoverySignpost.end(metalRecoverySignpostID)
         metalRecoverySignpostID = nil
 #endif
@@ -671,7 +659,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             presentedFrameCount: metalRendererStatus.presentedFrameCount &+ 1,
             lastFramePresentedAt: date
         ))
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
         MetalRecoverySignpost.end(metalRecoverySignpostID)
         metalRecoverySignpostID = nil
 #endif
@@ -685,7 +673,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let shouldFallBack = recoveryAction == .fallBackToCoreGraphics
         logMetalRecovery(report: report, willFallBack: shouldFallBack)
         updateMetalRendererStatus(state: .recovering)
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
         metalRecoverySignpostID = metalRecoverySignpostID ?? MetalRecoverySignpost.begin()
 #endif
 
@@ -771,7 +759,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
 
     private func logMetalRecovery(report: MetalRendererRecoveryReport, willFallBack: Bool) {
-#if canImport(os) && !OSHELL_LEGACY
+#if canImport(os)
         os_log("SwiftTerm Metal recovery reason=%{public}@ duration=%{public}.3f status=%{public}@ error=%{public}@ action=%{public}@",
                type: .error,
                report.reason.rawValue,
@@ -809,7 +797,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         setupFocusNotification()
         startWindowMouseMovedFallback()
         updateTextBlinkLifecycle()
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
         updateMetalWindowRecoveryObservers()
         guard useMetalRenderer, let currentWindow = window else { return }
         if currentWindow !== metalBoundWindow {
@@ -821,7 +809,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     open override func viewDidUnhide() {
         super.viewDidUnhide()
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
         if isMetalRendererEligibleForRetry {
             requestMetalDisplay()
         }
@@ -842,7 +830,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     deinit {
         stopWindowMouseMovedFallback()
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
         for observer in metalWindowRecoveryObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -1280,7 +1268,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open override func draw (_ dirtyRect: NSRect) {
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
         if metalView != nil {
             return
         }
@@ -1307,7 +1295,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         updateProgressBarFrame()
         guard cellDimension != nil else { return }
         _ = processSizeChange(newSize: frame.size)
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
         if useMetalRenderer {
             if inLiveResize && TerminalView.metalLiveResizeThrottleEnabled {
                 queueMetalDisplay()
@@ -1339,7 +1327,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         set {
             _hasFocus = newValue
             caretView.focused = newValue
-#if canImport(MetalKit) && !OSHELL_LEGACY
+#if canImport(MetalKit)
             queueMetalDisplay()
 #endif
         }
@@ -2732,7 +2720,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func selectionChanged(source: Terminal) {
-        #if canImport(MetalKit) && !OSHELL_LEGACY
+        #if canImport(MetalKit)
         if metalView != nil {
             let buffer = terminal.displayBuffer
             if buffer.lines.count == 0 {
@@ -3089,11 +3077,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
                 up.sizeToFit()
             } else {
                 let nup: NSTextField
-                if #available(macOS 10.12, *) {
-                    nup = NSTextField (string: url)
-                } else {
-                    nup = NSTextField ()
-                }
+                nup = NSTextField (string: url)
                 nup.isBezeled = false
                 nup.font = tryUrlFont ()
                 nup.backgroundColor = nativeForegroundColor

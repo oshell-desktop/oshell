@@ -32,7 +32,7 @@ final class TerminalSelectionSettingsView: NSView, NSTextFieldDelegate {
         let current = TerminalSelectionSettings.load()
         delimiters.stringValue = current.delimiters; shift.state = current.shiftUsesDelimiters ? .on : .off
         delimiters.identifier = .init("settings.selection.delimiters"); delimiters.delegate = self
-        delimiters.font = .oshellMonospacedSystemFont(ofSize: 13, weight: .regular)
+        delimiters.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         delimiters.setAccessibilityLabel("双击选词分隔符")
         shift.identifier = .init("settings.selection.shift")
         autoCopy.identifier = .init("settings.selection.autoCopy")

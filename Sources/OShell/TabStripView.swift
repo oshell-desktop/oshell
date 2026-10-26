@@ -169,7 +169,7 @@ final class TabStripView: InterfaceSurfaceView {
             selectButton.trackDrag = { [weak self] in self?.track($0) ?? false }
             selectButton.onDoubleClick = { [weak self] in self?.onDuplicate?() }
             closeButton.isBordered = false
-            closeButton.image = NSImage(oshellSymbolName: "xmark", accessibilityDescription: "关闭标签")
+            closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "关闭标签")
             closeButton.imageScaling = .scaleProportionallyDown
             closeButton.target = self; closeButton.action = #selector(closeItem)
             closeButton.makeMenu = { [weak self] in self?.makeMenu?() }
@@ -247,7 +247,7 @@ final class TabStripView: InterfaceSurfaceView {
         scroll.makeMenu = background; clip.makeMenu = background; document.makeMenu = background
         addButton.makeMenu = background; groupButton.makeMenu = background; listButton.makeMenu = background
         scroll.documentView = document
-        addButton.image = NSImage(oshellSymbolName: "plus", accessibilityDescription: "新建本地标签")
+        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "新建本地标签")
         addButton.isBordered = false; addButton.toolTip = "新建本地标签"
         addButton.target = self; addButton.action = #selector(addTab)
         listButton.isBordered = false; listButton.toolTip = "所有标签"
@@ -263,7 +263,7 @@ final class TabStripView: InterfaceSurfaceView {
         menu.insertItem(NSMenuItem(title: caption, action: nil, keyEquivalent: ""), at: 0)
         groupButton.menu = menu; groupButton.toolTip = title + " · 标签组操作"
         groupButton.setAccessibilityLabel("标签组 " + title)
-        groupButton.oshellContentTintColor = unread ? .systemOrange : (active ? .oshellAccentColor : .labelColor)
+        groupButton.contentTintColor = unread ? .systemOrange : (active ? .controlAccentColor : .labelColor)
         groupWidth = min(120, max(76, (caption as NSString).size(withAttributes: [.font: groupButton.font!]).width + 24))
         needsLayout = true
     }
@@ -319,7 +319,7 @@ final class TabStripView: InterfaceSurfaceView {
             let title = entry.number.map { "\($0)  \(entry.title)" } ?? entry.title
             item.selectButton.title = title; item.hasUnreadOutput = entry.hasUnreadOutput
             item.connectionStatus = entry.connectionStatus
-            item.selectButton.oshellContentTintColor = entry.hasUnreadOutput ? .systemOrange : .labelColor
+            item.selectButton.contentTintColor = entry.hasUnreadOutput ? .systemOrange : .labelColor
             item.selected = entry.id == selectedID
             item.selectButton.font = .systemFont(ofSize: 12, weight: item.selected || entry.hasUnreadOutput ? .semibold : .regular)
             item.selectButton.setAccessibilityLabel("标签 \(number)：\(entry.title)")
@@ -342,7 +342,7 @@ final class TabStripView: InterfaceSurfaceView {
             if rebuildMenu { menu.addItem(choice) }
         }
         let unread = entries.filter(\.hasUnreadOutput).count
-        listButton.oshellContentTintColor = unread > 0 ? .systemOrange : nil
+        listButton.contentTintColor = unread > 0 ? .systemOrange : nil
         listButton.toolTip = unread > 0 ? "所有标签 · \(unread) 个有未读输出" : "所有标签"
         listButton.setAccessibilityValue(unread > 0 ? "\(unread) 个标签有未读输出" : "无未读输出")
         if rebuildMenu { listButton.menu = menu }

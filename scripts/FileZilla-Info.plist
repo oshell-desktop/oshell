@@ -9,5 +9,5 @@
 <key>CFBundleVersion</key><string>3.70.0</string>
 <key>CFBundleGetInfoString</key><string>OShell launcher; FileZilla configuration compatibility level 3.70.0. Not FileZilla.</string>
 <key>LSUIElement</key><true/>
-<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
 </dict></plist>

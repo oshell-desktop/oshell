@@ -18,17 +18,16 @@ SCHEMA = 1
 BUILD_RECIPE_INPUTS = ['scripts/release_compilation.py', 'scripts/compilation_cache.py', 'scripts/incremental_cache.py']
 
 
-def swift_configuration_inputs(legacy=False):
+def swift_configuration_inputs():
     return ['Package.swift', 'Package.resolved', 'Vendor/SwiftTerm/Package.swift',
-            'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS] + (['Vendor/CryptoSwift/Package.swift'] if legacy else [])
+            'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS]
 
 
-def swift_source_inputs(root, legacy=False, tests=False):
+def swift_source_inputs(root, tests=False):
     # Enumerate app children so TestSupport is excluded exactly as Package.swift
     # excludes it from production builds. New/deleted production files still hash.
     inputs = ['Package.swift', 'Package.resolved', 'Tests/OShellCoreTests',
               'Vendor/SwiftTerm', 'Vendor/Sparkle/Sparkle.xcframework', *BUILD_RECIPE_INPUTS]
-    if legacy: inputs.append('Vendor/CryptoSwift')
     source = root/'Sources'
     if not source.is_dir() or source.is_symlink(): return inputs + ['Sources']
     for target in sorted(source.iterdir()):

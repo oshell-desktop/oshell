@@ -77,7 +77,7 @@ final class ZmodemProgressUITest {
         let terminalFrame = pane.terminal.frame
         ui.begin("选择要上传的文件…")
         checks["waitingHasNoInventedProgress"] = ui.indicator.fraction == nil && ui.indicator.fillRect.width == 0
-        for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             ui.appearance = NSAppearance(named: appearance)
             for amount in [0, 42, 75, 100] {
                 var progress = ZmodemProgress(); progress.filename = "example-upload.dmg"
@@ -154,12 +154,10 @@ final class ZmodemProgressUITest {
             return hit === ui.cancelButton || hit?.isDescendant(of: ui.cancelButton) == true
         }
         checks["overlayCancelReceivesClick"] = cancelReceivesClick()
-        #if !OSHELL_LEGACY
         do {
             try pane.terminal.setUseMetal(true); pane.terminal.drawMetalFrameNow()
             checks["metalOverlayCancelReceivesClick"] = pane.terminal.isUsingMetalRenderer && cancelReceivesClick()
         } catch { checks["metalOverlayCancelReceivesClick"] = false }
-        #endif
         finish()
     }
     private func finish() {

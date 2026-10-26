@@ -4,7 +4,7 @@
 import AppKit
 
 // Approved OShell brand: graphite + flame-orange O-shaped multi-session terminal.
-// Generate the iconset for both modern and legacy builds from this single source.
+// Generate the iconset for both supported architectures from this single source.
 let directory = URL(fileURLWithPath: CommandLine.arguments[1])
 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 func color(_ value: UInt32, alpha: CGFloat = 1) -> NSColor {

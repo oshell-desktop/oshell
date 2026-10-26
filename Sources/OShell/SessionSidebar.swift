@@ -66,9 +66,9 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
             button.bezelStyle = .recessed; button.setButtonType(.momentaryPushIn)
             (button.cell as? NSButtonCell)?.showsBorderOnlyWhileMouseInside = true
             button.imagePosition = .imageOnly; button.imageScaling = .scaleProportionallyDown
-            button.image = NSImage(oshellSymbolName: symbol, accessibilityDescription: label)
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
             button.image?.size = NSSize(width: 14, height: 14)
-            button.oshellContentTintColor = .secondaryLabelColor
+            button.contentTintColor = .secondaryLabelColor
             button.toolTip = label; button.setAccessibilityLabel(label); button.identifier = .init(identifier)
             NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: 26), button.heightAnchor.constraint(equalToConstant: 24)])
             return button
@@ -91,7 +91,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         tree.onReturn = { [weak self] in self?.activateSelected() }
         tree.makeContextMenu = { [weak self] row in self?.contextMenu(for: row) }
         tree.setAccessibilityLabel("会话目录树"); tree.identifier = .init(selectionOnly ? "session.link.sourceTree" : "sidebar.session.tree")
-        if #available(macOS 11, *) { tree.style = .plain }
+        tree.style = .plain
         let scroll = NSScrollView(); scroll.documentView = tree; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabelColor
         let components: [NSView] = (selectionOnly ? [] : [header]) + [search, treeActions, scroll, status]

@@ -56,7 +56,7 @@ final class QuickSendBar: NSView, NSTextFieldDelegate, NSMenuDelegate {
         super.init(frame: frame)
         scopeButton.bezelStyle = .rounded; scopeButton.setAccessibilityLabel("快速发送范围")
         input.placeholderString = "输入命令，回车发送；右侧选择历史或快速命令"
-        input.font = .oshellMonospacedSystemFont(ofSize: 12, weight: .regular); input.delegate = self
+        input.font = .monospacedSystemFont(ofSize: 12, weight: .regular); input.delegate = self
         input.cell?.usesSingleLineMode = true; input.setAccessibilityLabel("快速发送命令")
         input.onMultiline = { [weak self] text in
             guard let self else { return }
@@ -99,7 +99,7 @@ final class QuickSendBar: NSView, NSTextFieldDelegate, NSMenuDelegate {
         }
         scopeButton.menu = menu
         scopeButton.cell?.lineBreakMode = .byTruncatingTail
-        scopeButton.oshellContentTintColor = ready.count > 1 ? .systemOrange : nil
+        scopeButton.contentTintColor = ready.count > 1 ? .systemOrange : nil
         scopeButton.toolTip = (groupContext.map { "目标分组：" + $0 + "\n" } ?? "") + "实际接收 \(ready.count) 个终端会话" + (scope == .selected && ready.isEmpty ? "；请重新选择目标会话" : "") + (scope == .selectedGroups && ready.isEmpty ? "；请检查所选分组及会话状态" : "") + (skipped > 0 ? "，跳过 \(skipped) 个登录、传输、交互式本机工具运行中或已关闭的标签" : "") + "\n" + ready.map { "\($0.title) · \($0.profile.name)" + ($0.ended ? " · 已断开（本地输入）" : "") }.joined(separator: "\n")
         sendButton.isEnabled = !ready.isEmpty
         if historyButton.menu?.items.isEmpty != false { rebuildHistoryMenu() }

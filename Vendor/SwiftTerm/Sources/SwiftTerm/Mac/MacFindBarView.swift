@@ -111,7 +111,7 @@ final class TerminalFindBarView: NSVisualEffectView, NSSearchFieldDelegate {
         button.bezelStyle = .texturedRounded
         button.setButtonType(.momentaryPushIn)
         button.controlSize = .small
-        button.image = NSImage(swiftTermSymbolName: symbol, accessibilityDescription: tooltip)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
         button.toolTip = tooltip
     }
 

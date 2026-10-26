@@ -13,7 +13,7 @@ private final class AIRequestPreview: NSScrollView {
         text.isVerticallyResizable = true; text.isHorizontallyResizable = false
         text.minSize = .zero; text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         text.autoresizingMask = [.width]; text.textContainerInset = NSSize(width: 8, height: 8)
-        text.font = .oshellMonospacedSystemFont(ofSize: 11, weight: .regular)
+        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         text.textColor = .textColor; text.backgroundColor = .textBackgroundColor
         text.textContainer?.widthTracksTextView = true
         documentView = text; hasVerticalScroller = true; borderType = .bezelBorder
@@ -149,7 +149,7 @@ final class AISendReview: InterfaceSurfaceView {
     @objc private func toggleTechnical() { displaySnapshot() }
     private func displaySnapshot() {
         guard let snapshot else { return }
-        preview.font = technical.state == .on ? .oshellMonospacedSystemFont(ofSize: 11, weight: .regular) : .systemFont(ofSize: 13)
+        preview.font = technical.state == .on ? .monospacedSystemFont(ofSize: 11, weight: .regular) : .systemFont(ofSize: 13)
         preview.string = technical.state == .on ? snapshot.preview : snapshot.disclosureText
         textScroll.resetToTop = true; textScroll.needsLayout = true; needsLayout = true
     }
@@ -198,7 +198,7 @@ final class AISendReview: InterfaceSurfaceView {
         details.identifier = .init("ai.test.technical")
         details.run = { [weak details, weak scroll] in
             guard let details, let scroll else { return }
-            scroll.text.font = details.state == .on ? .oshellMonospacedSystemFont(ofSize: 11, weight: .regular) : .systemFont(ofSize: 13)
+            scroll.text.font = details.state == .on ? .monospacedSystemFont(ofSize: 11, weight: .regular) : .systemFont(ofSize: 13)
             scroll.text.string = details.state == .on ? snapshot.preview : snapshot.disclosureText
             scroll.resetToTop = true; scroll.needsLayout = true
         }

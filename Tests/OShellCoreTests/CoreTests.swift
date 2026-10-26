@@ -28,21 +28,19 @@ final class CoreTests {
         XCTAssertEqual(source.latestReleaseURL.absoluteString, "https://api.github.com/repos/example-org/OShell/releases/latest")
         XCTAssertEqual(source.staticMetadataURL.absoluteString, "https://example-org.github.io/OShell/updates/latest.json")
         XCTAssertEqual(try UpdateSource("Example/Example.github.io").staticMetadataURL.absoluteString, "https://example.github.io/updates/latest.json")
-        XCTAssertEqual(UpdateFlavor.select(appleSilicon: true, majorOS: 13), .arm64)
-        XCTAssertEqual(UpdateFlavor.select(appleSilicon: true, majorOS: 12), .universal)
-        for version in [10, 11, 12, 13, 15, 26] {
-            let flavor = UpdateFlavor.select(appleSilicon: false, majorOS: version)
-            XCTAssertEqual(flavor, .intel)
-            XCTAssertEqual(flavor.minimumOS, "10.13")
-            XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1/OShell-1-macOS10.13-Intel.dmg")!, flavor: flavor))
+        XCTAssertEqual(UpdateFlavor.select(appleSilicon: true), .arm64)
+        XCTAssertEqual(UpdateFlavor.select(appleSilicon: false), .amd64)
+        for flavor in [UpdateFlavor.arm64, .amd64] {
+            XCTAssertEqual(flavor.minimumOS, "15.0")
+            XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1/OShell-1-\(flavor.rawValue).dmg")!, flavor: flavor))
         }
         for invalid in ["", "../repo", "owner/..", "owner/repo/releases", "https://github.com.evil.test/a/b", "http://github.com/a/b", "https://token@github.com/a/b", "https://github.com/a/b?token=secret", "a/b#c"] { XCTAssertThrowsError(try UpdateSource(invalid)) }
-        let url = URL(string: "https://github.com/example-org/OShell/releases/download/v0.2.42/OShell-0.2.42-macOS13-arm64.dmg")!
+        let url = URL(string: "https://github.com/example-org/OShell/releases/download/v0.2.42/OShell-0.2.42-macOS15-arm64.dmg")!
         XCTAssertTrue(source.acceptsArchive(url, flavor: .arm64))
-        XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/EXAMPLE-ORG/oshell/releases/download/v1/OShell-1-macOS13-arm64.dmg")!, flavor: .arm64))
-        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/../OShell-1-macOS13-arm64.dmg")!, flavor: .arm64))
-        XCTAssertTrue(!source.acceptsArchive(url, flavor: .intel))
-        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/another/repo/releases/download/v1/OShell-1-macOS13-arm64.dmg")!, flavor: .arm64))
+        XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/EXAMPLE-ORG/oshell/releases/download/v1/OShell-1-macOS15-arm64.dmg")!, flavor: .arm64))
+        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/../OShell-1-macOS15-arm64.dmg")!, flavor: .arm64))
+        XCTAssertTrue(!source.acceptsArchive(url, flavor: .amd64))
+        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/another/repo/releases/download/v1/OShell-1-macOS15-arm64.dmg")!, flavor: .arm64))
         var prefs = Preferences(); prefs.updateRepository = source.repository; prefs.automaticUpdateChecks = true
         let restored = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(prefs))
         XCTAssertEqual(restored.updateRepository, source.repository); XCTAssertTrue(restored.automaticUpdateChecks)
@@ -59,7 +57,7 @@ final class CoreTests {
             return ["draft": false, "prerelease": false, "tag_name": "v1.2.3", "body": "Release notes\n<!-- oshell-update-v1:\(flavor.rawValue):\(Data(xml.utf8).base64EncodedString()) -->", "assets": [["name": name, "size": 1234, "state": "uploaded", "browser_download_url": url]]]
         }
         func read(_ object: [String: Any], _ flavor: UpdateFlavor = .arm64) throws -> GitHubReleaseUpdate { try GitHubReleaseUpdate.read(JSONSerialization.data(withJSONObject: object), source: source, flavor: flavor) }
-        for flavor in [UpdateFlavor.arm64, .intel, .intelModern, .universal] {
+        for flavor in [UpdateFlavor.arm64, .amd64] {
             let result = try read(release(flavor), flavor)
             XCTAssertEqual(result.version, "1.2.3"); XCTAssertEqual(result.build, "45")
             XCTAssertTrue(result.archiveURL.pathExtension == "dmg")
@@ -72,9 +70,9 @@ final class CoreTests {
         bad = release(); bad["assets"] = []; XCTAssertThrowsError(try read(bad))
         bad = release(); var assets = bad["assets"] as! [[String: Any]]; assets[0]["size"] = 99; bad["assets"] = assets; XCTAssertThrowsError(try read(bad))
         bad = release(); assets = bad["assets"] as! [[String: Any]]; assets[0]["browser_download_url"] = "https://other.example/file.dmg"; bad["assets"] = assets; XCTAssertThrowsError(try read(bad))
-        XCTAssertThrowsError(try read(release(), .intel))
+        XCTAssertThrowsError(try read(release(), .amd64))
         XCTAssertThrowsError(try GitHubReleaseUpdate.read(Data(repeating: 65, count: 1_048_577), source: source, flavor: .arm64))
-        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1.2.3/OShell-1.2.3-macOS13-arm64-update.zip")!, flavor: .arm64))
+        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1.2.3/OShell-1.2.3-macOS15-arm64-update.zip")!, flavor: .arm64))
         func site(_ flavor: UpdateFlavor = .arm64) throws -> [String: Any] {
             let update = try read(release(flavor), flavor)
             let feed = update.signedFeed + Data("<!-- sparkle-signatures: fixture -->".utf8)
@@ -84,7 +82,7 @@ final class CoreTests {
         func readSite(_ object: [String: Any], _ flavor: UpdateFlavor = .arm64) throws -> GitHubReleaseUpdate {
             try GitHubReleaseUpdate.readStatic(JSONSerialization.data(withJSONObject: object), source: source, flavor: flavor)
         }
-        for flavor in [UpdateFlavor.arm64, .intel, .intelModern, .universal] {
+        for flavor in [UpdateFlavor.arm64, .amd64] {
             let result = try readSite(site(flavor), flavor)
             XCTAssertEqual(result.version, "1.2.3"); XCTAssertEqual(result.build, "45")
             XCTAssertEqual(result.signedFeed, try read(release(flavor), flavor).signedFeed + Data("<!-- sparkle-signatures: fixture -->".utf8))
@@ -92,7 +90,7 @@ final class CoreTests {
         for (field, value) in [("format","other"),("repository","other/project"),("version","9.9.9"),("build","999")] {
             var bad = try site(); bad[field] = value; XCTAssertThrowsError(try readSite(bad))
         }
-        XCTAssertThrowsError(try readSite(site(), .intel))
+        XCTAssertThrowsError(try readSite(site(), .amd64))
         var invalidSite = try site(); invalidSite["platforms"] = [:]; XCTAssertThrowsError(try readSite(invalidSite))
         XCTAssertThrowsError(try GitHubReleaseUpdate.readStatic(Data("<html>404</html>".utf8), source: source, flavor: .arm64))
         var instant = Date(timeIntervalSince1970: 0), requests = 0
@@ -685,18 +683,16 @@ final class CoreTests {
         }
     }
     func testLegacyClientAndFileIO() throws {
-        XCTAssertTrue(OpenSSHCapabilities(version: "OpenSSH_7.6p1, LibreSSL").needsLegacyAskpass)
-        XCTAssertTrue(!OpenSSHCapabilities(version: "OpenSSH_8.4p1").needsLegacyAskpass)
         XCTAssertTrue(!OpenSSHCapabilities(version: "OpenSSH_7.6p1").needsSCPLegacyFlag)
         XCTAssertTrue(OpenSSHCapabilities(version: "OpenSSH_9.0p1").needsSCPLegacyFlag)
         let pipe = Pipe(), data = Data("compatibility pipe test".utf8)
-        try pipe.fileHandleForWriting.oshellWrite(contentsOf: data); try pipe.fileHandleForWriting.oshellClose()
-        XCTAssertEqual(try pipe.fileHandleForReading.oshellRead(upToCount: 1024), data)
-        XCTAssertNil(try pipe.fileHandleForReading.oshellRead(upToCount: 1024))
-        try pipe.fileHandleForReading.oshellClose()
-        let broken = Pipe(); try broken.fileHandleForReading.oshellClose()
-        XCTAssertThrowsError(try broken.fileHandleForWriting.oshellWrite(contentsOf: data))
-        try broken.fileHandleForWriting.oshellClose()
+        try pipe.fileHandleForWriting.write(contentsOf: data); try pipe.fileHandleForWriting.close()
+        XCTAssertEqual(try pipe.fileHandleForReading.read(upToCount: 1024), data)
+        XCTAssertNil(try pipe.fileHandleForReading.read(upToCount: 1024))
+        try pipe.fileHandleForReading.close()
+        let broken = Pipe(); try broken.fileHandleForReading.close()
+        XCTAssertThrowsError(try broken.fileHandleForWriting.write(contentsOf: data))
+        try broken.fileHandleForWriting.close()
     }
     func testFileZillaLaunchContract() throws {
         let password = "p:a@ss% 中文"

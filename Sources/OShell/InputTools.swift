@@ -8,7 +8,7 @@ func operatorButton(_ title: String, target: AnyObject?, action: Selector?) -> N
     let button = NSButton(title: title, target: target, action: action); button.bezelStyle = .rounded; return button
 }
 func textEditor(_ text: String, editable: Bool = true) -> (NSScrollView, NSTextView) {
-    let view = CommandTextView(frame: .zero, textContainer: nil); view.isRichText = false; view.isEditable = editable; view.font = .oshellMonospacedSystemFont(ofSize: 12, weight: .regular)
+    let view = CommandTextView(frame: .zero, textContainer: nil); view.isRichText = false; view.isEditable = editable; view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
     view.string = text; view.isVerticallyResizable = true; view.isHorizontallyResizable = false
     view.autoresizingMask = [.width]; view.textContainer?.widthTracksTextView = true; view.textContainerInset = NSSize(width: 8, height: 8)
     let scroll = NSScrollView(); scroll.documentView = view; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder

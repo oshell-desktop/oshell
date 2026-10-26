@@ -11,7 +11,7 @@ final class SSHClientLocale {
     private let directory: URL
     static func environment(_ inherited: [String: String]) -> [String: String] {
         var value = SSHEnvironment.remoteClient(inherited)
-        value["LC_CTYPE"] = "UTF-8" // Supported by macOS, including 10.13.
+        value["LC_CTYPE"] = "UTF-8" // Supported by macOS.
         return value
     }
     init(arguments: [String], currentDirectory: String = FileManager.default.currentDirectoryPath) throws {

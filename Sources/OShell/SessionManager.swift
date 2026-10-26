@@ -216,7 +216,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         table.addTableColumn(editColumn)
         // Use explicit table metrics: automatic style adds OS-dependent insets,
         // and a bare NSTextField is stretched to row height instead of centered.
-        if #available(macOS 11, *) { table.style = .plain }; table.rowSizeStyle = .custom; table.rowHeight = 32
+        table.style = .plain; table.rowSizeStyle = .custom; table.rowHeight = 32
         table.intercellSpacing = NSSize(width: 8, height: 0)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.allowsMultipleSelection = true

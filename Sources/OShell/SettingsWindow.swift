@@ -34,14 +34,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let appearance: NSAppearance?
         switch appearanceView.selectedTheme {
         case .light: appearance = NSAppearance(named: .aqua)
-        case .dark: appearance = NSAppearance(named: .oshellDark)
+        case .dark: appearance = NSAppearance(named: .darkAqua)
         case .system:
             // nil would inherit NSApp's saved theme, which may be forced dark
             // or light. Preview the system preference without mutating NSApp.
             if ApplicationAppearance.theme == .system { appearance = nil }
             else {
                 let dark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
-                appearance = NSAppearance(named: dark ? .oshellDark : .aqua)
+                appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             }
         }
         PopupPresentation.applyAppearance(appearance, to: window)

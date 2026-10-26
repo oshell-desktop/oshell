@@ -3,20 +3,16 @@
 // Copyright (c) 2026 OShell contributors
 import PackageDescription
 import Foundation
-let legacy = ProcessInfo.processInfo.environment["OSHELL_LEGACY"] == "1"
-let minimum = legacy ? "10.13" : (ProcessInfo.processInfo.environment["OSHELL_MACOS_MINIMUM"] ?? "13.0")
-let compatibility: [SwiftSetting] = legacy ? [.define("OSHELL_LEGACY")] : []
 let testHarness = ProcessInfo.processInfo.environment["OSHELL_TEST_HARNESS"] == "1"
-let appSettings = compatibility + (testHarness ? [.define("OSHELL_TEST_HARNESS")] : [])
+let appSettings: [SwiftSetting] = testHarness ? [.define("OSHELL_TEST_HARNESS")] : []
 let package = Package(
-    name: "OShell", platforms: [.macOS(minimum)],
+    name: "OShell", platforms: [.macOS(.v15)],
     products: [.executable(name: "OShell", targets: ["OShell"]), .executable(name: "OShell-ZOC", targets: ["OShellZOC"]), .executable(name: "OShell-FileZilla", targets: ["OShellFileZilla"])],
-    dependencies: [.package(path: "Vendor/SwiftTerm")] + (legacy ? [.package(path: "Vendor/CryptoSwift")] : []),
+    dependencies: [.package(path: "Vendor/SwiftTerm")],
     targets: [
         .binaryTarget(name: "Sparkle", path: "Vendor/Sparkle/Sparkle.xcframework"),
-        .target(name: "OShellCore", dependencies: legacy ? [.product(name: "CryptoSwift", package: "CryptoSwift")] : [], swiftSettings: compatibility),
+        .target(name: "OShellCore"),
         .executableTarget(name: "OShell", dependencies: ["OShellCore", "Sparkle", .product(name: "SwiftTerm", package: "SwiftTerm")], exclude: testHarness ? [] : ["TestSupport"], swiftSettings: appSettings, linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
-        .executableTarget(name: "OShellSSH"),
         .executableTarget(name: "OShellProxy", dependencies: ["OShellCore"]),
         .executableTarget(name: "OShellAskpass", dependencies: ["OShellCore"]),
         .executableTarget(name: "OShellZOC", dependencies: ["OShellCore"]),

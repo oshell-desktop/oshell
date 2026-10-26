@@ -1,4 +1,3 @@
-#if !OSHELL_LEGACY
 #if os(macOS) || os(iOS) || os(visionOS)
 import CoreGraphics
 import Foundation
@@ -338,6 +337,4 @@ final class GlyphAtlas {
         return device.makeTexture(descriptor: descriptor)
     }
 }
-#endif
-
 #endif

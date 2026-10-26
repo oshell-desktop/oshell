@@ -18,7 +18,7 @@ enum RemoteFileIconsTest {
         cell.frame = NSRect(x: 0, y: 0, width: 350, height: 28)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 350, height: 28), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = cell
-        for appearance in [NSAppearance.Name.aqua, .oshellDark] {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             window.appearance = NSAppearance(named: appearance)
             for item in [entry("folder", directory: true), entry("photo.png"), entry("link", link: true), entry("plain"), entry("unknown.zip", unknown: true)] {
                 cell.configure(item); cell.layoutSubtreeIfNeeded()

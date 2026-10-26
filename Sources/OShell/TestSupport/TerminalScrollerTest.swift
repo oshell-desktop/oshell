@@ -2,9 +2,7 @@
 // Copyright (c) 2026 OShell contributors
 import AppKit
 import SwiftTerm
-#if !OSHELL_LEGACY
 import MetalKit
-#endif
 import OShellCore
 
 /// Native terminal rendering and scroll input, using fixture output only.
@@ -69,7 +67,6 @@ enum TerminalScrollerTest {
                 terminal.pageUp()
                 checks["keyboardScrollReveals"] = scroller.alphaValue == 1
                 sample("light-terminal-dark-ui")
-#if !OSHELL_LEGACY
                 if MTLCreateSystemDefaultDevice() != nil {
                     try? terminal.setUseMetal(true)
                     checks["metalEnabled"] = terminal.isUsingMetalRenderer
@@ -79,7 +76,6 @@ enum TerminalScrollerTest {
                     terminal.scrollDown(lines: 2)
                     sample("metal")
                 }
-#endif
                 terminal.feed(text: "\u{1b}[?1049h")
                 checks["alternateScreenHidesScroller"] = !terminal.canScroll && scroller.alphaValue == 0
                 terminal.scrollWheel(with: wheel(3))

@@ -58,18 +58,17 @@ def macho(path):
     with path.open('rb') as f: return f.read(4) in [b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca']
 
 def assemble(flavor, arches, minimum, binaries, helpers):
+    if len(arches) != 1: raise ValueError('Only single-architecture apps are supported')
     app = WORK/flavor/'OShell.app'
     if app.exists(): shutil.rmtree(app)
     contents=app/'Contents'; resources=contents/'Resources'
     resources.mkdir(parents=True)
     for name, relative in PROGRAMS.items():
         target=contents/relative; target.parent.mkdir(parents=True,exist_ok=True)
-        if len(arches)==1: shutil.copy2(binaries[arches[0]]/name,target)
-        else: run(['lipo','-create',*[binaries[a]/name for a in arches],'-output',target])
+        shutil.copy2(binaries[arches[0]]/name,target)
     for name in ['lrz','lsz']:
         target=contents/'Helpers'/name
-        if len(arches)==1: shutil.copy2(helpers[arches[0]]/name,target)
-        else: run(['lipo','-create',*[helpers[a]/name for a in arches],'-output',target])
+        shutil.copy2(helpers[arches[0]]/name,target)
     (contents/'Helpers/rz').symlink_to('lrz'); (contents/'Helpers/sz').symlink_to('lsz')
     for bundle in binaries[arches[0]].glob('*.bundle'):
         shutil.copytree(bundle,resources/bundle.name)
@@ -82,25 +81,16 @@ def assemble(flavor, arches, minimum, binaries, helpers):
     for source,name in [(ROOT/'LICENSE','OShell-LICENSE.txt'),(ROOT/'THIRD_PARTY_NOTICES.txt','THIRD_PARTY_NOTICES.txt'),(ROOT/'Vendor/SwiftTerm/LICENSE','SwiftTerm-LICENSE.txt'),(helpers[arches[0]].parent/'COPYING','lrzsz-COPYING.txt'),(ROOT/'Vendor/lrzsz-0.12.20.tar.gz','lrzsz-0.12.20.tar.gz')]: shutil.copy2(source,resources/name)
     for font_directory in ['NerdFonts', 'DejaVuFonts', 'CascadiaCode']:
         shutil.copytree(ROOT/'Vendor'/font_directory, resources/font_directory)
-    if flavor=='legacy': shutil.copy2(ROOT/'Vendor/CryptoSwift/LICENSE',resources/'CryptoSwift-LICENSE.txt')
     shutil.copy2(ROOT/'shell-integration/oshell-integration.sh',resources/'oshell-integration.sh')
     shutil.copy2(ROOT/'Vendor/ColorSchemes/LICENSE',resources/'ColorSchemes-LICENSE.txt')
     # Generate from the canonical drawing code, never reuse an older app icon.
     run(['swift',ROOT/'scripts/icon.swift',WORK/'OShell.iconset'])
     run(['iconutil','-c','icns',WORK/'OShell.iconset','-o',resources/'OShell.icns'])
-    if flavor=='legacy':
-        frameworks=contents/'Frameworks';frameworks.mkdir()
-        runtime=Path(output(['xcrun','--find','swiftc'])).parent.parent/'lib/swift-5.0/macosx'
-        run(['xcrun','swift-stdlib-tool','--copy','--scan-folder',contents,'--platform','macosx','--source-libraries',runtime,'--destination',frameworks],log='package-legacy-runtime.log')
-        assert (frameworks/'libswiftCore.dylib').exists(), 'Missing pre-Swift-OS runtime'
     entries=[]
     for path in sorted(contents.rglob('*')):
         if not macho(path):continue
         actual=output(['lipo','-archs',path]).split()
         assert set(arches).issubset(actual),(path,actual)
-        if flavor=='legacy' and len(actual)>1:
-            thin=path.with_suffix(path.suffix+'.thin')
-            run(['lipo',path,'-thin','x86_64','-output',thin]);thin.replace(path)
         if path.relative_to(contents).parts[0] != 'Frameworks':
             # Preserve external symbols and Swift/ObjC runtime metadata; remove
             # local linker names as well as debug maps before signing the app.

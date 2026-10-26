@@ -30,7 +30,7 @@ final class TerminalSearchPanel: NSView, NSSearchFieldDelegate {
             (previous, "chevron.up", "上一个匹配（⇧↩，其他快捷键可在设置中修改）", #selector(previousMatch)),
             (next, "chevron.down", "下一个匹配（↩，其他快捷键可在设置中修改）", #selector(nextMatch)),
             (closeButton, "xmark", "关闭搜索（Esc）", #selector(closeSearch))] {
-            button.image = NSImage(oshellSymbolName: symbol, accessibilityDescription: title)
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
             button.toolTip = title; button.setAccessibilityLabel(title)
             button.isBordered = false; button.target = self; button.action = action
         }

@@ -311,7 +311,7 @@ extension WorkspaceController {
             switch target {
             case .folder(let child):
                 let item = menu.addItem(withTitle: String(child.split(separator: "/").last ?? ""), action: nil, keyEquivalent: "")
-                item.image = NSImage(oshellSymbolName: "folder", accessibilityDescription: nil); item.submenu = sessionLinkMenu(folder: child)
+                item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil); item.submenu = sessionLinkMenu(folder: child)
             case .session(let id):
                 guard let profile = configuration.profiles.first(where: { $0.id == id }) else { continue }
                 let detail = "实际会话 · " + profile.kind.title + "\n" + profile.host
@@ -364,7 +364,7 @@ extension WorkspaceController {
         let management = NSMenu(); management.autoenablesItems = false
         for path in configuration.sessionLinks.allFolders where folder.isEmpty || (path != folder && SessionDirectory.contains(path, in: folder)) {
             let item = management.addItem(withTitle: path, action: nil, keyEquivalent: ""), actions = NSMenu(); actions.autoenablesItems = false
-            item.image = NSImage(oshellSymbolName: "folder", accessibilityDescription: nil)
+            item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
             for (title, action) in [("重命名文件夹…", #selector(renameLinkFolder(_:))), ("新建子文件夹…", #selector(newLinkFolder(_:))), ("删除快捷链接文件夹…", #selector(removeLinkFolder(_:)))] {
                 let actionItem = actions.addItem(withTitle: title, action: action, keyEquivalent: ""); actionItem.target = self; actionItem.representedObject = path
             }

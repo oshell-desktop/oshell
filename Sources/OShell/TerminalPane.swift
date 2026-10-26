@@ -620,7 +620,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         transferProgress.cancelButton.target = self; transferProgress.cancelButton.action = #selector(cancelAction)
         closeButton.isBordered = false; closeButton.isHidden = true
         closeButton.translatesAutoresizingMaskIntoConstraints = false
-        closeButton.image = NSImage(oshellSymbolName: "xmark", accessibilityDescription: "关闭此分屏会话")
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "关闭此分屏会话")
         closeButton.imageScaling = .scaleProportionallyDown
         closeButton.toolTip = "关闭此分屏会话，保留其他分屏"
         closeButton.setAccessibilityLabel("关闭此分屏会话")
@@ -681,7 +681,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         scheme.apply(to: terminal)
         view.layer?.backgroundColor = NSColor(hex: scheme.background)!.cgColor
         header.textColor = NSColor(hex: scheme.foreground)!.withAlphaComponent(0.75)
-        transferProgress.appearance = NSAppearance(named: scheme.isDark ? .oshellDark : .aqua)
+        transferProgress.appearance = NSAppearance(named: scheme.isDark ? .darkAqua : .aqua)
         closeButton.appearance = transferProgress.appearance
         searchPanel.appearance = transferProgress.appearance
         if !prefs.metal || terminal.window != nil { try? terminal.setUseMetal(prefs.metal) }
@@ -689,7 +689,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private static func font(_ prefs: Preferences) -> NSFont {
         BundledTerminalFonts.register()
         if !prefs.fontName.isEmpty, let font = NSFont(name: prefs.fontName, size: prefs.fontSize) { return font }
-        return .oshellMonospacedSystemFont(ofSize: prefs.fontSize, weight: .regular)
+        return .monospacedSystemFont(ofSize: prefs.fontSize, weight: .regular)
     }
     func setSelected(_ value: Bool, showFocusIndicator: Bool = true) {
         view.layer?.borderWidth = 0
@@ -739,8 +739,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 let helper = ZmodemTransfer.helperDirectory.appendingPathComponent("OShellAskpass").path.replacingOccurrences(of: "%", with: "%%")
                 args.insert(contentsOf: ["-o", "PermitLocalCommand=yes", "-o", "LocalCommand=" + ConnectionValidation.quote(helper) + " --session-ready"], at: args.count - 2)
             }
-            let detachedSSH = profile.kind == .ssh && OpenSSHCapabilities.current.needsLegacyAskpass
-            let executable = profile.kind == .ssh ? (detachedSSH ? ZmodemTransfer.helperDirectory.appendingPathComponent("OShellSSH").path : "/usr/bin/ssh") : "/bin/zsh"
+            let executable = profile.kind == .ssh ? "/usr/bin/ssh" : "/bin/zsh"
             started = true; ended = false
             var environment = ProcessInfo.processInfo.environment
             environment["TERM"] = externalTerminalType ?? "xterm-256color"; environment["COLORTERM"] = "truecolor"

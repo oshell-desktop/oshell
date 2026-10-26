@@ -118,13 +118,8 @@ final class AuthBroker {
         reader.setCancelHandler { close(fd) }; reader.resume(); source = reader
     }
     var environment: [String: String] {
-        var values = ["SSH_ASKPASS": ZmodemTransfer.helperDirectory.appendingPathComponent("OShellAskpass").path,
+        ["SSH_ASKPASS": ZmodemTransfer.helperDirectory.appendingPathComponent("OShellAskpass").path,
                       "SSH_ASKPASS_REQUIRE": "force", "OSHELL_AUTH_PROXY_ID": "", "OSHELL_AUTH_SOCKET": endpoint.path, "OSHELL_AUTH_TOKEN": token]
-        if OpenSSHCapabilities.current.needsLegacyAskpass {
-            values.removeValue(forKey: "SSH_ASKPASS_REQUIRE")
-            values["DISPLAY"] = ProcessInfo.processInfo.environment["DISPLAY"] ?? "oshell:0"
-        }
-        return values
     }
     private func enqueue(_ request: AuthRequest, client: Int32, completion: @escaping (AuthResponse) -> Void) {
         // These are protocol notifications, never prompts. In particular a ready

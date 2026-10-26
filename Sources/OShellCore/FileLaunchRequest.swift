@@ -92,7 +92,7 @@ public struct FileLaunchRequest: Codable {
             let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
             var info = stat()
             guard fstat(fd, &info) == 0, info.st_uid == geteuid(), info.st_mode & S_IFMT == S_IFREG, info.st_size <= 8 * 1024 * 1024 else { throw ModelError.invalid("站点配置文件属性无效。") }
-            let data = try handle.oshellRead(upToCount: 8 * 1024 * 1024 + 1) ?? Data()
+            let data = try handle.read(upToCount: 8 * 1024 * 1024 + 1) ?? Data()
             // Select only the requested entry. No import or rewrite of other sites.
             _ = try site(path, data: data); return data
         }

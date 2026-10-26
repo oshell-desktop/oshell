@@ -40,8 +40,8 @@ def safe(handler,c):
  try:handler(c)
  except Exception:c.close()
 def main():
- parser=argparse.ArgumentParser();parser.add_argument('--flavor',choices=['arm64','legacy'],default='arm64');args=parser.parse_args()
- app=ROOT/('work/test-app/OShell.app' if args.flavor=='arm64' else 'work/test-release/legacy/OShell.app')
+ parser=argparse.ArgumentParser();parser.add_argument('--flavor',choices=['arm64','amd64'],default='arm64');args=parser.parse_args()
+ app=ROOT/('work/test-app/OShell.app' if args.flavor=='arm64' else 'work/test-release/amd64/OShell.app')
  helper=app/'Contents/Helpers/OShellProxy';askpass=app/'Contents/Helpers/OShellAskpass'
  with tempfile.TemporaryDirectory(prefix='oshell-proxy-chain-',dir='/tmp') as raw:
   root=Path(raw);hostkey=paramiko.RSAKey.generate(2048);clientkey=paramiko.RSAKey.generate(2048)

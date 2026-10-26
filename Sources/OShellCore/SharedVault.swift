@@ -3,11 +3,7 @@
 import Foundation
 import CommonCrypto
 import Security
-#if OSHELL_LEGACY
-import CryptoSwift
-#else
 import CryptoKit
-#endif
 
 public enum SharingProtection {
     public static func require(_ configuration: Configuration) throws {
@@ -51,14 +47,7 @@ public enum SharedVault {
         let salt = try random(16), rounds = 600_000
         var derived = try key(password, salt: salt, rounds: rounds)
         defer { derived.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } }
-        let combined: Data
-        #if OSHELL_LEGACY
-        let nonce = try random(12)
-        let mode = GCM(iv: Array(nonce), additionalAuthenticatedData: Array(aad(version)), tagLength: 16, mode: .combined)
-        combined = nonce + Data(try AES(key: derived, blockMode: mode, padding: .noPadding).encrypt(Array(data)))
-        #else
-        combined = try AES.GCM.seal(data, using: SymmetricKey(data: derived), authenticating: aad(version)).combined!
-        #endif
+        let combined = try AES.GCM.seal(data, using: SymmetricKey(data: derived), authenticating: aad(version)).combined!
         return try JSONEncoder().encode(Envelope(format: "OShell.shared-vault", version: version, iterations: rounds, salt: salt, ciphertext: combined))
     }
     public static func open(_ data: Data, password: String) throws -> Data {
@@ -68,12 +57,7 @@ public enum SharedVault {
             guard envelope.format == "OShell.shared-vault", (envelope.version == 1 || envelope.version == 2), envelope.ciphertext.count >= 28, envelope.ciphertext.count <= 32 * 1024 * 1024 + 28 else { throw ModelError.invalid("共享数据格式无效。") }
             var derived = try key(password, salt: envelope.salt, rounds: envelope.iterations)
             defer { derived.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } }
-            #if OSHELL_LEGACY
-            let mode = GCM(iv: Array(envelope.ciphertext.prefix(12)), additionalAuthenticatedData: Array(aad(envelope.version)), tagLength: 16, mode: .combined)
-            return Data(try AES(key: derived, blockMode: mode, padding: .noPadding).decrypt(Array(envelope.ciphertext.dropFirst(12))))
-            #else
             return try AES.GCM.open(AES.GCM.SealedBox(combined: envelope.ciphertext), using: SymmetricKey(data: derived), authenticating: aad(envelope.version))
-            #endif
         } catch { throw ModelError.invalid("主密码不正确，或共享数据已损坏。") }
     }
     public static func encode(_ configuration: Configuration, password: String) throws -> Data {

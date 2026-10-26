@@ -45,7 +45,7 @@ enum TerminalSymbolsTest {
         }
         let symbols = "\u{e0a0} \u{e0a1} \u{e0a2} \u{f07b} \u{f015} \u{f120} \u{f02a2}"
         for size in [13.0, 22.0] {
-            let fonts = [NSFont.oshellMonospacedSystemFont(ofSize: size, weight: .regular), NSFont(name: "Menlo-Regular", size: size)!, NSFont(name: "Monaco", size: size)!] + [NSFont(name: "DejaVuSansMono", size: size), NSFont(name: "CascadiaCode-Regular", size: size)].compactMap { $0 }
+            let fonts = [NSFont.monospacedSystemFont(ofSize: size, weight: .regular), NSFont(name: "Menlo-Regular", size: size)!, NSFont(name: "Monaco", size: size)!] + [NSFont(name: "DejaVuSansMono", size: size), NSFont(name: "CascadiaCode-Regular", size: size)].compactMap { $0 }
             for base in fonts {
                 view.font = base
                 let key = "\(base.fontName)-\(size)"
@@ -80,13 +80,13 @@ enum TerminalSymbolsTest {
                 }
             }
         }
-        if let base = TerminalSymbolFont.matching(NSFont.oshellMonospacedSystemFont(ofSize: 22, weight: .regular)) {
+        if let base = TerminalSymbolFont.matching(NSFont.monospacedSystemFont(ofSize: 22, weight: .regular)) {
             view.font = base; view.privateUseFallbackFont = nil
             feed(symbols); let patchedBefore = snapshot()
             view.privateUseFallbackFont = CTFontCreateCopyWithAttributes(base, base.pointSize / 2, nil, nil) as NSFont
             checks["patchedFontTakesPrecedence"] = patchedBefore != nil && patchedBefore == snapshot()
         }
-        view.font = .oshellMonospacedSystemFont(ofSize: 22, weight: .regular)
+        view.font = .monospacedSystemFont(ofSize: 22, weight: .regular)
         view.privateUseFallbackFont = nil
         feed(symbols + "\r\u{1b}[?25h\u{1b}[2 q")
         let cursorBefore = snapshot()
@@ -96,7 +96,6 @@ enum TerminalSymbolsTest {
         // Exercise the real GPU pipeline with shared row shaping and a block
         // cursor over the branch icon. Standard-render snapshots above cover
         // glyphs, styles and unchanged CJK/emoji without screen permissions.
-        #if !OSHELL_LEGACY
         do {
             try view.setUseMetal(true)
             feed(symbols + "\r\u{1b}[?25h\u{1b}[2 q")
@@ -104,7 +103,6 @@ enum TerminalSymbolsTest {
             checks["metalRendererActive"] = view.isUsingMetalRenderer
             try view.setUseMetal(false)
         } catch { checks["metalRendererActive"] = false }
-        #endif
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
         if let output { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: output) }
         print("Terminal symbol checks: \(checks.count), failed: \(checks.filter { !$0.value }.keys.sorted())")

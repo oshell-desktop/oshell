@@ -17,8 +17,8 @@ def cache_keys(flavor):
     target = TARGETS[flavor]
     variant = dict(flavor=flavor, architectures=target.architectures, minimum=target.minimum, tests=False)
     tools = toolchain_identity()
-    configuration = source_key(ROOT, swift_configuration_inputs(legacy=flavor == 'legacy'), variant, tools)
-    sources = source_key(ROOT, swift_source_inputs(ROOT, legacy=flavor == 'legacy') + ['Vendor/lrzsz-0.12.20.tar.gz', 'scripts/release_helpers.py'], variant, tools)
+    configuration = source_key(ROOT, swift_configuration_inputs(), variant, tools)
+    sources = source_key(ROOT, swift_source_inputs(ROOT) + ['Vendor/lrzsz-0.12.20.tar.gz', 'scripts/release_helpers.py'], variant, tools)
     prefix = f'oshell-build-v4-{platform.machine()}-{flavor}-{configuration}'
     return prefix, f'{prefix}-{sources}'
 
@@ -32,12 +32,8 @@ def check(flavor, github_output=None):
     for command in [['xcodebuild', '-version'], ['xcrun', 'swift', '--version'],
                     ['xcrun', '--sdk', 'macosx', '--show-sdk-version']]:
         subprocess.run(command, check=True)
-    for tool in ['swiftc', 'clang', 'vtool', 'swift-stdlib-tool']:
+    for tool in ['swiftc', 'clang', 'vtool']:
         subprocess.run(['xcrun', '--find', tool], check=True, stdout=subprocess.DEVNULL)
-    if flavor == 'legacy':
-        swiftc = Path(subprocess.check_output(['xcrun', '--find', 'swiftc'], text=True).strip())
-        if not (swiftc.parent.parent/'lib/swift-5.0/macosx/libswiftCore.dylib').is_file():
-            raise RuntimeError('macOS 10.13 requires the pre-Swift-OS runtime from the pinned Xcode toolchain')
     if github_output:
         prefix, key = cache_keys(flavor)
         with Path(github_output).open('a') as stream:

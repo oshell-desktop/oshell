@@ -566,15 +566,9 @@ public class LocalProcess {
                 // and a fast-exiting child's exit fires before the handler is
                 // set, the event is dropped and never redelivered, so
                 // processTerminated() never runs — the child is not reaped and
-                // callers waiting on exit hang. Also resume() on the pre-10.12
-                // path, which previously did nothing (the source is created
-                // suspended, so without resume it never starts).
+                // callers waiting on exit hang.
                 cm.setEventHandler(handler: { [weak self] in self?.processTerminated () })
-                if #available(macOS 10.12, *) {
-                    cm.activate()
-                } else {
-                    cm.resume()
-                }
+                cm.activate()
             }
 #endif
             // Capture FD value for cleanup handler to close it safely after DispatchIO is done

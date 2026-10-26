@@ -65,9 +65,7 @@ enum TerminalClockTest {
                 checks["usesMacLocalTime"] = [Date(), Date().addingTimeInterval(-1)].contains { formatter.string(from: $0) == workspace.clockView.text }
                 checks["noTimeWrittenToTerminalBuffer"] = pane.terminal.getTerminal().getBufferAsData() == originalBuffer
                 var renderers = [false]
-                #if !OSHELL_LEGACY
                 renderers.append(true)
-                #endif
                 for gpu in renderers {
                     var prefs = workspace.configuration.preferences; prefs.metal = gpu
                     for position in TerminalClockPosition.allCases {

@@ -13,7 +13,6 @@ public struct OpenSSHCapabilities {
             minor = Int(ns.substring(with: match.range(at: 2))) ?? 0
         } else { major = 0; minor = 0 }
     }
-    public var needsLegacyAskpass: Bool { major > 0 && (major < 8 || (major == 8 && minor < 4)) }
     public var needsSCPLegacyFlag: Bool { major >= 9 }
     public static let current: OpenSSHCapabilities = {
         let task = Process(), pipe = Pipe()

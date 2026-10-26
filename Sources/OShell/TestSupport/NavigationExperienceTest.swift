@@ -72,9 +72,7 @@ enum NavigationExperienceTest {
         }
         func layoutCases() {
             var renderers = [false]
-            #if !OSHELL_LEGACY
             renderers.append(true)
-            #endif
             for (gpu, mode) in renderers.flatMap({ gpu in TabArrangement.allCases.map { (gpu, $0) } }) {
                 workspace.configuration.preferences.metal = gpu
                 let label = "\(mode)-\(gpu)"

@@ -1,4 +1,3 @@
-#if !OSHELL_LEGACY
 #if os(macOS) || os(iOS) || os(visionOS)
 /// Controls how the Metal renderer builds and caches GPU buffers each frame.
 ///
@@ -17,6 +16,4 @@ public enum MetalBufferingMode {
     /// TUI applications).
     case perFrameAggregated
 }
-#endif
-
 #endif

@@ -54,9 +54,7 @@ public struct WebDAVCertificateTrust: Codable, Equatable {
         String(String.UnicodeScalarView(value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })).prefix(512).description
     }
     static func evaluate(_ trust: SecTrust) -> Bool {
-        if #available(macOS 10.14, *) { return SecTrustEvaluateWithError(trust, nil) }
-        var result = SecTrustResultType.invalid
-        return SecTrustEvaluate(trust, &result) == errSecSuccess && (result == .unspecified || result == .proceed)
+        return SecTrustEvaluateWithError(trust, nil)
     }
     public var usesIPAddress: Bool {
         var v4 = in_addr(), v6 = in6_addr()

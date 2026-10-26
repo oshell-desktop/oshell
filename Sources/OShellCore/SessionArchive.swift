@@ -63,8 +63,8 @@ public struct SessionArchive: Codable {
     }
     public static func read(_ url: URL) throws -> SessionArchive {
         guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { throw ModelError.invalid("请选择普通会话文件。") }
-        let handle = try FileHandle(forReadingFrom: url); defer { try? handle.oshellClose() }
-        return try decode(handle.oshellRead(upToCount: maximumBytes + 1) ?? Data())
+        let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+        return try decode(handle.read(upToCount: maximumBytes + 1) ?? Data())
     }
     /// Merge as independent copies. Rebind both session and proxy credentials to new IDs.
     public func merging(into configuration: Configuration, directory: String = "", includePasswords: Bool,

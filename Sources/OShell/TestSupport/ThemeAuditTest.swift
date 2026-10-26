@@ -39,7 +39,7 @@ enum ThemeAuditTest {
                 guard let window = NSApp.modalWindow, let root = window.contentView else { checks[name + "-opened"] = false; NSApp.abortModal(); return }
                 for (index, theme) in [InterfaceTheme.dark, .light, .dark, .light].enumerated() {
                     ApplicationAppearance.apply(theme)
-                    let expected: NSAppearance.Name = theme == .dark ? .oshellDark : .aqua
+                    let expected: NSAppearance.Name = theme == .dark ? .darkAqua : .aqua
                     if let tabs = descendants(root).compactMap({ $0 as? NSTabView }).first {
                         for page in tabs.tabViewItems.indices {
                             tabs.selectTabViewItem(at: page)
@@ -78,7 +78,7 @@ enum ThemeAuditTest {
             guard let window = controller.window, let root = window.contentView else { continue }
             for (index, theme) in [InterfaceTheme.dark, .light, .dark, .light].enumerated() {
                 ApplicationAppearance.apply(theme); window.makeKeyAndOrderFront(nil)
-                audit(root, "\(name)-\(index)", expected: theme == .dark ? .oshellDark : .aqua)
+                audit(root, "\(name)-\(index)", expected: theme == .dark ? .darkAqua : .aqua)
             }
             window.orderOut(nil)
         }
@@ -86,7 +86,7 @@ enum ThemeAuditTest {
             utility.contentView = view; utility.makeKeyAndOrderFront(nil)
             for (index, theme) in [InterfaceTheme.dark, .light, .dark, .light].enumerated() {
                 ApplicationAppearance.apply(theme)
-                audit(view, "\(name)-\(index)", expected: theme == .dark ? .oshellDark : .aqua)
+                audit(view, "\(name)-\(index)", expected: theme == .dark ? .darkAqua : .aqua)
             }
         }
         utility.orderOut(nil)
@@ -96,17 +96,17 @@ enum ThemeAuditTest {
         child.isReleasedWhenClosed = false
         for theme in [InterfaceTheme.dark, .light] {
             ApplicationAppearance.apply(theme == .dark ? .light : .dark)
-            utility.appearance = NSAppearance(named: theme == .dark ? .oshellDark : .aqua)
+            utility.appearance = NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
             PopupPresentation.prepare(child, over: utility)
             checks["nested-\(theme.rawValue)-inheritsPreview"] = child.effectiveAppearance.name == utility.effectiveAppearance.name
-            let flipped = NSAppearance(named: theme == .dark ? .aqua : .oshellDark)
+            let flipped = NSAppearance(named: theme == .dark ? .aqua : .darkAqua)
             PopupPresentation.applyAppearance(flipped, to: utility)
             checks["nested-\(theme.rawValue)-updatesWhileOpen"] = child.effectiveAppearance.name == utility.effectiveAppearance.name
             PopupPresentation.detach(child)
             let panel = NSColorPanel.shared
             PopupPresentation.prepare(panel, over: utility)
             checks["color-panel-\(theme.rawValue)-inheritsPreview"] = panel.effectiveAppearance.name == utility.effectiveAppearance.name
-            PopupPresentation.applyAppearance(NSAppearance(named: theme == .dark ? .oshellDark : .aqua), to: utility)
+            PopupPresentation.applyAppearance(NSAppearance(named: theme == .dark ? .darkAqua : .aqua), to: utility)
             checks["color-panel-\(theme.rawValue)-updatesWhileOpen"] = panel.effectiveAppearance.name == utility.effectiveAppearance.name
             let panelLabels = descendants(panel.contentView!).compactMap { $0 as? NSTextField }
             checks["color-panel-\(theme.rawValue)-labelsFollowWindow"] = panelLabels.allSatisfy { $0.effectiveAppearance.name == panel.effectiveAppearance.name }
@@ -117,7 +117,7 @@ enum ThemeAuditTest {
         for (index, hex) in ["#FFFFFF", "#000000", "#FFFF00"].enumerated() {
             let cell = HighlightColorCell(hex: hex); cell.frame = NSRect(x: 10, y: CGFloat(index * 30), width: 180, height: 28); chips.addSubview(cell)
             for theme in [InterfaceTheme.dark, .light] {
-                PopupPresentation.applyAppearance(NSAppearance(named: theme == .dark ? .oshellDark : .aqua), to: utility)
+                PopupPresentation.applyAppearance(NSAppearance(named: theme == .dark ? .darkAqua : .aqua), to: utility)
                 checks["highlight-\(hex)-\(theme.rawValue)-readableCode"] = contrast(cell.textField!.textColor!, .windowBackgroundColor, in: cell) >= 3
                 checks["highlight-\(hex)-\(theme.rawValue)-preservesValue"] = cell.textField?.stringValue == hex
             }
@@ -132,7 +132,7 @@ enum ThemeAuditTest {
                 pane.transferProgress.begin("Theme test")
                 for theme in [InterfaceTheme.dark, .light] {
                     ApplicationAppearance.apply(theme)
-                    let expected: NSAppearance.Name = scheme.isDark ? .oshellDark : .aqua
+                    let expected: NSAppearance.Name = scheme.isDark ? .darkAqua : .aqua
                     let prefix = "pane-\(scheme.id)-\(theme.rawValue)"
                     checks[prefix + "-searchAndProgressFollowTerminal"] = pane.searchPanel.effectiveAppearance.name == expected && pane.transferProgress.effectiveAppearance.name == expected
                     checks[prefix + "-paletteUnaffected"] = pane.terminal.nativeBackgroundColor.rgbHex == scheme.background && pane.terminal.nativeForegroundColor.rgbHex == scheme.foreground

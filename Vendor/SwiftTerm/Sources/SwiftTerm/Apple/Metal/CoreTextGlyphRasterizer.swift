@@ -1,4 +1,3 @@
-#if !OSHELL_LEGACY
 #if os(macOS) || os(iOS) || os(visionOS)
 import CoreGraphics
 import CoreText
@@ -88,6 +87,4 @@ final class CoreTextGlyphRasterizer {
                            isColor: isColor)
     }
 }
-#endif
-
 #endif

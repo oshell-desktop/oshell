@@ -212,8 +212,8 @@ do {
             child.executableURL = helper; child.arguments = ["--route-index", String(index - 1), "--target-host", hop.host, "--target-port", String(hop.port), "--tcp-keepalive", options["--tcp-keepalive"] ?? "yes"]
             if let known { child.arguments! += ["--known-hosts", known.path] }
             child.standardInput = handle; child.standardOutput = handle; child.standardError = FileHandle.standardError
-            do { try child.run(); try? handle.oshellClose(); fd = pair[0]; upstream = child }
-            catch { close(pair[0]); try? handle.oshellClose(); throw error }
+            do { try child.run(); try? handle.close(); fd = pair[0]; upstream = child }
+            catch { close(pair[0]); try? handle.close(); throw error }
             // Authentication in previous SSH hops may require human interaction.
             var timeout = timeval(tv_sec: 300, tv_usec: 0)
             _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
@@ -237,5 +237,5 @@ do {
     try handshake(fd, type: type, host: target, port: targetPort, user: user)
     try relay(fd)
 } catch {
-    try? FileHandle.standardError.oshellWrite(contentsOf: Data(("OShell: " + error.localizedDescription + "\n").utf8)); exit(1)
+    try? FileHandle.standardError.write(contentsOf: Data(("OShell: " + error.localizedDescription + "\n").utf8)); exit(1)
 }

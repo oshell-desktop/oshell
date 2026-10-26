@@ -32,7 +32,7 @@ final class AIRecordsWindow: NSWindowController, NSWindowDelegate, NSTableViewDa
         table.setAccessibilityLabel("操作与查询记录列表")
         let list = NSScrollView(); list.documentView = table; list.hasVerticalScroller = true; list.autohidesScrollers = true
         detail.isEditable = false; detail.isSelectable = true; detail.isRichText = false
-        detail.font = .oshellMonospacedSystemFont(ofSize: 12, weight: .regular)
+        detail.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         detail.textColor = .textColor; detail.backgroundColor = .textBackgroundColor
         detail.isVerticallyResizable = true; detail.isHorizontallyResizable = false
         detail.minSize = .zero; detail.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
