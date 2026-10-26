@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 KEEP_REPORTS = {'.gitkeep', 'latest-build.log', 'latest-checks.json', 'latest-cleanup.json'}
 BUILD_NAME = re.compile(r'build(?:-tests|-legacy|-compat-(?:arm64|x86_64)|-modern-(?:arm64|x86|x86_64)|-test-[a-z]+-(?:arm64|x86_64))?')
 OLD_WORK = {
+    'legacy-validation', 'presentation-flush', 'fullscreen-chrome',
     'release','test-release','test-app','command-editor-modules','public-source-checkout',
     'size-review','brand-preview','deep-memory-baseline','memory-baseline','settings-preview','link-drag-native',
     'private-prepublish','privacy-audit','pages-bootstrap-preview','sparkle-inspect','fonts','touch-id',
@@ -32,7 +33,18 @@ def retained_app_copy(path):
         return info.get('CFBundleIdentifier') == 'app.oshell.mac'
     except (OSError, ValueError): return False
 
-def candidates(root):
+def exclude_kept(paths, keep):
+    result = []
+    for path in paths:
+        if any(path == saved or saved in path.parents for saved in keep): continue
+        if any(path in saved.parents for saved in keep):
+            # Keep one current app/report without retaining all of its stale
+            # siblings. Never recurse through a symbolic link.
+            if path.is_dir() and not path.is_symlink(): result += exclude_kept(path.iterdir(), keep)
+        else: result.append(path)
+    return result
+
+def candidates(root, keep=()):
     paths = [root/'.build', root/'.swiftpm', root/'.DS_Store', root/'Assets/.DS_Store', root/'Assets/Brand/.DS_Store', root/'scripts/__pycache__', root/'work/ci-tools/gocache', root/'work/ci-tools/gomod']
     work = root/'work'
     if work.is_dir():
@@ -44,7 +56,8 @@ def candidates(root):
     validation = root/'validation'
     if validation.is_dir(): paths += [p for p in validation.iterdir() if p.name not in KEEP_REPORTS]
     paths = {p for p in paths if p.exists() or p.is_symlink()}
-    return sorted((p for p in paths if not any(parent in paths for parent in p.parents)), key=str)
+    roots = [p for p in paths if not any(parent in paths for parent in p.parents)]
+    return sorted(exclude_kept(roots, keep), key=str)
 
 def fingerprint(path):
     return {str(p.relative_to(path)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -103,8 +116,12 @@ def remove_directory(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply',action='store_true',help='delete listed generated paths; default is a dry run')
-    args = parser.parse_args(); root = ROOT.resolve(); paths = candidates(root)
-    print(json.dumps({'remove':[p.relative_to(root).as_posix() for p in paths], 'keep':'dist/OShell.app'},indent=2))
+    parser.add_argument('--keep',action='append',default=[],metavar='PATH',help='retain a project-relative generated file/directory; repeat as needed')
+    args = parser.parse_args(); root = ROOT.resolve()
+    keep = [Path(os.path.abspath(root/name)) for name in args.keep]
+    if any(not p.is_relative_to(root) for p in keep): parser.error('--keep must stay inside the project')
+    paths = candidates(root, keep)
+    print(json.dumps({'remove':[p.relative_to(root).as_posix() for p in paths], 'keep':['dist/OShell.app', *[p.relative_to(root).as_posix() for p in keep]]},indent=2))
     if not args.apply: return
     app = root/'dist/OShell.app'; info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
     if info.get('OShellTestHarness'): raise RuntimeError('Build the production app before cleanup')
@@ -126,7 +143,8 @@ def main():
         raise RuntimeError('Working tree status changed during cleanup')
     report = {'removed_roots':len(paths),'reclaimed_gib':round((before-usage(root))/1024/1024,2),
               'app':'dist/OShell.app','version':info['CFBundleShortVersionString'],'architecture':arches[0],'app_verified':True,
-              'kept_in_use':[p.relative_to(root).as_posix() for p in kept_in_use]}
+              'kept_in_use':[p.relative_to(root).as_posix() for p in kept_in_use],
+              'kept_explicitly':[p.relative_to(root).as_posix() for p in keep]}
     (root/'validation/latest-cleanup.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(report,indent=2))
 

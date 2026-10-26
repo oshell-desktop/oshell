@@ -126,8 +126,14 @@ final class SessionFullscreenTest {
                 checks["filesEscapeHandled"] = PopupKeyboard.dismiss(window:fileWindow)
                 checks["filesEscapeMinimizes"] = fileWindow.isMiniaturized && (controller as? RemoteFileWindow)?.sessions.count == 1
                 controller.showWindow(nil)
-                checks["filesRestoredAfterEscape"] = !fileWindow.isMiniaturized && fileWindow.isOnActiveSpace
-                let close = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:.command,timestamp:0,windowNumber:fileWindow.windowNumber,context:nil,characters:"w",charactersIgnoringModifiers:"w",isARepeat:false,keyCode:13)!
+                // Deminiaturization can finish after showWindow returns. A real
+                // Cmd+W is only delivered once the restored window becomes key.
+                let restoreDeadline = Date().addingTimeInterval(5)
+                while !fileWindow.isKeyWindow && Date() < restoreDeadline {
+                    _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
+                }
+                checks["filesRestoredAfterEscape"] = !fileWindow.isMiniaturized && fileWindow.isOnActiveSpace && fileWindow.isKeyWindow
+                let close = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:.command,timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:fileWindow.windowNumber,context:nil,characters:"w",charactersIgnoringModifiers:"w",isARepeat:false,keyCode:13)!
                 checks["filesCommandWHandled"] = fileWindow.performKeyEquivalent(with:close)
             } else { _ = PopupKeyboard.dismiss(window: controller.window!) }
             checks[label + "Closed"] = !controller.window!.isVisible && controller.window!.parent == nil

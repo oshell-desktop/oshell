@@ -42,7 +42,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     var isFocusFullscreen = false
     var focusFullscreenRequested = false
     var fullscreenTransitionInProgress = false
-    var focusFullscreenWindowState: FocusFullscreenWindowState?
+    var fullscreenWindowState: FullscreenWindowState?
     var normalWorkspaceTop: NSLayoutConstraint?, focusWorkspaceTop: NSLayoutConstraint?
     weak var topToolbar: WorkspaceToolbar?
     weak var topDivider: NSView?

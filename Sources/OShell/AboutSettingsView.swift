@@ -26,6 +26,7 @@ final class AboutSettingsView: NSView {
         let info = Bundle.main.infoDictionary ?? [:]
         let version = info["CFBundleShortVersionString"] as? String ?? "—"
         let build = info["CFBundleVersion"] as? String ?? "—"
+        let buildLabel = (info["OShellBuildLabel"] as? String).map { " · " + $0 } ?? ""
         let minimum = info["LSMinimumSystemVersion"] as? String ?? "—"
         #if arch(arm64)
         let architecture = "Apple Silicon（arm64）"
@@ -43,7 +44,7 @@ final class AboutSettingsView: NSView {
             return row
         }
         let details = NSStackView(views: [
-            row("版本", "\(version)（构建 \(build)）", id: "version"),
+            row("版本", "\(version)（构建 \(build)）\(buildLabel)", id: "version"),
             row("当前架构", architecture, id: "architecture"),
             row("系统要求", "macOS \(minimum) 或更新版本", id: "minimumOS"),
             row("开源许可证", "GNU GPL v3（GPL-3.0-only）", id: "license")

@@ -56,6 +56,23 @@ class DevelopmentToolsTests(unittest.TestCase):
         p = self.file('work/build/valuable.txt').parent
         with self.assertRaisesRegex(RuntimeError, 'tracked'):
             CLEAN.validate_targets(self.root, [p], ['work/build/valuable.txt'], [])
+    def test_cleanup_keep_preserves_acceptance_and_only_current_test_app(self):
+        kept = self.file('work/test-app/OShell.app/Contents/MacOS/OShell').parents[2]
+        old = self.file('work/test-app/OShell-preview-old.app/Contents/MacOS/OShell').parents[2]
+        acceptance = self.file('dist/acceptance/OShell.app/Contents/MacOS/OShell').parents[3]
+        old_dmg = self.file('dist/old.dmg')
+        report = self.file('validation/fullscreen-acceptance-report.json')
+        paths = CLEAN.candidates(self.root, [kept, acceptance, report])
+        for p in (kept, acceptance, report): self.assertFalse(any(p == q or q in p.parents for q in paths))
+        self.assertIn(old, paths)
+        self.assertIn(old_dmg, paths)
+    def test_locked_desktop_is_rejected_before_ui_regression(self):
+        data = plistlib.dumps([{'IOConsoleUsers':[{'CGSSessionOnConsoleKey':True,'CGSSessionScreenIsLocked':True}]}])
+        with patch.object(UI.subprocess, 'check_output', return_value=data):
+            with self.assertRaisesRegex(RuntimeError, 'Desktop is locked'): UI.require_unlocked_desktop()
+    def test_inactive_locked_session_does_not_block_active_desktop(self):
+        data = plistlib.dumps([{'IOConsoleUsers':[{'CGSSessionOnConsoleKey':False,'CGSSessionScreenIsLocked':True}, {'CGSSessionOnConsoleKey':True}]}])
+        with patch.object(UI.subprocess, 'check_output', return_value=data): UI.require_unlocked_desktop()
     def test_cleanup_rejects_active_process(self):
         exe = self.file('work/test-app/OShell.app/Contents/MacOS/OShell')
         with self.assertRaisesRegex(RuntimeError, 'in use'):

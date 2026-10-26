@@ -9,6 +9,14 @@ import os
 
 /// Keep tab navigation out of the PTY, including while xterm owns keyboard focus.
 final class WorkspaceWindow: NSWindow {
+    override func toggleFullScreen(_ sender: Any?) {
+        // The green-button path must prepare before AppKit snapshots the window
+        // frame, just like the dedicated focus action does before calling here.
+        if !styleMask.contains(.fullScreen) {
+            (windowController as? WorkspaceController)?.prepareFullscreenWindow()
+        }
+        super.toggleFullScreen(sender)
+    }
     #if canImport(os) && !OSHELL_LEGACY
     private static let traceInputLatency = ProcessInfo.processInfo.environment["OSHELL_INPUT_LATENCY"] == "1"
     private static let latencyLog = OSLog(subsystem: "app.oshell", category: "InputLatency")

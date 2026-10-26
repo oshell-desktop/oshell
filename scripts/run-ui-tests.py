@@ -111,10 +111,21 @@ GROUPS = {
     'sessions': ['session-list', 'management', 'popup-keyboard', 'filetabs', 'session-directory', 'directory-picker-stress'],
 }
 
+def require_unlocked_desktop():
+    tree = plistlib.loads(subprocess.check_output(['/usr/sbin/ioreg', '-a', '-n', 'Root', '-d', '1']))
+    def locked(value):
+        if isinstance(value, dict):
+            if value.get('CGSSessionOnConsoleKey') is False: return False
+            return value.get('CGSSessionScreenIsLocked') is True or any(locked(v) for v in value.values())
+        if isinstance(value, list): return any(locked(v) for v in value)
+        return False
+    if locked(tree): raise RuntimeError('Desktop is locked; native fullscreen regression requires an unlocked desktop. No test app was launched.')
+
 def run_case(source, case, timeout):
     info = plistlib.loads((source/'Contents/Info.plist').read_bytes())
     if info.get('OShellTestHarness') is not True:
         raise RuntimeError('Build the test app first: bash scripts/build.sh --tests')
+    if case in ('fullscreen-activation', 'focus-fullscreen', 'session-fullscreen'): require_unlocked_desktop()
     (ROOT/'work').mkdir(exist_ok=True); (ROOT/'validation').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='ui-check-', dir=ROOT/'work') as raw:
         base = Path(raw); app = base/'OShell UI Test.app'; data = base/'data'; data.mkdir()

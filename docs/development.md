@@ -71,11 +71,13 @@ work/test-tools/bin/python scripts/run-webdav-tests.py
 ```sh
 python3 scripts/clean-local-builds.py
 python3 scripts/clean-local-builds.py --apply
+# 可重复 --keep，保留尚需验收的产物或当前测试应用
+python3 scripts/clean-local-builds.py --apply --keep dist/fullscreen-acceptance --keep work/test-app/OShell.app
 ```
 
 第一条只列出目标；第二条执行清理。保留当前本机架构的正式 `dist/OShell.app`、源码、Git、依赖及工具环境、发布密钥和最后一次检查摘要。旧构建、测试副本、安装包、过期工作记录和生成缓存会被删除。清理前验证 app 签名与架构，拒绝删除受 Git 跟踪的文件；同时检查进程与已加载的执行文件、框架，跳过仍在使用的副本。若无法确认已加载文件，会保留重命名后的旧 App 副本。清理后再次核对 app 内容。`work/`、`dist/` 和 `validation/` 是开发产物目录，不用于存放个人会话数据。
 
-清理不会变更系统中已安装的 OShell 或 `~/Library/Application Support/OShell`。之后重新编译会重建缓存。
+清理不会变更系统中已安装的 OShell 或 `~/Library/Application Support/OShell`。之后重新编译会重建缓存。`--keep` 支持项目内文件或目录；保留某个应用时，其同目录的旧副本仍可清理。验收 DMG 和有价值的诊断证据应分别列入保留名单。
 
 ## 项目结构
 
@@ -145,7 +147,7 @@ AI 排查任务自行订阅绑定对话的模型结果，自动续查不依赖�
 
 `python3 scripts/run-ui-tests.py activation-latency` 使用独立数据目录和 24 个空白标签，验证无关窗口/隐藏标签不触发光标刷新，并记录原生窗口切回前后的按键派发耗时。设置 `OSHELL_ACTIVATION_METAL=1` 可覆盖 Metal 路径。此测试不包含真实跨应用输入法切换、SSH 网络和远端回显，不能单独作为实际 SSH 卡顿已消失的证明。
 
-`python3 scripts/run-ui-tests.py fullscreen-activation` 需要已解锁的 macOS 桌面，使用临时应用、24 个标签、本机 PTY 的 cat 回显及一个独立文本框应用，执行三轮原生全屏跨应用切换，分别记录激活、模拟鼠标点击、首键派发、收到回显、绘制及主线程停顿耗时。`OSHELL_ACTIVATION_METAL=1` 覆盖 Metal。测试包含真实应用焦点交接，但输入事件为合成 ASCII，不覆盖人工输入法组词或 SSH 回显；锁屏导致无法进入全屏时不能视为产品回归。两份临时应用退出或超时后都会清理，不关闭用户正在使用的 OShell。`sync-settings` 使用合成加密 WebDAV 配置验证激活同步立即返回、凭据解密在后台执行、准备期间取消不产生过期失败；`multi-window` 验证返回同一工作区不重建菜单项目，切换工作区仍正确绑定动作。共享信封、凭据格式和同步合并协议未改变。
+`python3 scripts/run-ui-tests.py fullscreen-activation` 需要已解锁的 macOS 桌面，使用临时应用、24 个标签、本机 PTY 的 cat 回显及一个独立文本框应用，优先放到内屏，执行三轮保留工具栏的普通原生全屏跨应用切换（不能用隐藏工具栏的专注全屏替代），并检查两种入口使用相同的窗口呈现策略，分别记录激活、模拟鼠标点击、首键派发、收到回显、绘制及主线程停顿耗时。`OSHELL_ACTIVATION_METAL=1` 覆盖 Metal。测试包含真实应用焦点交接，但输入事件为合成 ASCII，不覆盖人工输入法组词或 SSH 回显；锁屏导致无法进入全屏时不能视为产品回归。两份临时应用退出或超时后都会清理，不关闭用户正在使用的 OShell。`sync-settings` 使用合成加密 WebDAV 配置验证激活同步立即返回、凭据解密在后台执行、准备期间取消不产生过期失败；`multi-window` 验证返回同一工作区不重建菜单项目，切换工作区仍正确绑定动作。共享信封、凭据格式和同步合并协议未改变。
 
 诊断构建可通过环境变量 `OSHELL_INPUT_LATENCY=1` 启用慢输入记录；只有按键排队或派发耗时达到 50 毫秒时才写入统一日志，subsystem 为 `app.oshell`、category 为 `InputLatency`。记录只有排队时长、派发时长和距离窗口激活的时间，不包含按键、文字、主机或凭据。排队慢但派发快通常指向主线程此前被其他任务占用；派发本身慢则需采样输入处理路径。需要继续定位 GPU 时，可同时启用现有 `SWIFTTERM_PROFILE=1`，观察 Metal.CurrentDrawable、Metal.RenderPass 和 Metal.BuildDrawData 的 signpost。
 
@@ -173,3 +175,11 @@ OSHELL_TEST_GLOBAL_PROXY=1 work/file-tests-venv/bin/python scripts/run-sftp-reus
 运行 `bash scripts/build.sh --tests`、`python3 scripts/run-ai-compaction-tests.py`、`python3 scripts/run-ai-context-tests.py`、`python3 scripts/run-ai-tests.py`；新回归用四种协议的回环模型验证压缩前后实际 HTTP 内容、接收方隔离、撤销、失败及取消。另用安装了 Paramiko 的 Python 执行 `scripts/run-ai-diagnostics-tests.py`，覆盖原 PTY 空闲确认、逐条审批、查询/变更自动审批与明确接管。所有数据为合成数据，测试不连接真实 AI 服务或用户 SSH 主机。
 
 AI 终端输出采集使用增量字节状态机，OSC 在首个 BEL 或 ST 结束符停止，CSI 和其他控制字符串独立处理；分包或 UTF-8 字节边界不能改变正文，原始 PTY 数据仍原样传入终端。`AITerminalCaptureTest` 覆盖结束符组合和每个分包位置。使用安装了 Paramiko 的 Python 运行 `scripts/run-ai-diagnostics-tests.py --osc-st` 验证原 PTY 输出经真实 HTTP 到达模型，`--echo-only` 验证只收到回显时点名失败查询、暂停后续命令和模型请求，不计入证据。资源查询空正文也暂停并标明可能为空结果或采集异常；文件读取、日志检索和文件变更允许空输出，但明确记录不确定性，不伪造退出码或推断没有匹配项。
+
+### 全屏窗口状态管理
+
+系统全屏和专注全屏在 `WorkspaceWindow.toggleFullScreen` 调用 `super` 之前准备相同的原生窗口呈现；`willEnter` 提供幂等兜底。窗口快照只捕获一次，进入失败或退出后恢复原样。普通全屏保留工具栏、快捷链接栏及系统窗口按钮；专注模式单独控制应用内容。重复通知不会重复写入未改变的样式，状态不写入共享配置。
+
+`fullscreen-activation` 覆盖进入前准备、失败回滚、普通全屏输入/回显、退出尺寸恢复、随后进入和退出专注模式以及本地进程连续性。回显检查跨越终端换行；时间指标明确标为应用绘制完成，不能当作物理屏幕显示延迟。全屏测试启动前检查桌面锁定状态，锁屏时直接报告环境阻断，不启动无效场景。
+
+已移除临时 A–F 布局菜单、输入采样分支、人工诊断开关和强制画面提交实验。保留标准自动回归和既有只记录时长的统一日志。当前验收候选及其验证状态见 `validation/fullscreen-acceptance-report.json`；候选包不代表已经完成实机视觉验收。
