@@ -4,7 +4,10 @@ import AppKit
 
 enum AIInvestigationTest {
     static func run() -> [String: Bool] {
-        var checks = [String: Bool]()
+        var checks = AITerminalCaptureTest.run()
+        let possiblyEmpty: [AIReadOnlyQuery] = [.command(["mkdir", "/tmp/fixture"]), .fileHead("/tmp/fixture"), .logTail("/tmp/fixture"), .logSearch("/tmp/fixture", "missing"), .serviceLogs("fixture.service"), .serviceErrors("fixture.service"), .serviceLogsSince("fixture.service", 5)]
+        checks["legitimateEmptyQueriesAllowed"] = possiblyEmpty.allSatisfy { $0.allowsEmptyOutput }
+        checks["resourceQueriesRequireBody"] = [AIReadOnlyQuery.system, .load, .memory, .processes, .directory("/sys/class/dmi/id")].allSatisfy { !$0.allowsEmptyOutput }
         func reject(_ name: String, _ body: () throws -> Void) {
             do { try body(); checks[name] = false } catch { checks[name] = true }
         }

@@ -6,6 +6,7 @@ import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASES = {
+ 'fullscreen-activation':'OSHELL_FULLSCREEN_ACTIVATION_OUTPUT',
  'ai-compaction':'OSHELL_AI_COMPACTION_OUTPUT',
  'ai-record-selection':'OSHELL_AI_RECORD_SELECTION_OUTPUT',
  'finder-service':'OSHELL_FINDER_SERVICE_OUTPUT',
@@ -130,8 +131,14 @@ def run_case(source, case, timeout):
         args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data),
                 '--env', CASES[case]+'='+str(destination), '--stdout', str(log), '--stderr', str(log),
                 str(app), '--args', '--'+case+'-test']
-        if case == 'activation-latency' and os.environ.get('OSHELL_ACTIVATION_METAL') == '1':
+        if case in ['activation-latency', 'fullscreen-activation'] and os.environ.get('OSHELL_ACTIVATION_METAL') == '1':
             args[1:1] = ['--env', 'OSHELL_ACTIVATION_METAL=1']
+        if case == 'fullscreen-activation':
+            peer = base/'ActivationPeer.app'; executable_dir = peer/'Contents/MacOS'; executable_dir.mkdir(parents=True)
+            (peer/'Contents/Info.plist').write_bytes(plistlib.dumps(dict(CFBundleIdentifier=bundle+'.peer', CFBundleExecutable='ActivationPeer', CFBundleName='ActivationPeer', CFBundlePackageType='APPL')))
+            executable = executable_dir/'ActivationPeer'
+            subprocess.run(['swiftc', str(ROOT/'scripts/activation-peer.swift'), '-o', str(executable)], check=True, capture_output=True)
+            args[1:1] = ['--env', 'OSHELL_ACTIVATION_PEER='+str(executable)]
         try:
             subprocess.run(args, timeout=timeout, check=True, capture_output=True)
             if case == 'session-list': report.write_bytes((destination/'session-list-result.json').read_bytes())
@@ -147,7 +154,7 @@ def run_case(source, case, timeout):
             executable = str(app/'Contents/MacOS/OShell')
             for line in subprocess.check_output(['ps','-axo','pid=,comm='], text=True).splitlines():
                 fields = line.strip().split(None, 1)
-                if len(fields) == 2 and fields[1] == executable:
+                if len(fields) == 2 and (fields[1] == executable or (case == 'fullscreen-activation' and fields[1] == str(base/'ActivationPeer.app/Contents/MacOS/ActivationPeer'))):
                     try: os.kill(int(fields[0]), signal.SIGTERM)
                     except ProcessLookupError: pass
             subprocess.run(['defaults','delete',bundle], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -213,79 +213,99 @@ final class WebDAVSync {
         phase = .reading; record(.started); notify()
         do {
             try SharingProtection.require(workspace.configuration)
-            let client: SharedSyncTransport, baselineURL: URL, allowCreate: Bool
+            let prepareClient: () throws -> SharedSyncTransport, baselineURL: URL, allowCreate: Bool
             if let directory {
                 guard !enabled else { throw ModelError.invalid("目录同步与 WebDAV 不能同时启用，请在设置中停用其中一种。") }
-                client = DirectorySyncClient(directory: directory); baselineURL = location.baselineURL(for: directory)
+                prepareClient = { DirectorySyncClient(directory: directory) }; baselineURL = location.baselineURL(for: directory)
                 allowCreate = try location.allowsInitialUpload()
             } else {
-                guard let settings = try settings(master: master) else { return }
-                client = try makeClient(settings); baselineURL = Self.root.appendingPathComponent("webdav-baseline.json"); allowCreate = true
+                let settingsURL = Self.settingsURL, factory = makeClient
+                prepareClient = {
+                    guard let data = try SharedDataFile.readIfPresent(settingsURL) else { throw ModelError.invalid("WebDAV 配置已移除，请重新检查同步设置。") }
+                    let settings = try JSONDecoder().decode(WebDAVSettings.self, from: SharedVault.open(data, password: master))
+                    return try factory(settings)
+                }
+                baselineURL = Self.root.appendingPathComponent("webdav-baseline.json"); allowCreate = true
             }
             let local = try SessionSyncConfiguration.project(workspace.configuration, selection: policy.content), revision = workspace.configurationRevision, current = UUID()
             let name = backendName
-            token = current; self.client = client; busy = true; status = "正在读取\(name)共享数据…"; notify()
-            let baseData = try SharedDataFile.readIfPresent(baselineURL)
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                let result = Result { () -> (WebDAVObject?, Configuration?, Configuration?) in
-                    let remote = try client.fetch()
-                    let decoded = try remote.map { try SharedVault.decode($0.data, password: master) }
-                    let base = try baseData.map { try SharedVault.decode($0, password: master) }
-                    return (remote, decoded, base)
-                }
+            token = current; busy = true; status = "正在读取\(name)共享数据…"; notify()
+            // Credential decryption performs PBKDF work. Never run it in the
+            // application activation callback or the keyboard's main run loop.
+            DispatchQueue.global(qos: .utility).async { [weak self, weak workspace] in
+                let prepared = Result { try prepareClient() }
                 DispatchQueue.main.async { [weak self, weak workspace] in
-                    guard let self, self.token == current, let workspace else { return }
+                    guard let self, self.token == current, let workspace else {
+                        if case .success(let client) = prepared { client.cancel() }; return
+                    }
                     do {
-                        let (object, compatibility, oldBaseline) = try result.get(); self.record(.fetched)
-                        let remote = try compatibility.map { try SessionSyncConfiguration.project($0, selection: self.policy.content) }
-                        let baseline = try oldBaseline.map { try SessionSyncConfiguration.project($0, selection: self.policy.content) }
-                        guard NSApp.modalWindow == nil else {
-                            self.phase = .queued; self.status = "等待关闭当前对话框后继续同步"; self.record(.queued, always: true)
-                            self.finish()
-                            if interactive { self.queueManualSync() } else { self.schedule() }
-                            return
-                        }
-                        guard PasswordVault.shared.cachedMaster == master, workspace.configurationRevision == revision else {
-                            self.phase = .queued; self.status = "本地配置已变化，准备重新比较"; self.pendingLocalChanges = true
-                            self.record(.retryNeeded, always: true); self.summary.outcome = .retryNeeded; self.diagnostics.saveSummary(self.summary)
-                            self.finish(); self.schedule(localChanges: true); return
-                        }
-                        var resolved = local
-                        if var remote {
-                            // Same master, different randomized verifier ciphertext on different Macs.
-                            // Both envelopes were authenticated before aligning the verifier for comparison.
-                            remote.masterPasswordVerifier = local.masterPasswordVerifier
-                            if var baseline, Self.same(local, remote) {
-                                baseline.masterPasswordVerifier = local.masterPasswordVerifier
-                                if Self.same(baseline, remote) {
-                                    self.succeeded(unchanged: true)
-                                    return
-                                }
+                        let client = try prepared.get()
+                        guard PasswordVault.shared.cachedMaster == master else { client.cancel(); self.finish(); return }
+                        self.client = client
+                        DispatchQueue.global(qos: .utility).async { [weak self] in
+                            let result = Result { () -> (WebDAVObject?, Configuration?, Configuration?) in
+                                let baseData = try SharedDataFile.readIfPresent(baselineURL)
+                                let remote = try client.fetch()
+                                let decoded = try remote.map { try SharedVault.decode($0.data, password: master) }
+                                let base = try baseData.map { try SharedVault.decode($0, password: master) }
+                                return (remote, decoded, base)
                             }
-                            if Self.same(local, remote) { resolved = local }
-                            else if var baseline {
-                                baseline.masterPasswordVerifier = local.masterPasswordVerifier
-                                let plan = try ConfigurationMerge(base: baseline, local: local, remote: remote)
-                                guard let choices = self.choose(plan, name: name) else { self.status = "有待确认的同步配置冲突，稍后重新同步"; self.finish(); return }
-                                resolved = try plan.resolve(choices)
-                            } else {
-                                self.phase = .conflict; self.status = "首次连接已有数据，等待选择"; self.record(.conflict, always: true); self.notify()
-                                let alert = PopupAlert(); alert.messageText = "\(name)已有共享数据"
-                                alert.informativeText = "首次同步所选类别：\(self.policy.content.summary)。请选择载入共享数据或合并本机修改，未勾选的类别保留各端现状，不按时间直接覆盖。"
-                                alert.addButton(withTitle: "使用共享版本"); alert.addButton(withTitle: "合并本机会话"); alert.addButton(withTitle: "取消")
-                                let response = alert.runModal()
-                                if response == .alertFirstButtonReturn { resolved = remote }
-                                else if response == .alertSecondButtonReturn {
-                                    let plan = try SessionSyncConfiguration.initialMerge(local: local, remote: remote, selection: self.policy.content)
-                                    guard let choices = self.choose(plan, name: name) else { self.finish(); return }; resolved = try plan.resolve(choices)
-                                } else { self.deferredConflict = true; self.phase = .conflict; self.status = "首次同步待确认，请手动同步继续"; self.record(.postponed, always: true); self.summary.outcome = .postponed; self.diagnostics.saveSummary(self.summary); self.finish(); return }
+                            DispatchQueue.main.async { [weak self, weak workspace] in
+                                guard let self, self.token == current, let workspace else { return }
+                                do {
+                                    let (object, compatibility, oldBaseline) = try result.get(); self.record(.fetched)
+                                    let remote = try compatibility.map { try SessionSyncConfiguration.project($0, selection: self.policy.content) }
+                                    let baseline = try oldBaseline.map { try SessionSyncConfiguration.project($0, selection: self.policy.content) }
+                                    guard NSApp.modalWindow == nil else {
+                                        self.phase = .queued; self.status = "等待关闭当前对话框后继续同步"; self.record(.queued, always: true)
+                                        self.finish()
+                                        if interactive { self.queueManualSync() } else { self.schedule() }
+                                        return
+                                    }
+                                    guard PasswordVault.shared.cachedMaster == master, workspace.configurationRevision == revision else {
+                                        self.phase = .queued; self.status = "本地配置已变化，准备重新比较"; self.pendingLocalChanges = true
+                                        self.record(.retryNeeded, always: true); self.summary.outcome = .retryNeeded; self.diagnostics.saveSummary(self.summary)
+                                        self.finish(); self.schedule(localChanges: true); return
+                                    }
+                                    var resolved = local
+                                    if var remote {
+                                        // Same master, different randomized verifier ciphertext on different Macs.
+                                        // Both envelopes were authenticated before aligning the verifier for comparison.
+                                        remote.masterPasswordVerifier = local.masterPasswordVerifier
+                                        if var baseline, Self.same(local, remote) {
+                                            baseline.masterPasswordVerifier = local.masterPasswordVerifier
+                                            if Self.same(baseline, remote) {
+                                                self.succeeded(unchanged: true)
+                                                return
+                                            }
+                                        }
+                                        if Self.same(local, remote) { resolved = local }
+                                        else if var baseline {
+                                            baseline.masterPasswordVerifier = local.masterPasswordVerifier
+                                            let plan = try ConfigurationMerge(base: baseline, local: local, remote: remote)
+                                            guard let choices = self.choose(plan, name: name) else { self.status = "有待确认的同步配置冲突，稍后重新同步"; self.finish(); return }
+                                            resolved = try plan.resolve(choices)
+                                        } else {
+                                            self.phase = .conflict; self.status = "首次连接已有数据，等待选择"; self.record(.conflict, always: true); self.notify()
+                                            let alert = PopupAlert(); alert.messageText = "\(name)已有共享数据"
+                                            alert.informativeText = "首次同步所选类别：\(self.policy.content.summary)。请选择载入共享数据或合并本机修改，未勾选的类别保留各端现状，不按时间直接覆盖。"
+                                            alert.addButton(withTitle: "使用共享版本"); alert.addButton(withTitle: "合并本机会话"); alert.addButton(withTitle: "取消")
+                                            let response = alert.runModal()
+                                            if response == .alertFirstButtonReturn { resolved = remote }
+                                            else if response == .alertSecondButtonReturn {
+                                                let plan = try SessionSyncConfiguration.initialMerge(local: local, remote: remote, selection: self.policy.content)
+                                                guard let choices = self.choose(plan, name: name) else { self.finish(); return }; resolved = try plan.resolve(choices)
+                                            } else { self.deferredConflict = true; self.phase = .conflict; self.status = "首次同步待确认，请手动同步继续"; self.record(.postponed, always: true); self.summary.outcome = .postponed; self.diagnostics.saveSummary(self.summary); self.finish(); return }
+                                        }
+                                        guard workspace.configurationRevision == revision, PasswordVault.shared.cachedMaster == master else { throw ModelError.invalid("选择期间本机配置发生变化，请重新同步。本机修改已保留。") }
+                                        let needsUpload = !Self.same(resolved, remote)
+                                        self.commit(resolved, localSnapshot: local, compatibility: compatibility, remote: object, upload: needsUpload, client: client, baselineURL: baselineURL, backupLocal: baseline == nil && object != nil, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
+                                    } else {
+                                        guard baseline == nil && allowCreate else { throw ModelError.invalid("远端同步文件被删除，未自动重建或覆盖。请确认远端目录后重新配置。") }
+                                        self.commit(resolved, localSnapshot: local, compatibility: nil, remote: nil, upload: true, client: client, baselineURL: baselineURL, backupLocal: false, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
+                                    }
+                                } catch { self.fail(error, interactive: interactive) }
                             }
-                            guard workspace.configurationRevision == revision, PasswordVault.shared.cachedMaster == master else { throw ModelError.invalid("选择期间本机配置发生变化，请重新同步。本机修改已保留。") }
-                            let needsUpload = !Self.same(resolved, remote)
-                            self.commit(resolved, localSnapshot: local, compatibility: compatibility, remote: object, upload: needsUpload, client: client, baselineURL: baselineURL, backupLocal: baseline == nil && object != nil, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
-                        } else {
-                            guard baseline == nil && allowCreate else { throw ModelError.invalid("远端同步文件被删除，未自动重建或覆盖。请确认远端目录后重新配置。") }
-                            self.commit(resolved, localSnapshot: local, compatibility: nil, remote: nil, upload: true, client: client, baselineURL: baselineURL, backupLocal: false, master: master, revision: revision, workspace: workspace, token: current, interactive: interactive)
                         }
                     } catch { self.fail(error, interactive: interactive) }
                 }

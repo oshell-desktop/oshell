@@ -4,7 +4,7 @@ import AppKit
 import OShellCore
 
 final class AIDiagnosticsTest {
-    private struct Fixture: Decodable { let executionWait: Bool?; let endpoint: String; let port: Int; let username: String; let password: String; let serviceScope: Bool?; let missingLog: Bool?; let denyScope: Bool?; let unsafePlan: Bool?; let continuous: Bool?; let pauseResume: Bool?; let confirmRetry: Bool?; let stoppedRetry: Bool?; let background: Bool?; let directAnswer: Bool?; let globalReadOnly: Bool?; let fullAccess: Bool?; let taskReadOnly: Bool?; let denyOperation: Bool?; let mutation: Bool?; let failureRecord: Bool?; let chatContinue: Bool?; let historyBinding: Bool?; let nestedTerminal: Bool?; let contextLoss: Bool?; let unsafeTerminal: String? }
+    private struct Fixture: Decodable { let echoOnly: Bool?; let executionWait: Bool?; let endpoint: String; let port: Int; let username: String; let password: String; let serviceScope: Bool?; let missingLog: Bool?; let denyScope: Bool?; let unsafePlan: Bool?; let continuous: Bool?; let pauseResume: Bool?; let confirmRetry: Bool?; let stoppedRetry: Bool?; let background: Bool?; let directAnswer: Bool?; let globalReadOnly: Bool?; let fullAccess: Bool?; let taskReadOnly: Bool?; let denyOperation: Bool?; let mutation: Bool?; let failureRecord: Bool?; let chatContinue: Bool?; let historyBinding: Bool?; let nestedTerminal: Bool?; let contextLoss: Bool?; let unsafeTerminal: String? }
     private static var retained: AIDiagnosticsTest?
     private let workspace: WorkspaceController
     private var modalMonitor: Timer?
@@ -155,6 +155,16 @@ final class AIDiagnosticsTest {
                         send("继续任务")
                         checks["retryUsesCorrectTaskIdentity"] = input.stoppedRetry == true ? assistant.taskForTesting?.id != oldID : assistant.taskForTesting?.id == oldID
                     }
+                }
+                if input.echoOnly == true {
+                    wait("echoOnlyCapturePausesTask", { !self.session.busy && assistant.taskForTesting?.paused == true }) { [self] in
+                        checks["echoOnlyNamesFailedCommand"] = session.status.contains("uname -srm") && session.status.contains("仅取得命令回显")
+                        checks["echoOnlyNotRecordedAsEvidence"] = assistant.taskForTesting?.records.contains { $0.hasPrefix("证据 ID：") } == false
+                        checks["echoOnlyDoesNotAutomaticallyRetry"] = session.sendReceipts.count == 1
+                        checks["echoOnlyRequiresFreshTerminalConfirmation"] = pane.aiTerminalNeedsConfirmation
+                        finish()
+                    }
+                    return
                 }
                 if input.contextLoss == true || input.unsafeTerminal?.isEmpty == false {
                     wait("terminalSafetyStopsTask", { !self.session.busy && self.session.messages.count == self.messageBase + 2 && (assistant.taskForTesting?.paused == true || assistant.taskForTesting?.active == false) }) { [self] in

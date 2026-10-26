@@ -145,6 +145,8 @@ AI 排查任务自行订阅绑定对话的模型结果，自动续查不依赖�
 
 `python3 scripts/run-ui-tests.py activation-latency` 使用独立数据目录和 24 个空白标签，验证无关窗口/隐藏标签不触发光标刷新，并记录原生窗口切回前后的按键派发耗时。设置 `OSHELL_ACTIVATION_METAL=1` 可覆盖 Metal 路径。此测试不包含真实跨应用输入法切换、SSH 网络和远端回显，不能单独作为实际 SSH 卡顿已消失的证明。
 
+`python3 scripts/run-ui-tests.py fullscreen-activation` 需要已解锁的 macOS 桌面，使用临时应用、24 个标签、本机 PTY 的 cat 回显及一个独立文本框应用，执行三轮原生全屏跨应用切换，分别记录激活、模拟鼠标点击、首键派发、收到回显、绘制及主线程停顿耗时。`OSHELL_ACTIVATION_METAL=1` 覆盖 Metal。测试包含真实应用焦点交接，但输入事件为合成 ASCII，不覆盖人工输入法组词或 SSH 回显；锁屏导致无法进入全屏时不能视为产品回归。两份临时应用退出或超时后都会清理，不关闭用户正在使用的 OShell。`sync-settings` 使用合成加密 WebDAV 配置验证激活同步立即返回、凭据解密在后台执行、准备期间取消不产生过期失败；`multi-window` 验证返回同一工作区不重建菜单项目，切换工作区仍正确绑定动作。共享信封、凭据格式和同步合并协议未改变。
+
 诊断构建可通过环境变量 `OSHELL_INPUT_LATENCY=1` 启用慢输入记录；只有按键排队或派发耗时达到 50 毫秒时才写入统一日志，subsystem 为 `app.oshell`、category 为 `InputLatency`。记录只有排队时长、派发时长和距离窗口激活的时间，不包含按键、文字、主机或凭据。排队慢但派发快通常指向主线程此前被其他任务占用；派发本身慢则需采样输入处理路径。需要继续定位 GPU 时，可同时启用现有 `SWIFTTERM_PROFILE=1`，观察 Metal.CurrentDrawable、Metal.RenderPass 和 Metal.BuildDrawData 的 signpost。
 
 焦点通知仅订阅终端当前所属窗口；移除或移动终端时重新绑定。不可见终端不排队 Metal 焦点重绘，也不进入 drawable 获取路径；窗口重新可见时由已有生命周期通知恢复绘制。
@@ -169,3 +171,5 @@ OSHELL_TEST_GLOBAL_PROXY=1 work/file-tests-venv/bin/python scripts/run-sftp-reus
 `AIContextCompaction` 使用每模型 Token 预算与百分比阈值，分批压缩已授权文字并保留近期记录。摘要独立保存来源 ID 与接收方，原始资料不替换；撤销来源后摘要及派生回答失效。自动任务也通过此上下文路径发送。失败、取消、目标或设置代际变化时不应用摘要。
 
 运行 `bash scripts/build.sh --tests`、`python3 scripts/run-ai-compaction-tests.py`、`python3 scripts/run-ai-context-tests.py`、`python3 scripts/run-ai-tests.py`；新回归用四种协议的回环模型验证压缩前后实际 HTTP 内容、接收方隔离、撤销、失败及取消。另用安装了 Paramiko 的 Python 执行 `scripts/run-ai-diagnostics-tests.py`，覆盖原 PTY 空闲确认、逐条审批、查询/变更自动审批与明确接管。所有数据为合成数据，测试不连接真实 AI 服务或用户 SSH 主机。
+
+AI 终端输出采集使用增量字节状态机，OSC 在首个 BEL 或 ST 结束符停止，CSI 和其他控制字符串独立处理；分包或 UTF-8 字节边界不能改变正文，原始 PTY 数据仍原样传入终端。`AITerminalCaptureTest` 覆盖结束符组合和每个分包位置。使用安装了 Paramiko 的 Python 运行 `scripts/run-ai-diagnostics-tests.py --osc-st` 验证原 PTY 输出经真实 HTTP 到达模型，`--echo-only` 验证只收到回显时点名失败查询、暂停后续命令和模型请求，不计入证据。资源查询空正文也暂停并标明可能为空结果或采集异常；文件读取、日志检索和文件变更允许空输出，但明确记录不确定性，不伪造退出码或推断没有匹配项。

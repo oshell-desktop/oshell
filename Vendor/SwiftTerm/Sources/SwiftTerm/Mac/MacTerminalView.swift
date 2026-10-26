@@ -1279,7 +1279,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         NSGraphicsContext.current?.cgContext
     }
     
-    override public func draw (_ dirtyRect: NSRect) {
+    open override func draw (_ dirtyRect: NSRect) {
 #if canImport(MetalKit) && !OSHELL_LEGACY
         if metalView != nil {
             return

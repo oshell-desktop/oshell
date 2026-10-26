@@ -21,6 +21,7 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--finder-service-test") { FinderDirectoryServiceTest.run(controller); return }
         if CommandLine.arguments.contains("--ai-history-scroll-test") { AIHistoryScrollTest.run(controller); return }
         if CommandLine.arguments.contains("--activation-latency-test") { ActivationLatencyTest.run(controller); return }
+        if CommandLine.arguments.contains("--fullscreen-activation-test") { FullscreenActivationTest.run(controller); return }
         if CommandLine.arguments.contains("--ai-context-test") { AIConversationContextTest.run(controller); return }
         if CommandLine.arguments.contains("--tiled-input-test") { TiledInputFocusTest.run(controller); return }
         if CommandLine.arguments.contains("--terminal-interrupt-test") { TerminalInterruptTest.run(controller); return }

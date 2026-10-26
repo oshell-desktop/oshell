@@ -51,6 +51,9 @@ final class WorkspaceWindows {
     }
     func activate(_ workspace: WorkspaceController) {
         guard workspaces.contains(where: { $0 === workspace }) else { return }
+        // Returning from another app does not change menu ownership. Reassigning
+        // these properties rebuilds the entire session/link/command menus.
+        if active === workspace, workspace.quickMenu === quickMenu, workspace.commandMenu === commandMenu { return }
         active = workspace; updater.useWorkspace(workspace); onActiveChanged?(workspace)
         // Menu-bar actions must never retain or target the first/closed window.
         func retarget(_ menu: NSMenu) {

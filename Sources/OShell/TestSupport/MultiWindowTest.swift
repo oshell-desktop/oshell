@@ -11,6 +11,9 @@ enum MultiWindowTest {
     private static func exercise(_ first: WorkspaceController) {
         guard let windows = first.windowCoordinator else { fatalError("Missing window coordinator") }
         var checks = [String: Bool]()
+        let menuItems = (windows.quickMenu?.items ?? []) + (windows.commandMenu?.items ?? [])
+        for _ in 0..<3 { windows.activate(first) }
+        checks["sameWorkspaceActivationPreservesMenuItems"] = menuItems.map(ObjectIdentifier.init) == ((windows.quickMenu?.items ?? []) + (windows.commandMenu?.items ?? [])).map(ObjectIdentifier.init)
         func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0] + ($0.submenu.map(items) ?? []) } }
         func action(_ selector: Selector) -> NSMenuItem { items(NSApp.mainMenu!).first { $0.action == selector }! }
         func respond(_ title: String) {

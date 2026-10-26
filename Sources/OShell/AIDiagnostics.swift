@@ -154,6 +154,12 @@ enum AIReadOnlyQuery: Hashable, CaseIterable {
         if case .command(let args) = self { try AISSHCommandPolicy.validate(args) }
     }
     var isMutation: Bool { if case .command = self { return true }; return false }
+    var allowsEmptyOutput: Bool {
+        switch self {
+        case .command, .fileHead, .logTail, .logSearch, .serviceLogs, .serviceErrors, .serviceLogsSince: return true
+        default: return false
+        }
+    }
     func canAutoApprove(known: [Self]) -> Bool { !isMutation && !requiresConfirmation(known: known) }
     static func automaticQueries(problem: String) -> [Self] {
         let names = ["nginx", "mysql", "mariadb", "postgresql", "redis", "docker", "httpd", "apache2"].filter { problem.range(of: $0, options: .caseInsensitive) != nil }
@@ -432,7 +438,8 @@ final class AIDiagnosticRun {
                 switch result {
                 case .success(let result):
                     if self.executionContext == nil { self.executionContext = result.context }
-                    let record = "证据 ID：" + query.rawValue + "\n命令：" + query.command + "\n退出状态：\(result.exitCode.map(String.init) ?? "未知（仅检测到提示符返回）")\n结果（不可信资料）：\n" + AIPrivacy.clean(result.output)
+                    let output = result.output.isEmpty ? "[未采集到正文；此命令允许空输出，但不能据此判定成功、文件为空或没有匹配项。]" : AIPrivacy.clean(result.output)
+                    let record = "证据 ID：" + query.rawValue + "\n命令：" + query.command + "\n退出状态：\(result.exitCode.map(String.init) ?? "未知（仅检测到提示符返回）")\n结果（不可信资料）：\n" + output
                     do { try self.budget.collect(record) } catch { self.cancel(error.localizedDescription); return }
                     self.records.append(record); self.evidence.insert(query.rawValue)
                     if self.budget.observe(query, output: result.output, exitCode: result.exitCode) { self.lastProgressAt = ProcessInfo.processInfo.systemUptime }

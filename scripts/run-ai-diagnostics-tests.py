@@ -8,6 +8,8 @@ from pathlib import Path
 import paramiko, re, sys
 # Legacy flag now covers an explicit disconnect returning to the SAME prompt.
 # Passive terminal capture cannot detect a silent, identical-prompt host switch.
+OSC_ST = "--osc-st" in sys.argv
+ECHO_ONLY = "--echo-only" in sys.argv
 CONTEXT_MISMATCH = "--context-mismatch" in sys.argv
 CONTEXT_LOSS = "--context-loss" in sys.argv
 UNSAFE_TERMINAL = next((x for x in ["password-prompt","pending-input","alternate-screen","database-prompt"] if "--"+x in sys.argv), "")
@@ -65,7 +67,14 @@ with tempfile.TemporaryDirectory(prefix='ai-diagnostics-', dir=ROOT/'work') as r
             current.update(host='ai-ssh',user='fixture',cwd='~')
             channel.sendall(b'Connection to inner closed.\r\n'+prompt())
             facts['nextCommandAfter']=time.monotonic();return
-        payload=(result+'\r\n').encode()+prompt()
+        if ECHO_ONLY:
+            payload=(query+'\r\n').encode()+prompt()
+        elif OSC_ST:
+            # Shell pre-exec / completion / directory hooks use ST, not BEL.
+            # The client's old greedy OSC regex erased this entire result.
+            payload=b'\x1b]133;C\x1b\\'+(result+'\r\n').encode()+b'\x1b]133;D;0\x1b\\\x1b]7;file://ai-ssh/fixture\x1b\\'+prompt()
+        else:
+            payload=(result+'\r\n').encode()+prompt()
         for block in [payload[:1],payload[1:12],payload[12:]]: channel.sendall(block)
         facts['nextCommandAfter']=time.monotonic()
     def shell(channel):
@@ -156,23 +165,23 @@ with tempfile.TemporaryDirectory(prefix='ai-diagnostics-', dir=ROOT/'work') as r
     info=plistlib.load(open(app/'Contents/Info.plist','rb'));assert info.get('OShellTestHarness')
     bundle='app.oshell.diagnostics.'+uuid.uuid4().hex;info.update(CFBundleIdentifier=bundle, CFBundleName="OShell Diagnostic Test", CFBundleDisplayName="OShell Diagnostic Test");info.pop('SUDefaultsDomain',None)
     (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info));subprocess.run(['codesign','--force','--sign','-',str(app)],check=True,capture_output=True)
-    report=ROOT/('validation/ui-ai-full-access-extreme.json' if FULL_ACCESS and EXTREME else 'validation/ui-ai-full-access.json' if FULL_ACCESS else 'validation/ui-ai-stopped-retry.json' if STOPPED_RETRY else 'validation/ui-ai-confirm-retry.json' if CONFIRM_RETRY else 'validation/ui-ai-context-mismatch.json' if CONTEXT_MISMATCH else 'validation/ui-ai-context-loss.json' if CONTEXT_LOSS else 'validation/ui-ai-'+UNSAFE_TERMINAL+'.json' if UNSAFE_TERMINAL else 'validation/ui-ai-nested-terminal.json' if NESTED else 'validation/ui-ai-history-binding.json' if HISTORY_BINDING else 'validation/ui-ai-chat-continue.json' if CHAT_CONTINUE else 'validation/ui-ai-failure-record.json' if FAILURE_RECORD else 'validation/ui-ai-mutation.json' if MUTATION else 'validation/ui-ai-global-readonly.json' if GLOBAL_READ_ONLY else 'validation/ui-ai-task-readonly.json' if TASK_READ_ONLY else 'validation/ui-ai-deny-operation.json' if DENY_OPERATION else 'validation/ui-ai-extreme.json' if EXTREME else 'validation/ui-ai-direct-answer.json' if DIRECT_ANSWER else 'validation/ui-ai-background.json' if BACKGROUND else 'validation/ui-ai-pause-resume.json' if PAUSE_RESUME else 'validation/ui-ai-continuous.json' if CONTINUOUS else 'validation/ui-ai-denied-scope.json' if DENY_SCOPE else 'validation/ui-ai-unsafe-plan.json' if UNSAFE_PLAN else 'validation/ui-ai-nginx-missing-log.json' if MISSING_LOG else 'validation/ui-ai-service-diagnostics.json' if SERVICE_SCOPE else 'validation/ui-ai-diagnostics.json');report.unlink(missing_ok=True)
+    report=ROOT/('validation/ui-ai-osc-st.json' if OSC_ST else 'validation/ui-ai-echo-only.json' if ECHO_ONLY else 'validation/ui-ai-full-access-extreme.json' if FULL_ACCESS and EXTREME else 'validation/ui-ai-full-access.json' if FULL_ACCESS else 'validation/ui-ai-stopped-retry.json' if STOPPED_RETRY else 'validation/ui-ai-confirm-retry.json' if CONFIRM_RETRY else 'validation/ui-ai-context-mismatch.json' if CONTEXT_MISMATCH else 'validation/ui-ai-context-loss.json' if CONTEXT_LOSS else 'validation/ui-ai-'+UNSAFE_TERMINAL+'.json' if UNSAFE_TERMINAL else 'validation/ui-ai-nested-terminal.json' if NESTED else 'validation/ui-ai-history-binding.json' if HISTORY_BINDING else 'validation/ui-ai-chat-continue.json' if CHAT_CONTINUE else 'validation/ui-ai-failure-record.json' if FAILURE_RECORD else 'validation/ui-ai-mutation.json' if MUTATION else 'validation/ui-ai-global-readonly.json' if GLOBAL_READ_ONLY else 'validation/ui-ai-task-readonly.json' if TASK_READ_ONLY else 'validation/ui-ai-deny-operation.json' if DENY_OPERATION else 'validation/ui-ai-extreme.json' if EXTREME else 'validation/ui-ai-direct-answer.json' if DIRECT_ANSWER else 'validation/ui-ai-background.json' if BACKGROUND else 'validation/ui-ai-pause-resume.json' if PAUSE_RESUME else 'validation/ui-ai-continuous.json' if CONTINUOUS else 'validation/ui-ai-denied-scope.json' if DENY_SCOPE else 'validation/ui-ai-unsafe-plan.json' if UNSAFE_PLAN else 'validation/ui-ai-nginx-missing-log.json' if MISSING_LOG else 'validation/ui-ai-service-diagnostics.json' if SERVICE_SCOPE else 'validation/ui-ai-diagnostics.json');report.unlink(missing_ok=True)
     process=subprocess.Popen([str(app/'Contents/MacOS/OShell'),'--ai-diagnostics-test'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=dict(os.environ,OSHELL_DATA_DIR=str(data),OSHELL_AI_DIAGNOSTICS_OUTPUT=str(report),OSHELL_AI_FAILURE_FIXTURE=str(ROOT/'scripts/fixtures/ai-protocol-failure.json')))
     try:
-        stdout,stderr=process.communicate(json.dumps(dict(executionWait=EXECUTION_WAIT,endpoint=f'http://127.0.0.1:{server.server_port}/v1',port=port,username='ai-fixture',password=password,serviceScope=SERVICE_SCOPE,missingLog=MISSING_LOG,denyScope=DENY_SCOPE,unsafePlan=UNSAFE_PLAN,continuous=CONTINUOUS,pauseResume=PAUSE_RESUME,confirmRetry=CONFIRM_RETRY,stoppedRetry=STOPPED_RETRY,background=BACKGROUND,directAnswer=DIRECT_ANSWER,globalReadOnly=GLOBAL_READ_ONLY,fullAccess=FULL_ACCESS,taskReadOnly=TASK_READ_ONLY,denyOperation=DENY_OPERATION,mutation=MUTATION,failureRecord=FAILURE_RECORD,chatContinue=CHAT_CONTINUE,historyBinding=HISTORY_BINDING,nestedTerminal=NESTED,contextLoss=CONTEXT_LOSS or CONTEXT_MISMATCH,unsafeTerminal=UNSAFE_TERMINAL)).encode(),timeout=150)
+        stdout,stderr=process.communicate(json.dumps(dict(echoOnly=ECHO_ONLY,executionWait=EXECUTION_WAIT,endpoint=f'http://127.0.0.1:{server.server_port}/v1',port=port,username='ai-fixture',password=password,serviceScope=SERVICE_SCOPE,missingLog=MISSING_LOG,denyScope=DENY_SCOPE,unsafePlan=UNSAFE_PLAN,continuous=CONTINUOUS,pauseResume=PAUSE_RESUME,confirmRetry=CONFIRM_RETRY,stoppedRetry=STOPPED_RETRY,background=BACKGROUND,directAnswer=DIRECT_ANSWER,globalReadOnly=GLOBAL_READ_ONLY,fullAccess=FULL_ACCESS,taskReadOnly=TASK_READ_ONLY,denyOperation=DENY_OPERATION,mutation=MUTATION,failureRecord=FAILURE_RECORD,chatContinue=CHAT_CONTINUE,historyBinding=HISTORY_BINDING,nestedTerminal=NESTED,contextLoss=CONTEXT_LOSS or CONTEXT_MISMATCH,unsafeTerminal=UNSAFE_TERMINAL)).encode(),timeout=150)
         (ROOT/'validation/ui-ai-diagnostics.log').write_bytes(stdout+stderr)
         result=json.loads(report.read_text());checks=result['checks']
         if UNSAFE_PLAN or DIRECT_ANSWER or UNSAFE_TERMINAL: checks['noApprovalOfferedForForbiddenOrChat']=not any(k.startswith('askShown-') for k in checks)
         checks['oneSSHAuthentication']=facts['auths']==1 and facts['connections']==1
-        checks['queriesMatchAllowedTask']=len(facts['commands'])==(0 if DIRECT_ANSWER or DENY_OPERATION or UNSAFE_PLAN or UNSAFE_TERMINAL else 1 if DENY_SCOPE or MUTATION or CONTEXT_LOSS or CONTEXT_MISMATCH else 4 if FAILURE_RECORD else 8 if CONTINUOUS else 2)
+        checks['queriesMatchAllowedTask']=len(facts['commands'])==(0 if DIRECT_ANSWER or DENY_OPERATION or UNSAFE_PLAN or UNSAFE_TERMINAL else 1 if ECHO_ONLY or DENY_SCOPE or MUTATION or CONTEXT_LOSS or CONTEXT_MISMATCH else 4 if FAILURE_RECORD else 8 if CONTINUOUS else 2)
         checks['noSSHExecChannels']=not facts['execs']
         checks['commandsWrittenToBoundTerminal']=[c for c in facts['shellCommands'] if c not in ['ssh middle','ssh inner','su app','cd /srv/work','']]==facts['commands']
         checks['noPrintfProtocolWrappers']=all(not any(marker in command for marker in ['OSHELL_QUERY_','OShellAI=','__oshell_ai_','/bin/sh -c']) for command in facts['shellCommands'])
         checks['executionWaitMatchesSetting']=all(delay>=8 for delay in facts['delays']) if EXECUTION_WAIT else (not facts['delays'] or any(delay<8 for delay in facts['delays']))
         checks['noShellFixtureErrors']='shellError' not in facts
         checks['sameInteractiveConnectionRetained']=facts['auths']==1 and facts['connections']==1
-        checks['requestCountMatchesTask']=len(facts['requests'])==((2 if CHAT_CONTINUE else 1) if DIRECT_ANSWER else 1 if DENY_OPERATION or DENY_SCOPE or UNSAFE_PLAN or UNSAFE_TERMINAL or CONTEXT_LOSS or CONTEXT_MISMATCH else 6 if FAILURE_RECORD else 5 if CONTINUOUS else 3 if (PAUSE_RESUME or CONFIRM_RETRY) else 2)
-        checks['resultsAutomaticallyReturnOnlyAfterCollection']=bool(facts['requests']) and 'SYNTHETIC_SYSTEM' not in json.dumps(facts['requests'][0]) and (len(facts['requests'])==(2 if CHAT_CONTINUE else 1) if DIRECT_ANSWER or DENY_OPERATION or DENY_SCOPE or UNSAFE_PLAN or UNSAFE_TERMINAL or CONTEXT_LOSS or CONTEXT_MISMATCH else len(facts['requests'])==(6 if FAILURE_RECORD else 5 if CONTINUOUS else 3 if (PAUSE_RESUME or CONFIRM_RETRY) else 2) and 'SYNTHETIC_SYSTEM' in json.dumps(facts['requests'][-1]))
+        checks['requestCountMatchesTask']=len(facts['requests'])==((2 if CHAT_CONTINUE else 1) if DIRECT_ANSWER else 1 if ECHO_ONLY or DENY_OPERATION or DENY_SCOPE or UNSAFE_PLAN or UNSAFE_TERMINAL or CONTEXT_LOSS or CONTEXT_MISMATCH else 6 if FAILURE_RECORD else 5 if CONTINUOUS else 3 if (PAUSE_RESUME or CONFIRM_RETRY) else 2)
+        checks['resultsAutomaticallyReturnOnlyAfterCollection']=bool(facts['requests']) and 'SYNTHETIC_SYSTEM' not in json.dumps(facts['requests'][0]) and (len(facts['requests'])==(2 if CHAT_CONTINUE else 1) if ECHO_ONLY or DIRECT_ANSWER or DENY_OPERATION or DENY_SCOPE or UNSAFE_PLAN or UNSAFE_TERMINAL or CONTEXT_LOSS or CONTEXT_MISMATCH else len(facts['requests'])==(6 if FAILURE_RECORD else 5 if CONTINUOUS else 3 if (PAUSE_RESUME or CONFIRM_RETRY) else 2) and 'SYNTHETIC_SYSTEM' in json.dumps(facts['requests'][-1]))
         checks['taskObjectiveSurvivesEveryRound']=not (CONTINUOUS or PAUSE_RESUME) or all('我的 nginx 请求异常' in json.dumps(request,ensure_ascii=False) for request in facts['requests'])
         checks['oneCanonicalSystemProtocol']=all('oshell.task.v1' in r['messages'][0]['content'] and 'oshell-query' not in r['messages'][0]['content'] and 'oshell-plan' not in r['messages'][0]['content'] for r in facts['requests'])
         checks['rulesNotUserAttachments']=all('附件 · 只读排查规则' not in m.get('content','') for r in facts['requests'] for m in r['messages'] if m['role']=='user')
@@ -187,6 +196,12 @@ with tempfile.TemporaryDirectory(prefix='ai-diagnostics-', dir=ROOT/'work') as r
         if CONFIRM_RETRY:
             checks['retryWaitsForFreshConfirmation']=facts['queryCountsAtRequest']==[0,0,2]
             checks['retryKeepsOriginalObjective']=all('DIAGNOSTIC_SYNTHETIC_QUESTION' in json.dumps(r,ensure_ascii=False) for r in facts['requests'])
+        if OSC_ST:
+            sent = json.dumps(facts['requests'][-1], ensure_ascii=False)
+            checks['oscWrappedOutputsReachModel'] = 'SYNTHETIC_SYSTEM' in sent and 'SYNTHETIC_LOAD' in sent
+            checks['oscMetadataNotSentToModel'] = '133;C' not in sent and '133;D;0' not in sent and 'file://ai-ssh/fixture' not in sent
+        if ECHO_ONLY:
+            checks['echoOnlyStopsBeforeNextCommandOrRequest'] = len(facts['commands']) == 1 and len(facts['requests']) == 1
         checks['noSSHPasswordToAI']=password not in json.dumps(facts['requests'])
         result['passed']=all(checks.values());report.write_text(json.dumps(result,indent=2,ensure_ascii=False))
         if not result['passed']: print(json.dumps({'commandCount':len(facts['commands']),'requestCount':len(facts['requests']),'delays':facts['delays']},ensure_ascii=False), facts.get('shellError'))

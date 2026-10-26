@@ -10,6 +10,11 @@ final class OShellTerminal: LocalProcessTerminalView {
     private var userInputDepth = 0
     #if OSHELL_TEST_HARNESS
     var focusReadsForTesting = 0
+    var lastDrawForTesting: TimeInterval = 0
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        lastDrawForTesting = ProcessInfo.processInfo.systemUptime
+    }
     override var hasFocus: Bool {
         get { focusReadsForTesting += 1; return super.hasFocus }
         set { super.hasFocus = newValue }

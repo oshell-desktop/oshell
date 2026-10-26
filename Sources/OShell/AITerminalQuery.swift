@@ -53,12 +53,15 @@ final class AITerminalQuery {
             if now - lastOutput >= 0.8, let current = pane.aiInteractivePrompt {
                 guard current == prompt else { requiresNewTask = true; finish(.failure(ModelError.invalid("终端提示符变化，已停止后续输入。"))); return }
                 if let output = capture.result(command: query.command, prompt: prompt) {
+                    if let problem = capture.collectionProblem(output: output, command: query.command, prompt: prompt, allowsEmptyOutput: query.allowsEmptyOutput) {
+                        finish(.failure(ModelError.invalid(problem))); return
+                    }
                     pane.aiTerminalCommandRunning = false
                     finish(.success(.init(output: output, exitCode: nil, context: prompt))); return
                 }
             }
             if now - startedAt > 20 {
-                finish(.failure(ModelError.invalid("20 秒内未确认命令结束并返回 Shell；停止后续自动输入。当前命令可能仍在运行，请在终端检查或 Ctrl+C 接管。")))
+                finish(.failure(ModelError.invalid("20 秒内未确认命令结束并返回 Shell：\(query.command)。停止后续自动输入；当前命令可能仍在运行，请在终端检查或 Ctrl+C 接管。")))
             }
         } else if now >= executeAt {
             guard pane.aiInteractivePrompt == prompt else { finish(.failure(ModelError.invalid("执行前提示符或输入行变化，未输入命令。"))); return }

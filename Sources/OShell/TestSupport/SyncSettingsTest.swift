@@ -192,16 +192,40 @@ enum SyncSettingsTest {
             windows.webDAV.cancel(); windows.webDAV.directoryConfigurationChanged()
             let originalFactory = windows.webDAV.makeClient; defer { windows.webDAV.makeClient = originalFactory }
             var attempts = 0
-            windows.webDAV.makeClient = { _ in attempts += 1; throw WebDAVFailure.network }
+            var preparedOffMain = false
+            windows.webDAV.makeClient = { _ in preparedOffMain = !Thread.isMainThread; attempts += 1; throw WebDAVFailure.network }
+            func finishSync() {
+                let deadline = Date().addingTimeInterval(10)
+                while windows.webDAV.busy && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            }
+            let began = ProcessInfo.processInfo.systemUptime
             windows.webDAV.sync(interactive: false)
+            checks["activationSyncReturnsBeforeCredentialDecryption"] = windows.webDAV.busy && ProcessInfo.processInfo.systemUptime - began < 0.1
+            finishSync()
+            checks["encryptedWebDAVPreparationRunsOffMain"] = preparedOffMain
             checks["failureSchedulesConfiguredRetry"] = attempts == 1 && windows.webDAV.diagnosticTimers.retry?.timeInterval == 15 && windows.webDAV.diagnosticTimers.refresh == nil
             windows.webDAV.sync(interactive: false)
             checks["ordinaryChecksRespectRetryDelay"] = attempts == 1
             windows.webDAV.diagnosticTimers.retry?.fire()
+            finishSync()
             checks["retryActuallyAttemptsAgain"] = attempts == 2
             scheduled.retryInterval = 0; try scheduled.save(); windows.webDAV.directoryConfigurationChanged(); windows.webDAV.schedule()
             windows.webDAV.sync(interactive: false)
             checks["disabledRetryWaitsForManualAction"] = attempts == 2 && windows.webDAV.nextCheck == nil && windows.webDAV.diagnosticTimers.retry == nil
+            windows.webDAV.directoryConfigurationChanged()
+            // Cancellation while credentials/transport are being prepared must
+            // invalidate the completion before it can fetch or report failure.
+            let preparing = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            windows.webDAV.makeClient = { _ in
+                preparing.signal(); _ = release.wait(timeout: .now() + 5)
+                throw WebDAVFailure.network
+            }
+            windows.webDAV.sync(interactive: false, retry: true)
+            checks["backgroundPreparationReached"] = preparing.wait(timeout: .now() + 5) == .success
+            windows.webDAV.cancelCurrent(); release.signal()
+            let cancelledUntil = Date().addingTimeInterval(0.3)
+            while Date() < cancelledUntil { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            checks["cancelledPreparationCannotReportLateFailure"] = !windows.webDAV.busy && windows.webDAV.phase == .cancelled
             let firstDraft = StorageSettingsView(workspace: workspace)
             control(firstDraft, "commands", NSButton.self).state = .on
             scheduled.changeDelay = 7; try scheduled.save()
