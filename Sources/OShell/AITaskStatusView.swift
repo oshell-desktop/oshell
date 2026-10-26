@@ -38,7 +38,8 @@ final class AITaskStatusView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.separatorColor.setFill()
+        if #available(macOS 10.14, *) { NSColor.separatorColor.setFill() }
+        else { NSColor.gridColor.setFill() }
         NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
         accent.withAlphaComponent(0.5).setFill()
         NSRect(x: 0, y: 8, width: 2, height: max(0, bounds.height - 18)).fill()

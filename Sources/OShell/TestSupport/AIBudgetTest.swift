@@ -9,6 +9,13 @@ enum AIBudgetTest {
             do { try action(); checks[name] = false } catch { checks[name] = true }
         }
         do {
+            // Preserve the existing estimate for ASCII, multibyte scalars,
+            // combining marks and mixed terminal text on the legacy path.
+            let samples: [(String, Int)] = [("", 0), ("abc", 1), ("abcd", 2),
+                ("中文", 3), ("😀", 2), ("é", 1), ("e\u{301}", 2), ("abc中😀", 5)]
+            for (index, sample) in samples.enumerated() {
+                checks["budgetUTF8Estimate-\(index)"] = AIContextBudget.tokens(sample.0) == sample.1
+            }
             var settings = AISettings()
             settings.endpoint = "https://budget.example.test/v1"; settings.model = "synthetic-budget-model"
             try settings.validate()
