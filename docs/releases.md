@@ -6,8 +6,8 @@
 
 | 构建目标 | 最低系统 | 架构 | DMG 文件后缀 |
 | --- | --- | --- | --- |
-| `arm64` | macOS 15.0 | Apple Silicon arm64 | `macOS15-arm64` |
-| `amd64` | macOS 15.0 | Intel x86_64 | `macOS15-amd64` |
+| `arm64` | macOS 15.0 | Apple Silicon arm64 | `macOS-arm64` |
+| `amd64` | macOS 15.0 | Intel x86_64 | `macOS-amd64` |
 
 从 0.4.0 开始，`master` 只构建上述两个目标，定义统一位于 `scripts/release_targets.py`。旧系统源码保存在 `codex/legacy-macos-10.13` 分支（迁移前快照 `f66af85`），不参与主线构建。历史 Release、附件和标签保持原样。
 
@@ -73,15 +73,15 @@ GitHub Actions 使用仓库 Secret `OSHELL_CODESIGN_P12`（加密 PKCS#12 的 Ba
 
 默认更新仓库为 `oshell-desktop/oshell`（`https://github.com/oshell-desktop/oshell.git`），对应更新站点为 `https://oshell-desktop.github.io/oshell/`。已有用户手动填写的仓库仍优先生效。
 
-当前客户端通过 `https://<owner>.github.io/<repository>/updates/latest.json` 获取已签名的更新信息，不调用匿名 GitHub Releases REST API，也不要求用户配置 Token。标准 Pages 地址由“更新仓库”的 `owner/repository` 推导；Pages 部署步骤见下方。
+当前客户端通过 `https://<owner>.github.io/<repository>/updates/macos15.json` 获取已签名的更新信息，不调用匿名 GitHub Releases REST API，也不要求用户配置 Token。标准 Pages 地址由“更新仓库”的 `owner/repository` 推导；Pages 部署步骤见下方。
 
 安装包仍存放在 GitHub Releases。CI 将两种目标的签名元数据嵌入 Release 说明的 `oshell-update-v1` 隐藏注释，再生成 Pages 静态索引；修改发布说明时必须保留这些注释。不会生成独立 XML 或 `*-update.zip` 附件。
 
 Sparkle 2.9.6 负责校验签名、下载、安装及重启。客户端通过随机路径的本机回环适配通道交给 Sparkle 处理，保留 `SURequireSignedFeed`、`SUVerifyUpdateBeforeExtraction` 及原有公钥。校验失败不降级。更新签名不等同于 Apple Developer ID 签名或公证。
 
-macOS 15+ 的 Apple Silicon 使用 arm64 包，Intel 使用 amd64 包；客户端只下载匹配目标的 DMG。两个目标均使用新的 `macOS15-*` 更新标识，避免旧系统误装。
+macOS 15+ 的 Apple Silicon 使用 arm64 包，Intel 使用 amd64 包；客户端只下载匹配目标的 DMG。两个目标均使用新的 `macOS-*` 更新标识，避免旧系统误装。
 
-旧版用户需要在 macOS 15+ 上手动安装一次新版，随后使用新更新通道。旧系统停留在兼容分支对应版本。配置及凭据格式不随系统支持范围改变；共享配置仍须通过 Swift 与 Go 双向互通测试。
+旧版和 0.4.0 用户在应用内经过一次过渡版（build 105）后升级到正式版（build 106），全程由 Sparkle 下载、验证和安装。macOS 15 以下的设备保留过渡兼容版，不会安装正式版。配置及凭据格式不随系统支持范围改变；共享配置仍须通过 Swift 与 Go 双向互通测试。
 
 CI 使用 `OSHELL_UPDATE_SIGNING_KEY` Secret。维护者本地的 `.release-private/` 不属于构建缓存，清理脚本不会删除其中的私钥。现有发行线不能随意替换公钥或生成新密钥；独立 fork 应使用自己的更新密钥。
 
@@ -114,13 +114,13 @@ python3 scripts/export-public-source.py --ref HEAD --output dist/source/OShell-s
 
 ## 静态更新站点（GitHub Pages）
 
-客户端读取 `https://<owner>.github.io/<repository>/updates/latest.json`，不调用 GitHub Releases REST API，不需要用户 Token。用户站点仓库 `<owner>.github.io` 使用根目录下的 `/updates/latest.json`。仓库地址仍在 OShell 更新设置中填写，应用自动推导标准 Pages 地址；当前不支持重定向到自定义 Pages 域名。
+客户端读取 `https://<owner>.github.io/<repository>/updates/macos15.json`，不调用 GitHub Releases REST API，不需要用户 Token。用户站点仓库 `<owner>.github.io` 使用根目录下的 `/updates/macos15.json`。仓库地址仍在 OShell 更新设置中填写，应用自动推导标准 Pages 地址；当前不支持重定向到自定义 Pages 域名。
 
 管理员首次在仓库 Settings → Pages 将发布来源设为 GitHub Actions。`.github/workflows/update-pages.yml` 可以手动执行，用最新已公开的正式 Release 初始化或修复更新站点，无需重建安装包或重新签名。正式发布流水线在 Release 上传校验并公开成功后调用它；只编译模式不部署 Pages。
 
 部署任务使用 Actions 的短期 `GITHUB_TOKEN` 读取最新 Release，验证两份更新元数据的 Ed25519 签名、版本一致性、DMG 名称和大小，然后生成站点。它不读取发布私钥，也不向 Pages 上传源码、配置或安装包。权限为 `contents: read`、`pages: write`、`id-token: write`；站点环境为 `github-pages`。部署串行执行，每次读取最新正式版本，避免旧构建任务拿自己的旧版本覆盖更新源。仓库如限制部署分支，需要允许主分支及发布标签。
 
-Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按两种平台包装原有签名数据，不改变签名覆盖的字节；客户端仍由 Sparkle 验证更新信息与 DMG。Releases 保留原有签名注释供 0.2.61–0.2.63 客户端升级一次使用，不增加 XML、update ZIP 或额外 JSON 附件。
+Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按两种平台包装原有签名数据，不改变签名覆盖的字节；客户端仍由 Sparkle 验证更新信息与 DMG。Releases 保留现代通道的签名注释，使用静态索引的旧客户端通过冻结入口过渡；不增加 XML、update ZIP 或额外 JSON 附件。
 
 客户端缓存成功检查结果五分钟；请求失败至少等待一分钟，服务端提供 Retry-After 时遵循其等待时间。过期缓存不会伪装成新的成功检查。Pages 暂不可用时明确报错，不回退到匿名 API。仍使用旧通道的客户端需要升级一次；被 API 限流时可等额度恢复或手动安装新版。
 
@@ -144,3 +144,15 @@ Pages 只有首页和 `updates/latest.json` 等静态文件。JSON 按两种平�
 按记录创建时间排序，先读取全部分页再删除，避免分页位移。通过实际 job 判定纯转发；旧版直接在标签上编译的运行仍计入实际构建。删除运行会连同其日志和 Actions Artifacts 一起移除；脚本不调用 Release、Git 标签或编译缓存删除接口。
 
 本地预览：`python3 scripts/prune-actions-runs.py --repository oshell-desktop/oshell`。确认后增加 `--apply` 执行。使用 GitHub CLI 登录身份或工作流内的短期 `GITHUB_TOKEN`，仅需 Actions 写权限及源码读权限，不配置新的 Secret。
+
+## 0.4.1 一次性应用内过渡
+
+正式版在 master 构建，版本 0.4.1、build 106、最低 macOS 15，包名使用稳定的 macOS-arm64 / macOS-amd64 后缀。长期入口是 updates/macos15.json。旧的 updates/latest.json 永久冻结为 0.4.1 build 105 的过渡索引，不随后续正式版更新覆盖。
+
+兼容分支的桥接版只修升级路径，版本 0.4.1、build 105，沿用旧最低系统要求及配置格式。桥接版在 macOS 15+ 等待更新器及窗口空闲后检查正式版；用户取消后，本次运行不重复弹窗。低于 macOS 15 时保留兼容版并明确说明系统要求。
+
+一次性发布包含正式版两种 DMG、桥接版两个实际构建，以及三个与桥接包字节完全一致的旧名称副本（接收 0.4.0 和历史 Intel 客户端）。副本不改变签名或应用内容，其声明的最低系统版本不低于原包实际要求。scripts/upgrade-bridge.json 固定桥接源提交；两套对应源码均随 Release 提供。只有 0.4.1 的流水线启用桥接构建，后续版本继续只编译两个现代目标。
+
+发布器在草稿阶段检查桥接构建记录、固定签名身份、DMG Ed25519 签名和对应 Git 源码归档，再生成受严格白名单约束的过渡附件。已公开的 0.4.0 不改动。0.4.1 中的签名迁移元数据永久保留，新旧仓库站点均从该不可变 Release 校验并重建冻结入口。
+
+回归入口：test-update-migration.py 使用合成签名验证元数据和附件；test-update-client-contracts.py 编译未改动的 0.3.3 / 0.4.0 解析器；run-migration-install-test.py 在临时目录中运行原版、桥接版、正式版测试应用的两次 Sparkle 下载、安装和重启，检查取消、会话和配置保留。

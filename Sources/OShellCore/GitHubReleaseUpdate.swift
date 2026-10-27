@@ -49,7 +49,7 @@ public struct GitHubReleaseUpdate {
         parser.shouldResolveExternalEntities = false; parser.delegate = fields
         guard parser.parse(), fields.items == 1, fields.enclosures.count == 1,
               fields.version == String(release.tag_name.dropFirst()), fields.build.range(of: "^[1-9][0-9]{0,17}$", options: .regularExpression) != nil,
-              fields.minimum == flavor.minimumOS,
+              flavor.acceptsMinimumOS(fields.minimum),
               let enclosure = fields.enclosures.first, let rawURL = enclosure["url"], let url = URL(string: rawURL),
               source.acceptsArchive(url, flavor: flavor),
               url.path.lowercased() == "/\(source.repository)/releases/download/\(release.tag_name)/OShell-\(fields.version)-\(flavor.rawValue).dmg".lowercased(),

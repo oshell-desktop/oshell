@@ -15,6 +15,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from release_targets import TARGETS, RELEASE_FLAVORS
 import code_signing
+import update_migration
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -186,7 +187,7 @@ OShell {meta['version']}（build {meta['build']}）
 
 下载对应架构的 DMG，将 OShell.app 拖入 Applications。旧系统代码保留在 `codex/legacy-macos-10.13` 分支。
 
-{'旧版用户需在 macOS 15+ 上手动安装一次新版，随后可使用内置更新。' if updates else '本次仅提供手动安装包。'}
+{'旧版和 0.4.0 用户可在应用内经一次过渡更新升级；正式版要求 macOS 15+。' if updates else '本次仅提供手动安装包。'}
 使用{signing_label}，未经 Developer ID 签名或 Apple 公证；包内附校验和及构建信息。
 
 对应提交：`{meta['commit']}`
@@ -214,6 +215,10 @@ def publish(meta, repository, output):
     files = sorted(path for path in output.iterdir() if path.name not in internal)
     expected = {artifact_name(meta['version'], flavor) for flavor in RELEASE_FLAVORS} | {f"OShell-{meta['version']}-source.tar.gz"}
     manifest = json.loads((output/'release-manifest.json').read_text())
+    migration_assets = update_migration.validate_manifest(manifest, meta, output)
+    if migration_assets and manifest['oneTimeMigration']['commit'] != update_migration.load_config(ROOT/'scripts/upgrade-bridge.json')['commit']:
+        raise ValueError('Migration source commit differs from the approved bridge')
+    expected |= migration_assets
     if manifest.get('compatibilityAliases'):
         raise ValueError('Filename compatibility aliases are no longer published; exactly two DMGs are required')
     platforms = set(re.findall(r'<!-- oshell-update-v1:([^:]+):', (output/'RELEASE_NOTES.md').read_text()))
@@ -252,7 +257,7 @@ def publish(meta, repository, output):
         raise ValueError('Incomplete remote assets; Release remains a draft')
     verify_remote_tag(repository, meta['tag'], meta['commit'])
     gh('release', 'edit', meta['tag'], '--repo', repository, '--draft=false', '--latest')
-    print('Published', meta['tag'], 'with two verified DMGs and corresponding source')
+    print('Published', meta['tag'], 'with verified DMGs and corresponding source')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

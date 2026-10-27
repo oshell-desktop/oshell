@@ -44,6 +44,7 @@ def main():
             rss=ET.Element('rss',{'version':'2.0'});channel=ET.SubElement(rss,'channel')
             ET.SubElement(channel,'title').text=f'OShell {target.suffix}'
             item=ET.SubElement(channel,'item');ET.SubElement(item,'title').text=f'OShell {version}'
+            if version == '0.4.1': ET.SubElement(item,'description').text='OShell 0.4.1 正式版（build 106），需要 macOS 15 或更新系统。安装后完成升级通道迁移，后续使用正常应用内更新。'
             for name,value in [('version',build),('shortVersionString',version),('minimumSystemVersion',target.minimum)]: ET.SubElement(item,f'{{{NAMESPACE}}}{name}').text=value
             if flavor=='arm64': ET.SubElement(item,f'{{{NAMESPACE}}}hardwareRequirements').text='arm64'
             ET.SubElement(item,'enclosure',{'url':f'https://github.com/{args.repository}/releases/download/{args.tag}/{dmg.name}',f'{{{NAMESPACE}}}edSignature':signature,'length':str(dmg.stat().st_size),'type':'application/octet-stream'})

@@ -5,7 +5,7 @@ import Foundation
 import Darwin
 
 public enum UpdateFlavor: String {
-    case arm64 = "macOS15-arm64", amd64 = "macOS15-amd64"
+    case arm64 = "macOS-arm64", amd64 = "macOS-amd64"
     public static func select(appleSilicon: Bool) -> UpdateFlavor {
         appleSilicon ? .arm64 : .amd64
     }
@@ -15,6 +15,14 @@ public enum UpdateFlavor: String {
         return select(appleSilicon: appleSilicon)
     }
     public var minimumOS: String { "15.0" }
+    // The signed feed owns the target OS floor; Sparkle filters unsupported hosts.
+    // Stable architecture identifiers must survive a future OS-floor increase.
+    public func acceptsMinimumOS(_ value: String) -> Bool {
+        guard value.range(of: "^[1-9][0-9]{0,2}(\\.(0|[1-9][0-9]{0,2})){1,2}$", options: .regularExpression) != nil,
+              let major = Int(value.split(separator: ".")[0]) else { return false }
+        return major >= 15
+    }
+
 }
 public struct UpdateSource: Equatable {
     public let repository: String
@@ -36,7 +44,7 @@ public struct UpdateSource: Equatable {
         let parts = repository.split(separator: "/")
         let owner = parts[0].lowercased(), name = String(parts[1])
         let prefix = name.lowercased() == owner + ".github.io" ? "" : "/" + name
-        return URL(string: "https://\(owner).github.io\(prefix)/updates/latest.json")!
+        return URL(string: "https://\(owner).github.io\(prefix)/updates/macos15.json")!
     }
     public var latestReleaseURL: URL { URL(string: "https://api.github.com/repos/\(repository)/releases/latest")! }
     public func acceptsArchive(_ url: URL, flavor: UpdateFlavor) -> Bool {

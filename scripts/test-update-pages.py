@@ -57,7 +57,7 @@ class PagesTests(unittest.TestCase):
     def test_site_contains_no_installers_or_source(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)/'site'; value = self.generate(); PAGES.write_site(value, root)
-            self.assertEqual({str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}, {'index.html', '.nojekyll', 'updates/latest.json'})
+            self.assertEqual({str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}, {'index.html', '.nojekyll', 'updates/latest.json', 'updates/macos15.json'})
             self.assertEqual(json.loads((root/'updates/latest.json').read_text()), value)
             with self.assertRaises(ValueError): PAGES.write_site(value, root)
     def test_deployment_runs_after_release_and_uploads_only_generated_files(self):

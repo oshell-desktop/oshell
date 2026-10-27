@@ -11,17 +11,18 @@ from release_targets import TARGETS, RELEASE_FLAVORS
 ROOT = Path(__file__).resolve().parent.parent
 NS = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 
-def document(release, repository, public_key, flavors=None):
+def document(release, repository, public_key, flavors=None, targets=None):
     if not re.fullmatch(r'[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[A-Za-z0-9_.-]+', repository) or repository.split('/')[-1] in ('.', '..'):
         raise ValueError('Invalid repository')
     tag = release.get('tag_name', '')
     if release.get('draft') is not False or release.get('prerelease') is not False or not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
         raise ValueError('A published stable Release is required')
+    targets = TARGETS if targets is None else targets
     key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key, validate=True))
     platforms, builds = {}, set()
     if flavors is None: flavors = RELEASE_FLAVORS
     for flavor in flavors:
-        target = TARGETS[flavor]
+        target = targets[flavor]
         matches = re.findall(r'<!-- oshell-update-v1:' + re.escape(target.suffix) + r':([A-Za-z0-9+/=]+) -->', release.get('body', ''))
         if len(matches) != 1: raise ValueError('Exactly one signed feed per platform is required')
         signed = base64.b64decode(matches[0], validate=True)
@@ -52,10 +53,11 @@ def document(release, repository, public_key, flavors=None):
     if len(builds) != 1: raise ValueError('Mixed build numbers')
     return dict(format='OShell.static-updates.v1', repository=repository, version=tag[1:], build=builds.pop(), platforms=platforms)
 
-def write_site(value, output):
+def write_site(value, output, migration=None):
     if output.exists() and any(output.iterdir()): raise ValueError('Pages output must be empty')
     (output/'updates').mkdir(parents=True, exist_ok=True)
-    (output/'updates/latest.json').write_text(json.dumps(value, indent=2) + '\n')
+    (output/'updates/latest.json').write_text(json.dumps(migration or value, indent=2) + '\n')
+    (output/'updates/macos15.json').write_text(json.dumps(value, indent=2) + '\n')
     (output/'.nojekyll').write_text('')
     repo = html.escape(value['repository'], quote=True); version = html.escape(value['version'])
     links = ''.join(f'<li><a href="https://github.com/{repo}/releases/download/v{version}/{html.escape(item["file"], quote=True)}">{html.escape(platform)}</a></li>' for platform,item in value['platforms'].items())
@@ -64,9 +66,15 @@ def write_site(value, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release', type=Path, required=True); parser.add_argument('--repository', required=True)
+    parser.add_argument('--migration-release', type=Path)
     parser.add_argument('--output', type=Path, required=True); parser.add_argument('--info', type=Path, default=ROOT/'scripts/Info.plist')
     args = parser.parse_args()
     value = document(json.loads(args.release.read_text()), args.repository, plistlib.loads(args.info.read_bytes())['SUPublicEDKey'])
-    write_site(value, args.output)
+    migration = None
+    if args.migration_release:
+        import update_migration, sys
+        migration = update_migration.document(json.loads(args.migration_release.read_text()), args.repository,
+            plistlib.loads(args.info.read_bytes())['SUPublicEDKey'], sys.modules[__name__])
+    write_site(value, args.output, migration)
     print('Verified and generated static update site:', value['version'], 'build', value['build'], 'platforms', len(value['platforms']))
 if __name__ == '__main__': main()

@@ -23,11 +23,14 @@ private func XCTAssertThrowsError<T>(_ value: @autoclosure () throws -> T, file:
 
 final class CoreTests {
     func testUpdateSource() throws {
+        let modern: UpdateFlavor = .arm64
+        for minimum in ["15.0", "15.0.0", "16.0", "26.0"] { XCTAssertTrue(modern.acceptsMinimumOS(minimum)) }
+        for minimum in ["14.0", "10.13", "", "15", "15.0oops", "015.0", "15.-1", "15.0.0.0"] { XCTAssertTrue(!modern.acceptsMinimumOS(minimum)) }
         let source = try UpdateSource("https://github.com/example-org/OShell.git")
         XCTAssertEqual(source.repository, "example-org/OShell")
         XCTAssertEqual(source.latestReleaseURL.absoluteString, "https://api.github.com/repos/example-org/OShell/releases/latest")
-        XCTAssertEqual(source.staticMetadataURL.absoluteString, "https://example-org.github.io/OShell/updates/latest.json")
-        XCTAssertEqual(try UpdateSource("Example/Example.github.io").staticMetadataURL.absoluteString, "https://example.github.io/updates/latest.json")
+        XCTAssertEqual(source.staticMetadataURL.absoluteString, "https://example-org.github.io/OShell/updates/macos15.json")
+        XCTAssertEqual(try UpdateSource("Example/Example.github.io").staticMetadataURL.absoluteString, "https://example.github.io/updates/macos15.json")
         XCTAssertEqual(UpdateFlavor.select(appleSilicon: true), .arm64)
         XCTAssertEqual(UpdateFlavor.select(appleSilicon: false), .amd64)
         for flavor in [UpdateFlavor.arm64, .amd64] {
@@ -35,12 +38,12 @@ final class CoreTests {
             XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1/OShell-1-\(flavor.rawValue).dmg")!, flavor: flavor))
         }
         for invalid in ["", "../repo", "owner/..", "owner/repo/releases", "https://github.com.evil.test/a/b", "http://github.com/a/b", "https://token@github.com/a/b", "https://github.com/a/b?token=secret", "a/b#c"] { XCTAssertThrowsError(try UpdateSource(invalid)) }
-        let url = URL(string: "https://github.com/example-org/OShell/releases/download/v0.2.42/OShell-0.2.42-macOS15-arm64.dmg")!
+        let url = URL(string: "https://github.com/example-org/OShell/releases/download/v0.2.42/OShell-0.2.42-macOS-arm64.dmg")!
         XCTAssertTrue(source.acceptsArchive(url, flavor: .arm64))
-        XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/EXAMPLE-ORG/oshell/releases/download/v1/OShell-1-macOS15-arm64.dmg")!, flavor: .arm64))
-        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/../OShell-1-macOS15-arm64.dmg")!, flavor: .arm64))
+        XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/EXAMPLE-ORG/oshell/releases/download/v1/OShell-1-macOS-arm64.dmg")!, flavor: .arm64))
+        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/../OShell-1-macOS-arm64.dmg")!, flavor: .arm64))
         XCTAssertTrue(!source.acceptsArchive(url, flavor: .amd64))
-        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/another/repo/releases/download/v1/OShell-1-macOS15-arm64.dmg")!, flavor: .arm64))
+        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/another/repo/releases/download/v1/OShell-1-macOS-arm64.dmg")!, flavor: .arm64))
         var prefs = Preferences(); prefs.updateRepository = source.repository; prefs.automaticUpdateChecks = true
         let restored = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(prefs))
         XCTAssertEqual(restored.updateRepository, source.repository); XCTAssertTrue(restored.automaticUpdateChecks)
@@ -72,7 +75,7 @@ final class CoreTests {
         bad = release(); assets = bad["assets"] as! [[String: Any]]; assets[0]["browser_download_url"] = "https://other.example/file.dmg"; bad["assets"] = assets; XCTAssertThrowsError(try read(bad))
         XCTAssertThrowsError(try read(release(), .amd64))
         XCTAssertThrowsError(try GitHubReleaseUpdate.read(Data(repeating: 65, count: 1_048_577), source: source, flavor: .arm64))
-        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1.2.3/OShell-1.2.3-macOS15-arm64-update.zip")!, flavor: .arm64))
+        XCTAssertTrue(!source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1.2.3/OShell-1.2.3-macOS-arm64-update.zip")!, flavor: .arm64))
         func site(_ flavor: UpdateFlavor = .arm64) throws -> [String: Any] {
             let update = try read(release(flavor), flavor)
             let feed = update.signedFeed + Data("<!-- sparkle-signatures: fixture -->".utf8)

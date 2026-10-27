@@ -27,7 +27,7 @@ def main():
     parser.add_argument('--key-file', type=Path)
     args = parser.parse_args()
     source = args.site.resolve()
-    document = json.loads((source/'updates/latest.json').read_text())
+    document = json.loads((source/'updates/macos15.json').read_text())
     if document.get('repository') != 'arnolixi/oshell' or document.get('format') != 'OShell.static-updates.v1':
         raise ValueError('Not a legacy OShell update site')
     latest = json.loads(subprocess.check_output(['gh','api','repos/oshell-desktop/oshell/releases/latest'], text=True))
@@ -57,14 +57,14 @@ def main():
             git('fetch','--depth=1','origin',BRANCH)
             git('checkout','-b',BRANCH,'FETCH_HEAD')
         else: git('checkout','--orphan',BRANCH)
-        old = checkout/'oshell/updates/latest.json'
+        old = checkout/'oshell/updates/macos15.json'
         if old.exists() and int(json.loads(old.read_text())['build']) > int(document['build']):
             raise ValueError('Refusing to replace a newer compatibility site')
-        for relative in ['index.html','updates/latest.json']:
+        for relative in ['index.html','updates/latest.json','updates/macos15.json']:
             target = checkout/'oshell'/relative; target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source/relative,target)
         (checkout/'.nojekyll').write_text('')
-        git('add','--','.nojekyll','oshell/index.html','oshell/updates/latest.json')
+        git('add','--','.nojekyll','oshell/index.html','oshell/updates/latest.json','oshell/updates/macos15.json')
         if not git('diff','--cached','--name-only',capture=True).strip():
             print('Legacy Pages already current; no push/build needed.'); return
         git('-c','user.name=OShell Updates','-c','user.email=updates@users.noreply.github.com',

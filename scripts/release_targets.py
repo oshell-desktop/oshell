@@ -10,7 +10,7 @@ class ReleaseTarget:
     suffix: str
 
 TARGETS = {
-    'arm64': ReleaseTarget(('arm64',), '15.0', 'macOS15-arm64'),
-    'amd64': ReleaseTarget(('x86_64',), '15.0', 'macOS15-amd64'),
+    'arm64': ReleaseTarget(('arm64',), '15.0', 'macOS-arm64'),
+    'amd64': ReleaseTarget(('x86_64',), '15.0', 'macOS-amd64'),
 }
 RELEASE_FLAVORS = ('arm64', 'amd64')

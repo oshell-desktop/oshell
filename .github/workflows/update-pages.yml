@@ -35,6 +35,7 @@ jobs:
           python3 -m venv work/pages-tools
           work/pages-tools/bin/python -m pip install -r scripts/requirements-release.txt
           work/pages-tools/bin/python scripts/test-update-pages.py
+          work/pages-tools/bin/python scripts/test-update-migration.py
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
       - name: Fetch the latest published Release and verify its signed metadata
@@ -44,8 +45,13 @@ jobs:
         run: |
           # Only Actions calls the API, with its short-lived token. Clients read static HTTPS.
           gh api "repos/$RELEASE_REPOSITORY/releases/latest" > work/latest-release.json
+          migration=()
+          if [ "$RELEASE_REPOSITORY" = oshell-desktop/oshell ]; then
+            gh api "repos/$RELEASE_REPOSITORY/releases/tags/v0.4.1" > work/migration-release.json
+            migration+=(--migration-release work/migration-release.json)
+          fi
           work/pages-tools/bin/python scripts/build-update-pages.py \
-            --release work/latest-release.json --repository "$RELEASE_REPOSITORY" --output work/update-site
+            --release work/latest-release.json --repository "$RELEASE_REPOSITORY" --output work/update-site "${migration[@]}"
       - name: Upload the generated site only
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:

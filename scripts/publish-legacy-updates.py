@@ -13,6 +13,7 @@ import plistlib
 import re
 import subprocess
 import xml.etree.ElementTree as ET
+import update_migration as M
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
@@ -71,6 +72,8 @@ def prepare_local(output, tag, public, key):
         if path.is_symlink(): raise ValueError('Installer must not be a symlink')
         release['assets'].append(dict(name=path.name,size=path.stat().st_size,state='uploaded',browser_download_url=f'https://github.com/{CURRENT}/releases/download/{tag}/{path.name}'))
     expected = {f'OShell-{tag[1:]}-{PAGES.TARGETS[flavor].suffix}.dmg' for flavor in FLAVORS}
+    extras = M.validate_manifest(manifest, manifest, output)
+    expected |= {name for name in extras if name.endswith('.dmg')}
     if {asset['name'] for asset in release['assets']} != expected or manifest.get('compatibilityAliases'):
         raise ValueError('Future releases must contain exactly two DMGs; filename aliases are not allowed')
     markers = set(re.findall(r'<!-- oshell-update-v1:([^:]+):', release['body']))
@@ -117,8 +120,19 @@ def main():
         # mutate their assets, notes, tags or original signed feeds.
         release = json.loads(gh('api',f'repos/{CURRENT}/releases/latest'))
         current,legacy = prepare_existing(release,args.tag,public,key)
-    PAGES.write_site(current,args.output/'current')
-    PAGES.write_site(legacy,args.output/'legacy')
+    if args.release_output:
+        root = args.release_output
+        migration_release = dict(tag_name=args.tag, draft=False, prerelease=False,
+            body=(root/'RELEASE_NOTES.md').read_text(), assets=[dict(name=p.name, size=p.stat().st_size, state='uploaded',
+            browser_download_url=f'https://github.com/{CURRENT}/releases/download/{args.tag}/{p.name}') for p in root.glob('*.dmg')])
+    else:
+        migration_release = release
+    if M.marker(CURRENT) not in migration_release['body']:
+        migration_release = json.loads(gh('api',f'repos/{CURRENT}/releases/tags/v{M.VERSION}'))
+    frozen_current = M.document(migration_release, CURRENT, public, PAGES)
+    frozen_legacy = M.document(migration_release, LEGACY, public, PAGES)
+    PAGES.write_site(current,args.output/'current',frozen_current)
+    PAGES.write_site(legacy,args.output/'legacy',frozen_legacy)
     print('Prepared signed current and legacy update sites for',args.tag,'; no installer compilation performed.')
 
 

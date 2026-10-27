@@ -40,7 +40,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def add_historical_alias(self):
         # Only a fixture for releases already published by the old workflow.
-        platform = LEGACY.PAGES.document(self.release, LEGACY.CURRENT, self.public)['platforms']['macOS15-amd64']
+        platform = LEGACY.PAGES.document(self.release, LEGACY.CURRENT, self.public)['platforms']['macOS-amd64']
         name = 'OShell-1.2.3-macOS13-x86_64.dmg'
         url = f'https://github.com/{LEGACY.CURRENT}/releases/download/v1.2.3/{name}'
         feed = LEGACY.signed_xml(platform['signedFeed'], self.key, url=url, minimum='13.0')
@@ -67,7 +67,7 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(body,original['body'])
         for site,repo in [(current,LEGACY.CURRENT),(old,LEGACY.LEGACY)]:
             self.assertEqual(site['repository'],repo)
-            self.assertEqual(set(site['platforms']),{'macOS15-amd64','macOS15-arm64'})
+            self.assertEqual(set(site['platforms']),{'macOS-amd64','macOS-arm64'})
             for name,platform in site['platforms'].items():
                 xml=ET.fromstring(base64.b64decode(platform['signedFeed']))
                 url=xml.find('./channel/item/enclosure').get('url')
@@ -147,14 +147,20 @@ class CompatibilityTests(unittest.TestCase):
                 key.write_bytes(base64.b64encode(self.key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption())))
                 output=root/'sites'
                 argv=['publish-legacy-updates.py','--tag','v1.2.3','--output',str(output),'--private-key',str(key)]
-                with patch.object(LEGACY,'ROOT',root),patch('sys.argv',argv),patch.object(LEGACY,'gh',return_value=json.dumps(self.release)) as network:
+                spec=importlib.util.spec_from_file_location('migration_test',Path(__file__).with_name('test-update-migration.py'))
+                module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+                fixture=module.MigrationTests();fixture.key=self.key;fixture.setUp()
+                with patch.object(LEGACY,'ROOT',root),patch('sys.argv',argv),patch.object(LEGACY,'gh',side_effect=[json.dumps(self.release),json.dumps(fixture.release)]) as network:
                     LEGACY.main()
-                network.assert_called_once_with('api',f'repos/{LEGACY.CURRENT}/releases/latest')
+                self.assertEqual(network.call_count,2)
+                self.assertEqual(network.call_args_list[1].args,('api',f'repos/{LEGACY.CURRENT}/releases/tags/v0.4.1'))
                 self.assertEqual(self.release,before)
                 self.assertEqual(list(output.rglob('*.dmg')),[])
                 for site in ['current','legacy']:
                     value=json.loads((output/site/'updates/latest.json').read_text())
-                    self.assertEqual(len(value['platforms']),2)
+                    self.assertEqual(len(value['platforms']),5)
+                    modern=json.loads((output/site/'updates/macos15.json').read_text())
+                    self.assertEqual(len(modern['platforms']),2)
 
     def test_wrong_key_rejected(self):
         with self.assertRaises(ValueError): LEGACY.prepare(self.release,self.public,Ed25519PrivateKey.generate())

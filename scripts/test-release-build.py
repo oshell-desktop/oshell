@@ -105,7 +105,7 @@ class ReleaseBuildTests(unittest.TestCase):
 
     def test_workflow_retains_all_targets_and_publication_gates(self):
         workflow = (ROOT/'.github/workflows/release.yml').read_text()
-        build = workflow.split('\n  build:\n')[1].split('\n  release:\n')[0]
+        build = workflow.split('\n  build:\n')[1].split('\n  bridge:\n')[0]
         self.assertIn('runs-on: ${{ matrix.runner }}', build)
         self.assertIn('max-parallel: 2', build)
         self.assertNotIn('container:', build)
@@ -116,7 +116,7 @@ class ReleaseBuildTests(unittest.TestCase):
             self.assertNotIn(f'- flavor: {flavor}\n', build)
         for expected in ['--format dmg --test-core', 'scripts/verify-installers.py', 'OSHELL_REQUIRE_FIXED_SIGNING: "1"']:
             self.assertIn(expected, build)
-        self.assertIn("if: needs.metadata.outputs.publish == 'true'", workflow.split('\n  release:\n')[1])
+        self.assertIn("needs.metadata.outputs.publish == 'true' && needs.build.result == 'success'", workflow.split('\n  release:\n')[1])
         self.assertIn('--build-only', workflow)
 
 

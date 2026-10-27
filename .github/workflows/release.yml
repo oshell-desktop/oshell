@@ -229,9 +229,99 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  bridge:
+    needs: metadata
+    if: github.repository == 'oshell-desktop/oshell' && needs.metadata.outputs.version == '0.4.1'
+    name: One-time bridge / ${{ matrix.flavor }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: legacy
+            runner: macos-15-intel
+          - flavor: arm64
+            runner: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      FLAVOR: ${{ matrix.flavor }}
+      OSHELL_REQUIRE_FIXED_SIGNING: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the audited bridge commit
+        id: bridge-source
+        run: python3 -c 'import json,os; c=json.load(open("scripts/upgrade-bridge.json")); open(os.environ["GITHUB_OUTPUT"],"a").write("commit="+c["commit"]+"\n")'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.bridge-source.outputs.commit }}
+          path: bridge
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check bridge toolchain
+        id: toolchain
+        run: |
+          python3 bridge/scripts/check-release-toolchain.py --flavor "$FLAVOR" --github-output "$GITHUB_OUTPUT"
+          echo "OSHELL_COMPILATION_CACHE_DIR=$RUNNER_TEMP/oshell-bridge-cache" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: bridge-cache
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/oshell-bridge-cache
+          key: ${{ steps.toolchain.outputs.cache-key }}
+          restore-keys: ${{ steps.toolchain.outputs.cache-prefix }}-
+      - name: Build and verify the one-time bridge
+        env:
+          OSHELL_CODESIGN_P12: ${{ secrets.OSHELL_CODESIGN_P12 }}
+          OSHELL_CODESIGN_PASSWORD: ${{ secrets.OSHELL_CODESIGN_PASSWORD }}
+        run: python3 scripts/prepare-upgrade-bridge.py --source bridge --flavor "$FLAVOR" --output work/bridge-output
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/requirements-release.txt
+      - name: Prepare signing dependencies
+        run: |
+          python3 -m venv work/bridge-tools
+          work/bridge-tools/bin/python -m pip install -r scripts/requirements-release.txt
+      - name: Sign the verified bridge
+        if: needs.metadata.outputs.publish == 'true'
+        working-directory: bridge
+        env:
+          OSHELL_UPDATE_SIGNING_KEY: ${{ secrets.OSHELL_UPDATE_SIGNING_KEY }}
+        run: |
+          ../work/bridge-tools/bin/python scripts/sign-ci-updates.py --flavor "$FLAVOR" --tag v0.4.1
+          cp "work/ci-updates/$FLAVOR.json" ../work/bridge-output/update.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bridge-${{ matrix.flavor }}
+          path: work/bridge-output/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Save verified bridge compilation cache
+        if: steps.bridge-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/oshell-bridge-cache
+          key: ${{ steps.toolchain.outputs.cache-key }}
+      - name: Preserve bridge diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bridge-diagnostics-${{ matrix.flavor }}
+          path: bridge/validation/package-*
+          if-no-files-found: ignore
+          retention-days: 7
+
   release:
-    needs: [metadata, build]
-    if: needs.metadata.outputs.publish == 'true'
+    needs: [metadata, build, bridge]
+    if: always() && needs.metadata.outputs.publish == 'true' && needs.build.result == 'success' && (needs.bridge.result == 'success' || needs.bridge.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -265,11 +355,26 @@ jobs:
             --artifacts work/release-input --updates-artifacts work/update-input --repository "$GITHUB_REPOSITORY" \
             --source "dist/source/OShell-${RELEASE_VERSION}-source.tar.gz" --output dist/github-release
       - name: Prepare original-repository update tools
-        if: github.repository == 'oshell-desktop/oshell'
         run: |
           python3 -m venv work/compat-tools
           work/compat-tools/bin/python -m pip install -r scripts/requirements-release.txt
           work/compat-tools/bin/python scripts/test-legacy-updates.py
+          work/compat-tools/bin/python scripts/test-update-migration.py
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: github.repository == 'oshell-desktop/oshell' && needs.metadata.outputs.version == '0.4.1'
+        with:
+          name: bridge-arm64
+          path: work/bridge-input/bridge-arm64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: github.repository == 'oshell-desktop/oshell' && needs.metadata.outputs.version == '0.4.1'
+        with:
+          name: bridge-legacy
+          path: work/bridge-input/bridge-legacy
+      - name: Attach the verified one-time migration
+        if: github.repository == 'oshell-desktop/oshell' && needs.metadata.outputs.version == '0.4.1'
+        env:
+          OSHELL_UPDATE_SIGNING_KEY: ${{ secrets.OSHELL_UPDATE_SIGNING_KEY }}
+        run: work/compat-tools/bin/python scripts/attach-upgrade-bridge.py --output dist/github-release --artifacts work/bridge-input
       - name: Prepare signed original-repository Pages metadata (two DMGs)
         if: github.repository == 'oshell-desktop/oshell'
         env:

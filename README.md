@@ -99,9 +99,9 @@ SFTP 断点续传限当前运行期间、同一文件标签中的普通文件；
 | Apple Silicon 版 | macOS 15.0 或更新版本 | arm64 |
 | Intel 版 | macOS 15.0 或更新版本 | amd64（x86_64） |
 
-从 0.4.0 开始，`master` 仅支持 macOS 15.0 及更新系统，发布 `macOS15-arm64` 和 `macOS15-amd64` 两种 DMG。旧系统兼容代码保存在 `codex/legacy-macos-10.13` 分支（快照 `f66af85`），历史 Release 保持不变。
+从 0.4.0 开始，`master` 仅支持 macOS 15.0 及更新系统，从 0.4.1 起，正式安装包使用 `macOS-arm64` 和 `macOS-amd64` 两种 DMG。旧系统兼容代码保存在 `codex/legacy-macos-10.13` 分支（快照 `f66af85`），历史 Release 保持不变。
 
-新版使用独立的更新目标名称。macOS 15+ 用户从旧版升级时需手动安装一次对应架构的 0.4.0 或更新版本；已有配置及共享数据格式保持兼容。
+从 0.4.1 开始，旧版及 0.4.0 用户可在应用内先安装一次过渡版（build 105），再继续升级正式版（build 106），无需手动下载 DMG。正式版只支持 macOS 15+；已有配置及共享数据格式保持兼容。
 
 从 [GitHub Releases](https://github.com/oshell-desktop/oshell/releases) 选择适合系统和架构的 DMG，将应用拖入 Applications。升级前退出应用，再覆盖安装。没有已发布安装包时，可以从源码构建。
 

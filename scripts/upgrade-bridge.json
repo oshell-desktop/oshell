@@ -1,0 +1,7 @@
+{
+  "format": "OShell.upgrade-bridge.v1",
+  "version": "0.4.1",
+  "build": "105",
+  "commit": "ff90380732bfbd1654a2e516d6ad621adfed7d11",
+  "branch": "codex/legacy-macos-10.13"
+}
