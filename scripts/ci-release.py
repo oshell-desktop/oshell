@@ -184,11 +184,10 @@ OShell {meta['version']}（build {meta['build']}）
 | --- | --- | --- |
 {rows}
 
-两个安装包均要求 macOS 15.0 或更新系统，分别支持 arm64 和 amd64（x86_64）。旧系统请使用 codex/legacy-macos-10.13 分支对应的版本。
-下载适合本机的一种 DMG，将 OShell.app 拖入 Applications。包内附带 SHA256SUMS.txt（包内文件校验）和 release-manifest.json（构建信息）；对应源码包单独提供。
+下载对应架构的 DMG，将 OShell.app 拖入 Applications。旧系统代码保留在 `codex/legacy-macos-10.13` 分支。
 
-这些安装包使用{signing_label}，未进行 Developer ID 签名或 Apple 公证。流水线校验架构、部署目标、载荷和签名完整性，并运行构建机原生架构的核心测试；具体系统上的运行效果仍以该版本的实机验证为准。
-{'内置更新直接使用上述 DMG，签名更新信息包含在本页中，无需额外 XML 或更新 ZIP。从旧包名升级的 macOS 15+ 用户需手动安装一次本版本，之后使用新的双架构更新通道。' if updates else '本次仅发布手动安装包，不包含内置更新信息。'}
+{'旧版用户需在 macOS 15+ 上手动安装一次新版，随后可使用内置更新。' if updates else '本次仅提供手动安装包。'}
+使用{signing_label}，未经 Developer ID 签名或 Apple 公证；包内附校验和及构建信息。
 
 对应提交：`{meta['commit']}`
 """
