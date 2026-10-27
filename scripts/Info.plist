@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.3</string>
+	<string>0.4.1</string>
 	<key>CFBundleVersion</key>
-	<string>102</string>
+	<string>105</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
@@ -55,13 +55,27 @@
 	<array>
 		<dict>
 			<key>NSMenuItem</key>
-			<dict><key>default</key><string>在 OShell 中打开终端</string></dict>
-			<key>NSMessage</key><string>openDirectoryInOShell</string>
-			<key>NSPortName</key><string>OShell</string>
-			<key>NSSendFileTypes</key><array><string>public.folder</string></array>
-			<key>NSRequiredContext</key><dict/>
-			<key>NSServiceDescription</key><string>在所选目录新建 OShell 本地终端标签</string>
+			<dict>
+				<key>default</key>
+				<string>在 OShell 中打开终端</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>openDirectoryInOShell</string>
+			<key>NSPortName</key>
+			<string>OShell</string>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.folder</string>
+			</array>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSServiceDescription</key>
+			<string>在所选目录新建 OShell 本地终端标签</string>
 		</dict>
 	</array>
+	<key>OShellMigrationBridge</key>
+	<true/>
+	<key>OShellBuildLabel</key>
+	<string>应用内升级过渡版</string>
 </dict>
 </plist>

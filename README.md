@@ -1,5 +1,8 @@
 # OShell
 
+此分支仅为一次性应用内升级桥接保留。0.4.1 build 105 修复旧更新通道，在 macOS 15+ 上继续检查正式版 build 106；低于 macOS 15 保留兼容版。主线 master 不恢复旧系统兼容代码。
+
+
 <img src="Assets/Brand/OShell-icon.png" alt="OShell 图标" width="112">
 
 原生 macOS SSH 客户端，使用 Swift、AppKit 和 SwiftTerm 构建。支持多会话管理、可拖动分屏和文件传输，不依赖浏览器运行时。

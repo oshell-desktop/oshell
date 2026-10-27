@@ -23,18 +23,22 @@ private func XCTAssertThrowsError<T>(_ value: @autoclosure () throws -> T, file:
 
 final class CoreTests {
     func testUpdateSource() throws {
+        let modern: UpdateFlavor = .modernARM
+        for minimum in ["15.0", "15.0.0", "16.0", "26.0"] { XCTAssertTrue(modern.acceptsMinimumOS(minimum)) }
+        for minimum in ["14.0", "10.13", "", "15", "15.0oops", "015.0", "15.-1", "15.0.0.0"] { XCTAssertTrue(!modern.acceptsMinimumOS(minimum)) }
         let source = try UpdateSource("https://github.com/example-org/OShell.git")
         XCTAssertEqual(source.repository, "example-org/OShell")
         XCTAssertEqual(source.latestReleaseURL.absoluteString, "https://api.github.com/repos/example-org/OShell/releases/latest")
-        XCTAssertEqual(source.staticMetadataURL.absoluteString, "https://example-org.github.io/OShell/updates/latest.json")
-        XCTAssertEqual(try UpdateSource("Example/Example.github.io").staticMetadataURL.absoluteString, "https://example.github.io/updates/latest.json")
-        XCTAssertEqual(UpdateFlavor.select(appleSilicon: true, majorOS: 13), .arm64)
-        XCTAssertEqual(UpdateFlavor.select(appleSilicon: true, majorOS: 12), .universal)
-        for version in [10, 11, 12, 13, 15, 26] {
-            let flavor = UpdateFlavor.select(appleSilicon: false, majorOS: version)
-            XCTAssertEqual(flavor, .intel)
-            XCTAssertEqual(flavor.minimumOS, "10.13")
-            XCTAssertTrue(source.acceptsArchive(URL(string: "https://github.com/example-org/OShell/releases/download/v1/OShell-1-macOS10.13-Intel.dmg")!, flavor: flavor))
+        XCTAssertEqual(source.staticMetadataURL.absoluteString, "https://example-org.github.io/OShell/updates/macos15.json")
+        XCTAssertEqual(try UpdateSource("Example/Example.github.io").staticMetadataURL.absoluteString, "https://example.github.io/updates/macos15.json")
+        XCTAssertEqual(UpdateFlavor.select(appleSilicon:true, majorOS:13), .arm64)
+        XCTAssertEqual(UpdateFlavor.select(appleSilicon:true, majorOS:14), .arm64)
+        XCTAssertEqual(UpdateFlavor.select(appleSilicon:false, majorOS:14), .intel)
+        for os in [15, 26, 27] {
+            XCTAssertEqual(UpdateFlavor.select(appleSilicon:true, majorOS:os), .modernARM)
+            XCTAssertEqual(UpdateFlavor.select(appleSilicon:false, majorOS:os), .modernAMD)
+            XCTAssertEqual(UpdateFlavor.modernARM.minimumOS, "15.0")
+            XCTAssertEqual(UpdateFlavor.modernAMD.minimumOS, "15.0")
         }
         for invalid in ["", "../repo", "owner/..", "owner/repo/releases", "https://github.com.evil.test/a/b", "http://github.com/a/b", "https://token@github.com/a/b", "https://github.com/a/b?token=secret", "a/b#c"] { XCTAssertThrowsError(try UpdateSource(invalid)) }
         let url = URL(string: "https://github.com/example-org/OShell/releases/download/v0.2.42/OShell-0.2.42-macOS13-arm64.dmg")!

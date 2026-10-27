@@ -25,6 +25,8 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate {
     private var source: UpdateSource?
     private var releaseBridge: ReleaseUpdateBridge?
     private var pendingInstall: (() -> Void)? { didSet { notifyStateChanged() } }
+    private var migrationCheckCompleted = false
+    private var migrationCheckScheduled = false
     private var preflighting = false { didSet { notifyStateChanged() } }
     private(set) var started = false { didSet { notifyStateChanged() } }
     var hasPendingInstallation: Bool { pendingInstall != nil }
@@ -68,13 +70,37 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate {
         if !started { _ = updater.clearFeedURLFromUserDefaults(); try updater.start(); started = true }
         if updater.automaticallyChecksForUpdates != workspace.configuration.preferences.automaticUpdateChecks { updater.automaticallyChecksForUpdates = workspace.configuration.preferences.automaticUpdateChecks }
         if updater.automaticallyDownloadsUpdates { updater.automaticallyDownloadsUpdates = false }
+        // One explicit in-app handoff after installing the bridge. Cancellation
+        // remains under Sparkle/user control; no terminal session is terminated here.
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 15 {
+            updater.automaticallyChecksForUpdates = false
+        } else { scheduleMigrationCheck() }
         // Sparkle already reschedules when automatic-check settings change.
         // Reconfiguring an unchanged source for a manual click must not launch
         // another asynchronous probe that can race that click's preflight.
         if wasStarted && sourceChanged { updater.resetUpdateCycleAfterShortDelay() }
     }
+    private func scheduleMigrationCheck() {
+        guard !migrationCheckCompleted, !migrationCheckScheduled else { return }
+        migrationCheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self else { return }
+            self.migrationCheckScheduled = false
+            guard !self.migrationCheckCompleted, self.workspace?.isSecurityUnlocked == true, self.source != nil else { return }
+            guard !self.isBusy, self.standard?.updater.canCheckForUpdates == true,
+                  NSApp.modalWindow == nil, self.workspace?.window?.attachedSheet == nil else {
+                self.scheduleMigrationCheck(); return
+            }
+            self.check()
+        }
+    }
     func check() {
         guard let workspace, workspace.isSecurityUnlocked else { return }
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 15 {
+            Dialogs.message("过渡更新已完成。OShell 正式版需要 macOS 15 或更新系统；当前系统将保留此兼容版本，不会安装不支持的新版。")
+            return
+        }
+        migrationCheckCompleted = true // A user cancellation must not immediately reopen the prompt.
         if pendingInstall != nil { resumeInstallation(); return }
         if configuredRepository.isEmpty { workspace.showUpdatePreferences() }
         guard !configuredRepository.isEmpty, !preflighting else { return }

@@ -5,8 +5,10 @@ import Foundation
 import Darwin
 
 public enum UpdateFlavor: String {
+    case modernARM = "macOS-arm64", modernAMD = "macOS-amd64"
     case intel = "macOS10.13-Intel", arm64 = "macOS13-arm64", intelModern = "macOS13-x86_64", universal = "macOS11-Universal"
     public static func select(appleSilicon: Bool, majorOS: Int) -> UpdateFlavor {
+        if majorOS >= 15 { return appleSilicon ? .modernARM : .modernAMD }
         if appleSilicon { return majorOS >= 13 ? .arm64 : .universal }
         // One Intel package supports macOS 10.13 and later.
         return .intel
@@ -16,7 +18,16 @@ public enum UpdateFlavor: String {
         let appleSilicon = sysctlbyname("hw.optional.arm64", &value, &size, nil, 0) == 0 && value == 1
         return select(appleSilicon: appleSilicon, majorOS: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
     }
-    public var minimumOS: String { self == .intel ? "10.13" : (self == .universal ? "11.0" : "13.0") }
+    public var minimumOS: String { (self == .modernARM || self == .modernAMD) ? "15.0" : (self == .intel ? "10.13" : (self == .universal ? "11.0" : "13.0")) }
+    // The signed feed owns the target OS floor; Sparkle filters unsupported hosts.
+    // Stable architecture identifiers must survive a future OS-floor increase.
+    public func acceptsMinimumOS(_ value: String) -> Bool {
+        if self != .modernARM && self != .modernAMD { return value == minimumOS }
+        guard value.range(of: "^[1-9][0-9]{0,2}(\\.(0|[1-9][0-9]{0,2})){1,2}$", options: .regularExpression) != nil,
+              let major = Int(value.split(separator: ".")[0]) else { return false }
+        return major >= 15
+    }
+
 }
 public struct UpdateSource: Equatable {
     public let repository: String
@@ -38,7 +49,8 @@ public struct UpdateSource: Equatable {
         let parts = repository.split(separator: "/")
         let owner = parts[0].lowercased(), name = String(parts[1])
         let prefix = name.lowercased() == owner + ".github.io" ? "" : "/" + name
-        return URL(string: "https://\(owner).github.io\(prefix)/updates/latest.json")!
+        let file = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 15 ? "macos15.json" : "latest.json"
+        return URL(string: "https://\(owner).github.io\(prefix)/updates/\(file)")!
     }
     public var latestReleaseURL: URL { URL(string: "https://api.github.com/repos/\(repository)/releases/latest")! }
     public func acceptsArchive(_ url: URL, flavor: UpdateFlavor) -> Bool {
