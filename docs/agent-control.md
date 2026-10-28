@@ -11,7 +11,7 @@ flowchart LR
   E --> F[无 PTY 只读回放]
 ```
 
-官方 Swift MCP SDK 固定为 0.12.1，STDIO 传输限制消息大小与积压，并忽略本服务未实现的 experimental 能力（SDK 此版本将该字段限定为字符串字典，现代客户端可能传入嵌套 JSON），全部依赖版本记入 Package.resolved；协议版本由 SDK 与客户端协商。服务默认关闭；复制接入配置不修改 Codex 或 OpenCode 的现有文件。不开放 TCP 端口，也不复用外部新建连接接口。
+官方 Swift MCP SDK 固定为 0.12.1，STDIO 传输限制消息大小与积压，并忽略本服务未实现的 experimental 能力（SDK 此版本将该字段限定为字符串字典，现代客户端可能传入嵌套 JSON），全部依赖版本记入 Package.resolved；swift-log 1.6.4、swift-collections 1.2.1 另设精确约束，以兼容发布工具链 Swift 6.1。协议版本由 SDK 与客户端协商。服务默认关闭；复制接入配置不修改 Codex 或 OpenCode 的现有文件。不开放 TCP 端口，也不复用外部新建连接接口。
 
 ## 权限和控制
 

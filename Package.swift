@@ -8,7 +8,13 @@ let appSettings: [SwiftSetting] = testHarness ? [.define("OSHELL_TEST_HARNESS")]
 let package = Package(
     name: "OShell", platforms: [.macOS(.v15)],
     products: [.executable(name: "OShell", targets: ["OShell"]), .executable(name: "OShell-ZOC", targets: ["OShellZOC"]), .executable(name: "OShell-FileZilla", targets: ["OShellFileZilla"])],
-    dependencies: [.package(path: "Vendor/SwiftTerm"), .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1")],
+    dependencies: [
+        .package(path: "Vendor/SwiftTerm"),
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1"),
+        // Keep transitive resolution compatible with the release toolchain (Swift 6.1).
+        .package(url: "https://github.com/apple/swift-log.git", exact: "1.6.4"),
+        .package(url: "https://github.com/apple/swift-collections.git", exact: "1.2.1"),
+    ],
     targets: [
         .binaryTarget(name: "Sparkle", path: "Vendor/Sparkle/Sparkle.xcframework"),
         .target(name: "OShellCore"),
