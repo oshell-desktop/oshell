@@ -28,6 +28,13 @@ PACK = module('package_release', 'package-release.py')
 META = dict(tag='v1.2.3', version='1.2.3', build='45', commit='a' * 40)
 
 class ReleaseTests(unittest.TestCase):
+    def test_github_failure_reports_actionable_stderr(self):
+        failure = subprocess.CompletedProcess(['gh'], 1, '', 'workflow scope may be required')
+        with patch.object(CI.subprocess, 'run', return_value=failure):
+            with self.assertRaisesRegex(RuntimeError, 'workflow scope may be required'):
+                CI.gh('release', 'create', 'v1.2.3')
+            self.assertIs(CI.gh('release', 'view', 'v1.2.3', check=False), failure)
+
     @staticmethod
     def workflow_jobs(filename):
         text = (SCRIPTS.parent/'.github/workflows'/filename).read_text()

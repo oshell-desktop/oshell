@@ -196,7 +196,10 @@ OShell {meta['version']}（build {meta['build']}）
     return release_manifest
 
 def gh(*args, check=True):
-    return subprocess.run(['gh', *args], capture_output=True, text=True, check=check)
+    result = subprocess.run(['gh', *args], capture_output=True, text=True, check=False)
+    if check and result.returncode:
+        raise RuntimeError(f'GitHub command failed ({result.returncode}): {result.stderr.strip()}')
+    return result
 
 def verify_remote_tag(repository, tag, commit):
     ref = json.loads(gh('api', f'repos/{repository}/git/ref/tags/{tag}').stdout)['object']
