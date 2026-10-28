@@ -9,7 +9,7 @@ from incremental_cache import IncrementalCache, affected_products
 
 PROGRAMS = {'OShell':'MacOS/OShell', 'OShell-ZOC':'MacOS/OShell-ZOC',
     'OShell-FileZilla':'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla',
-    'OShellAskpass':'Helpers/OShellAskpass', 'OShellProxy':'Helpers/OShellProxy'}
+    'OShell-MCP':'Helpers/OShell-MCP', 'OShellAskpass':'Helpers/OShellAskpass', 'OShellProxy':'Helpers/OShellProxy'}
 
 def build_swift(root, logs, run, flavor, arch, minimum, tests=False):
     base = root / f'work/build-{flavor}'

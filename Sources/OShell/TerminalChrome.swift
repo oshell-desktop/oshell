@@ -7,12 +7,23 @@ enum TerminalChrome {
 }
 
 /// Interface content placed over a terminal-colored host must own its surface.
-/// Resolve the background during drawing, alongside AppKit's dynamic labels.
+/// Resolve the dynamic color during layer updates without rasterizing a bitmap
+/// the size of the view just to fill it with one color.
 class InterfaceSurfaceView: NSView {
     override var isOpaque: Bool { true }
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
-        NSBezierPath(rect: bounds).fill()
+    override var wantsUpdateLayer: Bool { true }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+    }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
     }
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()

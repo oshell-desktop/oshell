@@ -8,10 +8,11 @@ let appSettings: [SwiftSetting] = testHarness ? [.define("OSHELL_TEST_HARNESS")]
 let package = Package(
     name: "OShell", platforms: [.macOS(.v15)],
     products: [.executable(name: "OShell", targets: ["OShell"]), .executable(name: "OShell-ZOC", targets: ["OShellZOC"]), .executable(name: "OShell-FileZilla", targets: ["OShellFileZilla"])],
-    dependencies: [.package(path: "Vendor/SwiftTerm")],
+    dependencies: [.package(path: "Vendor/SwiftTerm"), .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1")],
     targets: [
         .binaryTarget(name: "Sparkle", path: "Vendor/Sparkle/Sparkle.xcframework"),
         .target(name: "OShellCore"),
+        .executableTarget(name: "OShell-MCP", dependencies: ["OShellCore", .product(name: "MCP", package: "swift-sdk")], path: "Sources/OShellMCP"),
         .executableTarget(name: "OShell", dependencies: ["OShellCore", "Sparkle", .product(name: "SwiftTerm", package: "SwiftTerm")], exclude: testHarness ? [] : ["TestSupport"], swiftSettings: appSettings, linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .executableTarget(name: "OShellProxy", dependencies: ["OShellCore"]),
         .executableTarget(name: "OShellAskpass", dependencies: ["OShellCore"]),

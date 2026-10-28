@@ -10,7 +10,7 @@ enum Dialogs {
         guard let result = editor.run() else { return nil }
         titleSelection?(result.id, editor.selectedTitleMode); return result
     }
-    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, imagePasteView: ImagePasteSettingsControl? = nil, aiView: AISettingsView? = nil, aiSelected: Bool = false, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
+    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, imagePasteView: ImagePasteSettingsControl? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil) -> Preferences? {
         let font = NSPopUpButton()
         TerminalFontCatalog.populate(font, selected: current.fontName)
         let size = NSPopUpButton(); [11, 12, 13, 14, 15, 16, 18, 20, 24, 26].forEach { size.addItem(withTitle: String($0)) }
@@ -55,16 +55,14 @@ enum Dialogs {
         if let titleView {
             let item = NSTabViewItem(identifier: "titles"); item.label = "标签"; item.view = titleView; tabs.addTabViewItem(item)
         }
-        if let aiView { let ai = NSTabViewItem(identifier: "ai"); ai.label = "AI"; ai.view = aiView; tabs.addTabViewItem(ai) }
         let about = NSTabViewItem(identifier: "about"); about.label = "关于"; about.view = AboutSettingsView(preferences: current); tabs.addTabViewItem(about)
-        if aiSelected, aiView != nil { tabs.selectTabViewItem(withIdentifier: "ai") }
-        else if storageSelected, storageView != nil { tabs.selectTabViewItem(withIdentifier: "storage") }
+        if storageSelected, storageView != nil { tabs.selectTabViewItem(withIdentifier: "storage") }
         else { tabs.selectTabViewItem(at: updatesSelected ? 2 : (appearanceSelected ? 1 : 0)) }
         let dialog = SettingsWindow(tabs: tabs, appearanceView: appearanceView)
         var prefs = current
         while true {
             guard dialog.runModal() == .OK else { return nil }
-            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); try imagePasteView?.validate(); try aiView?.validateForApply(); try aiView?.validateShortcut(against: prefs.keyboardShortcuts); _ = try selection.values(); break }
+            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); try imagePasteView?.validate(); _ = try selection.values(); break }
             catch { Dialogs.message(error.localizedDescription) }
         }
         prefs.fontName = font.selectedItem?.representedObject as? String ?? ""

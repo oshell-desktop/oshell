@@ -15,6 +15,10 @@ final class MemoryProfile {
     private var retiredResourcesReleased = true
     private let phases = ["empty", "one_terminal", "four_tabs", "four_tiled", "all_closed", "composer_open", "composer_hidden", "reopened_terminal", "closed_again"]
     init(_ controller: WorkspaceController) { self.controller = controller }
+    private func createTerminal() {
+        if ProcessInfo.processInfo.environment["OSHELL_MEMORY_BLANK"] == "1" { controller.newBlankTab() }
+        else { controller.newLocal() }
+    }
     static func run(_ controller: WorkspaceController) {
         let profile = MemoryProfile(controller); active = profile
         controller.window?.setContentSize(NSSize(width: 1180, height: 760))
@@ -24,8 +28,8 @@ final class MemoryProfile {
     private func step(_ index: Int) {
         let started = DispatchTime.now().uptimeNanoseconds
         switch index {
-        case 1: controller.newLocal(); references.append(WeakPane(controller.selectedTab!.activePane))
-        case 2: for _ in 0..<3 { controller.newLocal(); references.append(WeakPane(controller.selectedTab!.activePane)) }
+        case 1: createTerminal(); references.append(WeakPane(controller.selectedTab!.activePane))
+        case 2: for _ in 0..<3 { createTerminal(); references.append(WeakPane(controller.selectedTab!.activePane)) }
         case 3:
             controller.arrange(.tiled)
             if ProcessInfo.processInfo.environment["OSHELL_MEMORY_UNICODE"] == "1" {
@@ -42,7 +46,7 @@ final class MemoryProfile {
             }
         case 5: controller.toggleComposer()
         case 6: controller.toggleComposer()
-        case 7: controller.newLocal(); references.append(WeakPane(controller.selectedTab!.activePane))
+        case 7: createTerminal(); references.append(WeakPane(controller.selectedTab!.activePane))
         case 4, 8:
             controller.tabs.flatMap { $0.layout.panes }.forEach {
                 $0.shutdown(); $0.prepareForDisplay()

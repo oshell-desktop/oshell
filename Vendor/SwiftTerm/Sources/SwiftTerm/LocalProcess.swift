@@ -172,9 +172,18 @@ public class LocalProcess {
         }
     }
 
+    /// Consumer pressure pauses delivery; the existing 1 MiB PTY backlog then stops reads.
+    public var deliveryPaused = false {
+        didSet { if oldValue && !deliveryPaused { dispatchQueue.async { [weak self] in self?.drainReceivedData() } } }
+    }
+    public var outputDrained: Bool {
+        pendingLock.lock(); defer { pendingLock.unlock() }
+        return outputReachedEOF && pendingBytes == 0
+    }
     private func drainReceivedData() {
         let start = DispatchTime.now().uptimeNanoseconds
         while true {
+            if deliveryPaused { return }
             var chunk: [UInt8]?
             var resumeRead = false
             pendingLock.lock()
@@ -224,11 +233,15 @@ public class LocalProcess {
      * Sends the array slice to the local process using DispatchIO
      * - Parameter data: The range of bytes to send to the child process
      */
+    public var inputGate: ((ArraySlice<UInt8>, Int) -> Bool)?
+    public var inputCompletion: ((Int, Int32) -> Void)?
+
     public func send (data: ArraySlice<UInt8>)
     {
         guard running, let writeIO else {
             return
         }
+        guard inputGate?(data, sendCount) != false else { return }
         let copy = sendCount
         sendCount += 1
         data.withUnsafeBytes { ptr in
@@ -241,6 +254,7 @@ public class LocalProcess {
             // Use the persistent stream channel so keyboard, protocol and abort writes stay ordered.
             writeIO.write(offset: 0, data: ddata, queue: writeQueue, ioHandler: { [weak self] done, dd, errno in
                 guard let self else { return }
+                if done || errno != 0 { self.dispatchQueue.async { [weak self] in self?.inputCompletion?(copy, errno) } }
                 self.total += copyCount
                 if self.debugIO {
                     print ("[SEND-\(copy)] completed bytes=\(self.total)")

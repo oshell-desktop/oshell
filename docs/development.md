@@ -20,7 +20,7 @@ bash scripts/build.sh --tests
 python3 scripts/run-ui-tests.py --list
 python3 scripts/run-ui-tests.py directory-picker-stress terminal-clock tab-bar-menu
 python3 scripts/run-ui-tests.py resource-review
-python3 scripts/run-ai-tests.py
+python3 scripts/run-ui-tests.py agent-control
 python3 scripts/run-ui-tests.py auth-concurrency login-password-save proxy-catalog global-proxy
 python3 scripts/run-ui-tests.py tab-window-merge tab-detach tab-reorder multi-window
 python3 scripts/run-ui-tests.py --group sessions
@@ -31,6 +31,12 @@ python3 scripts/run-ui-tests.py --group sessions
 测试入口必须显式指定独立的 `OSHELL_DATA_DIR`；正式应用会在读取数据前拒绝测试参数。不要将开发测试指向实际会话目录或真实服务器。UI 检查需要 macOS 图形会话。
 
 资源回归 `resource-review` 验证 200 个标签的 1000 次无变化刷新复用菜单与图标、快捷键与未读状态正确更新、隐藏和最小化时钟停止计时器，以及同步对象销毁时注销计时器。输出的耗时仅代表该合成场景，不等于整个应用的性能提升比例。
+
+SSH 内存采样需要安装 Paramiko。运行 `python3 scripts/run-memory-cycles.py ssh-memory --sessions 1 --lines 0 --visible --capture-vm`，用独立测试应用和本机临时 SSH 服务测量单连接开销；省略数量参数则执行三轮、每轮 16 个会话和每会话 3200 行输出。`--editor` 会在连接稳定后打开并取消新建会话窗口，`--fullscreen` 使用系统全屏。报告位于 `validation/`，包含约 10 毫秒间隔的物理占用与 RSS、阶段堆统计、可见性、Metal 呈现帧数，以及会话对象和子进程释放检查。`--visible` 要求解锁桌面并观察到可见窗口；Metal 模式还必须在每轮观察到真实呈现帧（阶段结束时的遮挡状态不抹去已经呈现的帧）。锁屏或遮挡下的采样不能代替可见绘制验证；场景通过也不代表不存在瞬时峰值。`--capture-vm` 仅对隔离测试进程生成内存分类摘要，不读取真实配置或凭据。
+
+Agent 资源回归：`python3 scripts/run-ui-tests.py agent-resources --timeout 300` 生成 128 MiB 合成审计输出，完整扫描三次，检查堆增长、文件描述符和队列上限；另外进行三轮快速切换与关闭回放窗口，验证终端、定时器、扫描任务及面板所选会话的释放。`python3 scripts/test-agent-resources.py` 连接停滞的本机 Unix 测试服务，验证 MCP SDK 消费输入队列后仍受最多 8 个在途请求约束，正常响应释放配额。两者均不使用个人配置、真实主机或模型服务。
+
+当系统全屏 Space 隐藏了普通测试窗口时，可用 `OSHELL_MEMORY_PANEL=1` 运行同一脚本，在独立浮动面板中测量连接与编辑组件；报告会标记 `testWindow: panel`，不能把它当成系统全屏验证。比较优化前后时须使用相同窗口类型、尺寸和缩放，并同时检查呈现帧数及对象释放结果。纯色背景使用图层颜色避免整面位图绘制，但背景组件的节省不能直接当作整个 SSH 流程的峰值降幅。
 
 会话范围与未修改 Desktop 的互通：`python3 scripts/test-session-sync-interop.py --desktop-source /path/to/oshell-desktop`。测试只读 Desktop 源码，用临时 Go overlay 注入合成回归，不修改对端项目。
 
@@ -53,8 +59,6 @@ work/test-tools/bin/python scripts/run-ssh-clone-tests.py
 work/test-tools/bin/python scripts/run-local-tool-tests.py --connection-status-only
 work/test-tools/bin/python scripts/run-webdav-tests.py
 ```
-
-`run-ai-tests.py` 仅使用回环模拟模型服务及合成密钥，覆盖请求、上下文遮盖、图片、会话隔离、命令填入、取消、重定向拒绝及加密存储；不需要真实 API 密钥。
 
 这些脚本默认使用测试应用和一次性本地账号。保存密码认证及明文不落盘检查统一由 `run-session-tests.py` 覆盖，移除了需手工启动固定端口服务的旧密码测试入口。更新、文件传输、代理、隧道和内存循环等专用脚本继续保留；它们与通用 UI 检查的测试服务需求不同。加密启动测试会自行生成临时样本，不依赖维护者工作目录中的文件。
 
@@ -103,45 +107,13 @@ python3 scripts/check-public-source.py --app dist/OShell.app
 
 正式构建使用固定代码签名证书，配置与备份方法见 [发布指南](releases.md#固定代码签名身份)。无维护者签名私钥时，个人开发构建可显式设置 `OSHELL_ALLOW_ADHOC=1`；测试构建默认使用独立的 ad-hoc 身份。
 
-AI 发送授权验证：`bash scripts/build.sh --tests` 后执行 `python3 scripts/run-ai-tests.py`。测试服务仅监听回环地址，使用合成身份/证据/图片；接收端核对实际字节的 SHA-256 与授权快照一致，并验证默认不带元数据/历史/旧图片、字段选择、派生资料撤回、跨任务/目标/模型/凭据变更失效、取消、单次使用和显式重试。`validation/ui-ai-assistant.json` 与 `validation/ai-transport.json` 是本机报告，不包含真实服务密钥或终端资料。
-
-四种模型协议由 `AIProtocol.swift` 负责纯数据转换，联网仅允许 `AISendAuthorization` 许可通过的 `AIClient`。`AIProtocolTest.swift` 和同一回环测试服务器验证各协议的鉴权、正文、图片及多段响应，默认历史排除、选择与撤回，以及拒绝/截断/工具调用/限流/重定向/取消。Responses 不回传服务端 ID，Gemini 地址中的模型必须与授权模型一致。无真实供应商密钥时，不得宣称已通过线上服务联调。
-
-经用户授权后，可运行 `python3 scripts/run-ai-live-test.py --endpoint http://127.0.0.1:8787/v1 --model <授权模型>` 验证真实服务；密钥由隐藏输入读取，只经匿名管道送入测试 App 内存，不写入配置、参数或报告。使用安装了 `paramiko` 的 Python 并加 `--ssh`，还会启动一次性回环 SSH 服务。该测试只发送合成问题，覆盖无终端提问、Chat Completions / Responses 回复、真实本地 PTY 与 SSH 命令卡填入，以及取消、状态变化、不回车和不广播；不执行模型返回的命令。结果为 `validation/ui-ai-live.json`。它是显式选择的本机联调工具，不加入 CI，不读取用户 AI 配置。
-
-渠道预设由 `AIProviderPreset.swift` 提供本机配置与兼容参数，`AIProviderPresetTest.swift` 验证预设切换清空旧密钥、同一预设与自定义编辑保留、v1/v2 迁移及 v3 加密存储、输出上限授权失效、真实客户端标识、服务端拒绝后不回退。回环接收端逐渠道核对密钥归属和 max_tokens；不得用其他工具的 User-Agent 伪装 OShell，也不把本机测试当成套餐客户端授权或真实供应商联调。
-
-AI Markdown 使用本机 AppKit / TextKit 渲染，不使用 WebView 或 HTML 导入器，不加载远程图片；仅接受用户主动点击的 HTTP/HTTPS 链接。`AIMarkdownTest.swift` 随 `run-ai-tests.py` 检查排版、表格、窄面板、代码原文和围栏边界，并由真实助手界面验证命令卡、授权与回复顺序。主线部署目标为 macOS 15.0，发布前须验证 arm64 与 amd64 两种架构。旧系统维护使用 `codex/legacy-macos-10.13` 分支。
-
-`AIHistoryContinuationTest.swift` 覆盖真实 v1 加密文件读取、v2 文字来源和依赖恢复、图片与派生回答剔除、撤回／清空的持久化、独立续聊切换及 UI 授权。`run-ai-tests.py` 在回环服务端额外核对续聊默认不重发历史、选中资料才发送、清空后不再发送，并继续逐请求比较授权摘要。AI 历史 v2 是本机格式，不是共享配置 v2。
-
-多渠道 AI 配置使用本机加密 settings v4，读取旧 v1/v2/v3 时使用稳定的兼容渠道／模型标识，保存设置时迁移。`AIModelCatalog.swift` 按渠道与模型 UUID 解析单一路由，请求对象拒绝未解析的完整目录，不携带其他渠道密钥。`AIModelCatalogTest.swift` 经原生设置页、对话选择器及回环服务验证新增／删除／默认模型、并发编辑保护、密钥与接口隔离、选择切换后的授权失效、历史恢复及配置删除后拒绝自动回退；历史和回复仅记录选择标识或模型名称，不复制服务密钥。
-
-AI 预算默认输出 131,072 Token、上下文 524,288 字符，上下文最大 1,048,576 字符；已有模型预算保持不变。`AIBudgetTest.swift` 随 `run-ai-tests.py` 验证上下限、旧配置迁移、中文字符计数、512K／1M 完整请求冻结及超限拒绝。原生设置页回归覆盖恢复默认预算仅修改当前模型、应用前不落盘；回环接收端验证四种协议的输出参数与授权字节一致，模型发现回归验证新导入模型的预算。测试使用合成内容，不需要真实供应商密钥。
-
-模型发现由 `AIModelDiscovery.swift` 执行独立 GET，不读取任何会话对象。路由和格式依据 [OpenAI Docs models.list](https://developers.openai.com/api/reference/resources/models/methods/list)、[Anthropic Models](https://platform.claude.com/docs/en/api/models/list) 和 [Gemini models.list](https://ai.google.dev/api/models)；继续使用所选协议既有的鉴权版本，不猜测第三方网关的备用入口。只接受同一列表地址的分页游标，拒绝重定向，限制响应大小、页数和总耗时。`python3 scripts/run-ai-discovery-tests.py` 验证请求仅含当前渠道鉴权、GET 无请求体、分页、错误、取消及原生选择导入。显式授权的回环真实服务可用 `scripts/run-ai-live-test.py --endpoint <URL> --model <ID> --models-only` 只读验证；密钥仍从隐藏输入经匿名管道传入，不保存。
-
-AI 流式回复由 `AIStreamDecoder.swift` 按字节解析 SSE，覆盖 UTF-8 跨包、CRLF、心跳、结束标记和协议错误；忽略内部思考和签名。授权快照包含 stream 参数及 Gemini 的实际流式地址。`AIStreamDecoderTest.swift` 验证四种协议、异常终止和分段敏感内容遮盖；`run-ai-tests.py` 回环服务分批输出 SSE，验证完整回复前已有增量文字及即时等待卡片，并保留 JSON 响应兼容回归。未完成的文字不产生命令卡或可重发历史，完整校验后才保存。协议依据 [OpenAI streaming](https://developers.openai.com/api/docs/guides/streaming-responses)、[Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming)、[Gemini streamGenerateContent](https://ai.google.dev/api/generate-content#method-models.streamgeneratecontent)。
-
-只读排查通过 `AIDiagnostics.swift` 的固定枚举模板执行，模型文本不能成为 shell 参数；授权绑定终端 ID / stamp、SSHConnectionGroup、对话与解析后的模型设置。`scripts/run-ai-diagnostics-tests.py` 使用一次性回环 Paramiko 服务（只回合成结果、不执行 shell）与合成模型 HTTP，验证真实 OpenSSH 仅一次认证、无额外 exec 通道、命令经原 PTY 输入、默认不增加执行前等待（加 --execution-wait 验证每条命令等待 8 秒）、用户输入后不再自动回车、执行结果经二次授权才进入 HTTP。测试同时拒绝未知 ID、shell 注入和超额计划；模型和服务响应均视为不可信资料。
-
-`AITerminalQuery.swift` 通过 `SSHConnectionLease` 复用原认证传输，使用 fail-closed 的 OpenSSH multiplex exec 通道执行固定只读模板。输入为 null，stdout/stderr 分开限量读取，并等待双流 EOF 与进程退出后采用结果；超时/取消仅终止本次 ssh 客户进程。查询不再读写交互 PTY，也不注入 printf 边界标记。`AIExecutionView` 在原标签页展示命令、输出和退出码，远端数据仅作为 NSTextView 文本展示，不执行终端控制序列。任务绑定原连接、模型和对话；原终端的人工输入触发接管，其他标签输入或应用失焦不影响任务。
-
-服务排查命令依据 [systemctl show](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html) 与 [journalctl](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html)，仅构造固定的属性和日志过滤选项。`AIReadOnlyQuery.automaticQueries` 从当前问题确定自动范围，范围外查询需确认；执行解析要求整个查询列表是授权集合的子集（先检查整批再执行）。`run-ai-diagnostics-tests.py --services` 通过真实 OpenSSH PTY 验证服务状态和指定日志文件模板、双层 Shell 参数引用、可选倒计时、取消接管及结果审阅；模拟服务不执行真实系统命令。
-
-本机 `scripts/build.sh` 在目标目录旁的临时目录完整组装、签名和检查 App，再替换整个 bundle，不再原地截断正在映射的可执行文件。`install-local-app.py` 检测到目标 App/辅助进程运行时，将新版本发布到独立 `OShell-preview-*.app` 路径；构建输出给出实际路径。生成失败保留 staging 便于排查，发布失败回滚原 App。`test-install-local-app.py` 验证运行中目录保留、旧文件句柄内容不被覆盖及失败回滚。历史窗口关闭专项：`run-ui-tests.py ai-history-close` 覆盖取消、Esc、⌘W、搜索/预览焦点、重复打开关闭及视图释放。
+本机 `scripts/build.sh` 在目标目录旁的临时目录完整组装、签名和检查 App，再替换整个 bundle，不再原地截断正在映射的可执行文件。`install-local-app.py` 检测到目标 App/辅助进程运行时，将新版本发布到独立 `OShell-preview-*.app` 路径；构建输出给出实际路径。生成失败保留 staging 便于排查，发布失败回滚原 App。`test-install-local-app.py` 验证运行中目录保留、旧文件句柄内容不被覆盖及失败回滚。
 
 `SSHClientLocale` 为本机 SSH 提供 `LC_CTYPE=UTF-8`，在私有临时配置中加载原用户/系统配置或显式 `-F` 配置，最后应用 `SendEnv -LANG -LANGUAGE -LC_*`。仅把移除规则放在命令行会被后读入的默认配置重新追加，无法防止 locale 转发。原 `SSHEnvironment.remoteClient` 继续用于清理继承变量，共享配置格式不变。`SSHClientLocaleTest` 用真实 `ssh -G` 检查别名、账号、端口和非 locale 转发保留；`run-ssh-clone-tests.py` 增加中文认证 Banner 和原样八进制文本断言，同时验证服务端未收到语言变量、克隆仅一次认证。依据 [OpenSSH UTF-8 输出处理](https://github.com/openssh/openssh-portable/blob/master/utf8.c) 和 [SendEnv 文档](https://man.openbsd.org/ssh_config#SendEnv)。
 
-`run-ui-tests.py terminal-interrupt` 使用无用户插件的本地 zsh 和临时原始输入接收程序，测量 Ctrl+C 按键处理与 PTY 回包耗时；同时用加密的未知版本 AI 设置验证快捷键查找只访问内存、不反复读取解密。窗口事件和菜单安装不直接调用 `AISettings.load()`；启动及设置更新时刷新 AI 配置缓存。测试不修改用户 shell 配置，也不把组件耗时当成所有输入法、桌面事件与远端网络场景的端到端保证。
+`run-ui-tests.py terminal-interrupt` 使用无用户插件的本地 zsh 和临时原始输入接收程序，测量 Ctrl+C 按键处理与 PTY 回包耗时；同时验证 Agent 快捷键查找只访问内存，不读取或解密旧模型设置。测试不修改用户 shell 配置，也不把组件耗时当成所有输入法、桌面事件与远端网络场景的端到端保证。
 
-直接发送仍构造不可变 `AIRequest` 并消费单次 token，授权来源为用户点击发送或仍有效的只读任务；“更多 → 选择额外资料并发送”保留可选精细选择。`AISendReceipt` 只保存已清理的资料清单、图片摘要、接收方和请求摘要/结果，不持有请求 settings/API 密钥。历史 v3 兼容读取 v1/v2；旧版遇到 v3 会拒绝覆盖。审阅是面板内只读视图，不触发网络，不抢占终端窗口焦点。
-
-平铺输入焦点由 WorkspaceController 在布局重建前清空旧终端 responder、重建后恢复当前选中终端；正文点击只更新选中元数据，不在 becomeFirstResponder 回调中重建视图。WorkspaceWindow 在交接前拒绝隐藏、已移走或已关闭终端，保留原 responder；命令栏/AI 输入框焦点不由布局重建强行替换。`run-ui-tests.py tiled-input terminal-focus quicksend-focus arrangement-scroll` 覆盖三组六标签、重建、点击、文字与 readline 控制键、真实 PTY 路由、命令栏焦点及滚动。
-
-AI 排查任务自行订阅绑定对话的模型结果，自动续查不依赖正在展示的 AI 面板。发送许可固定在原对话、原终端和原模型；切换界面不会改变发送目标。TerminalPane 的任务级输入回调覆盖模型思考阶段和命令执行阶段，只有实际进入该终端的人工/托管输入触发暂停。`run-ai-diagnostics-tests.py --background` 验证切换标签、其他标签输入和应用失焦后仍在原连接完成查询；原终端接管仍撤销待执行命令。
-
-同一 AI 对话的普通发送通过 `conversationDraft(settings:)` 选入近期已授权上下文，按接口/协议/鉴权身份绑定接收方；换渠道或恢复历史需明确确认。原始 `sendDraft()` 保持资料候选与单次授权边界，自动排查仍使用任务专用资料清单。历史回答保留依赖用于传递撤销；已授权但因预算省略的旧资料不会阻止近期回答进入上下文。`run-ai-context-tests.py` 使用无记忆回环模型核验十轮实际请求、角色、跨会话隔离、渠道确认、撤销/清空，并覆盖四类协议的长上下文截取。
+平铺输入焦点由 WorkspaceController 在布局重建前清空旧终端 responder、重建后恢复当前选中终端；正文点击只更新选中元数据，不在 becomeFirstResponder 回调中重建视图。WorkspaceWindow 在交接前拒绝隐藏、已移走或已关闭终端，保留原 responder；命令栏/Agent 面板焦点不由布局重建强行替换。`run-ui-tests.py tiled-input terminal-focus quicksend-focus arrangement-scroll` 覆盖三组六标签、重建、点击、文字与 readline 控制键、真实 PTY 路由、命令栏焦点及滚动。
 
 ### 窗口切回后的输入延迟诊断
 
@@ -166,16 +138,6 @@ OSHELL_TEST_GLOBAL_PROXY=1 work/file-tests-venv/bin/python scripts/run-sftp-reus
 
 全局代理网络 fixture 会统计实际 SOCKS5 连接；独立 SFTP/SCP 传输必须经过代理，终端、文件管理及 SCP 复用场景必须只建立一次代理连接和一次 SSH 认证。共享配置仍须按 `AGENTS.md` 执行真实 Swift/Go 往返测试。
 
-### AI 权限、接管及上下文压缩回归
-
-`AIPermissionMode` 从旧 `autoApproveReadOnly` 向三档权限兼容迁移；执行前仍调用 `validateExecution`，模型不能自行升级权限。`AIStopGesture` 只接受 Ctrl+C 或 500ms 内两次 Esc，普通输入不进入 AI 占用的 PTY。停止记录中断状态并取消模型流，原会话 ID、历史来源和上下文授权保留，执行许可不继承。
-
-`AIContextCompaction` 使用每模型 Token 预算与百分比阈值，分批压缩已授权文字并保留近期记录。摘要独立保存来源 ID 与接收方，原始资料不替换；撤销来源后摘要及派生回答失效。自动任务也通过此上下文路径发送。失败、取消、目标或设置代际变化时不应用摘要。
-
-运行 `bash scripts/build.sh --tests`、`python3 scripts/run-ai-compaction-tests.py`、`python3 scripts/run-ai-context-tests.py`、`python3 scripts/run-ai-tests.py`；新回归用四种协议的回环模型验证压缩前后实际 HTTP 内容、接收方隔离、撤销、失败及取消。另用安装了 Paramiko 的 Python 执行 `scripts/run-ai-diagnostics-tests.py`，覆盖原 PTY 空闲确认、逐条审批、查询/变更自动审批与明确接管。所有数据为合成数据，测试不连接真实 AI 服务或用户 SSH 主机。
-
-AI 终端输出采集使用增量字节状态机，OSC 在首个 BEL 或 ST 结束符停止，CSI 和其他控制字符串独立处理；分包或 UTF-8 字节边界不能改变正文，原始 PTY 数据仍原样传入终端。`AITerminalCaptureTest` 覆盖结束符组合和每个分包位置。使用安装了 Paramiko 的 Python 运行 `scripts/run-ai-diagnostics-tests.py --osc-st` 验证原 PTY 输出经真实 HTTP 到达模型，`--echo-only` 验证只收到回显时点名失败查询、暂停后续命令和模型请求，不计入证据。资源查询空正文也暂停并标明可能为空结果或采集异常；文件读取、日志检索和文件变更允许空输出，但明确记录不确定性，不伪造退出码或推断没有匹配项。
-
 ### 全屏窗口状态管理
 
 系统全屏和专注全屏在 `WorkspaceWindow.toggleFullScreen` 调用 `super` 之前准备相同的原生窗口呈现；`willEnter` 提供幂等兜底。窗口快照只捕获一次，进入失败或退出后恢复原样。普通全屏保留工具栏、快捷链接栏及系统窗口按钮；专注模式单独控制应用内容。重复通知不会重复写入未改变的样式，状态不写入共享配置。
@@ -183,3 +145,10 @@ AI 终端输出采集使用增量字节状态机，OSC 在首个 BEL 或 ST 结�
 `fullscreen-activation` 覆盖进入前准备、失败回滚、普通全屏输入/回显、退出尺寸恢复、随后进入和退出专注模式以及本地进程连续性。回显检查跨越终端换行；时间指标明确标为应用绘制完成，不能当作物理屏幕显示延迟。全屏测试启动前检查桌面锁定状态，锁屏时直接报告环境阻断，不启动无效场景。
 
 已移除临时 A–F 布局菜单、输入采样分支、人工诊断开关和强制画面提交实验。保留标准自动回归和既有只记录时长的统一日志。当前验收候选及其验证状态见 `validation/fullscreen-acceptance-report.json`；候选包不代表已经完成实机视觉验收。
+
+
+## Agent 回归
+
+`bash scripts/build.sh --tests` 后运行 `python3 scripts/run-ui-tests.py agent-control`。测试通过随应用分发的 SDK STDIO 服务和真实本地 PTY 验证授权隔离、幂等、审批失效、接管及加密审计，使用一次性配置与合成凭据。模拟客户端标识不等于真实 Codex/OpenCode 端到端验收，真实客户端联调应独立记录。核心检查增加了认证分块损坏、截断、密钥隔离、未封口、查询策略与跨字节脱敏回归。
+
+参见 [协议与存储](agent-control.md)。共享配置协议未加入 Agent 设置；所有配对与审计数据留在各应用独立的本机目录。

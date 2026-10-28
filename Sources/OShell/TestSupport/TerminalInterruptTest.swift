@@ -11,23 +11,13 @@ final class TerminalInterruptTest {
     private var settingsLoadMs = 0.0
     private var checks = [String: Bool](), timings = [[String: Double]]()
     private init(_ workspace: WorkspaceController) { self.workspace = workspace }
-    static func prepare() {
-        // A decodable encrypted envelope with an unsupported payload version
-        // reproduces failed settings loads without any real credentials.
-        var settings = AISettings(); settings.version = 99
-        try? AIStorage.write(settings, name: "settings.json")
-    }
+    static func prepare() {}
     static func run(_ workspace: WorkspaceController) {
         let test = TerminalInterruptTest(workspace); retained = test
         do {
-            let began = ProcessInfo.processInfo.systemUptime
-            do { _ = try AISettings.load(); test.checks["invalidSettingsFixtureRejected"] = false }
-            catch { test.checks["invalidSettingsFixtureRejected"] = true }
-            test.settingsLoadMs = (ProcessInfo.processInfo.systemUptime - began) * 1000
-            test.readBaseline = AISettings.storageReadAttempts
             let lookupStart = ProcessInfo.processInfo.systemUptime
-            for _ in 0..<1000 { _ = AISettings.shortcutForKeyboardRouting }
-            test.checks["failedConfigShortcutLookupIsMemoryOnly"] = AISettings.storageReadAttempts == test.readBaseline && ProcessInfo.processInfo.systemUptime - lookupStart < 0.05
+            for _ in 0..<1000 { _ = AgentShortcut.binding }
+            test.checks["agentShortcutLookupIsMemoryOnly"] = ProcessInfo.processInfo.systemUptime - lookupStart < 0.05
             workspace.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OSHELL_DATA_DIR"]!)
             try Data("unsetopt GLOBAL_RCS\n".utf8).write(to: root.appendingPathComponent(".zshenv"))
@@ -51,22 +41,14 @@ final class TerminalInterruptTest {
     }
     private func sendNext() {
         guard sample < 5 else {
-            checks["keyboardDoesNotReloadAISettings"] = AISettings.storageReadAttempts == readBaseline
-            var restored = AISettings(); restored.shortcut = KeyboardShortcut(1, KeyboardShortcut.control | KeyboardShortcut.option)
-            do {
-                try restored.save()
-                checks["changedAIShortcutUpdatesCache"] = AISettings.shortcutForKeyboardRouting == restored.shortcut
-                restored.shortcut = nil; try restored.save()
-                checks["disabledAIShortcutUpdatesCache"] = AISettings.shortcutForKeyboardRouting == nil
-            } catch { checks["shortcutRefresh"] = false }
             finish(); return
         }
         let index = sample; sample += 1
         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .control, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: workspace.window!.windowNumber, context: nil, characters: "\u{3}", charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8)!
         let start = ProcessInfo.processInfo.systemUptime
-        // Exercise the same cached AI lookup independently of foreground focus,
+        // Exercise the same Agent shortcut lookup independently of foreground focus,
         // then send the real terminal key event to a PTY receiver.
-        _ = AISettings.shortcutForKeyboardRouting
+        _ = AgentShortcut.binding
         pane.terminal.keyDown(with: event)
         let dispatched = ProcessInfo.processInfo.systemUptime
         wait("ctrlCReceived-\(index)", { self.received.contains("ACK\(index):3") }) { [self] in

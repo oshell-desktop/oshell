@@ -8,6 +8,7 @@ import OShellCore
 final class OShellTerminal: LocalProcessTerminalView {
     weak var owner: TerminalPane?
     private var userInputDepth = 0
+    private var wheelZoom = TerminalWheelZoom()
     #if OSHELL_TEST_HARNESS
     var focusReadsForTesting = 0
     var lastDrawForTesting: TimeInterval = 0
@@ -37,7 +38,7 @@ final class OShellTerminal: LocalProcessTerminalView {
     }
     override func layout() { super.layout(); owner?.resizeLocalTool() }
     override func keyDown(with event: NSEvent) {
-        if event.isARepeat, event.keyCode == 53, owner?.aiTaskIntervention != nil || owner?.aiDiagnosticIntervention != nil { return }
+        if event.isARepeat, event.keyCode == 53, let owner, AgentCoordinator.shared.grants[owner.id]?.task != nil { return }
         wordClickSeed = nil; userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyDown(with: event) }
     override func keyUp(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyUp(with: event) }
     override func insertText(_ string: Any, replacementRange: NSRange) { wordClickSeed = nil; userInputDepth += 1; defer { userInputDepth -= 1 }; super.insertText(string, replacementRange: replacementRange) }
@@ -56,8 +57,25 @@ final class OShellTerminal: LocalProcessTerminalView {
         } catch { Dialogs.message(error.localizedDescription) }
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseMoved(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.mouseMoved(with: event) }
+    override func rightMouseUp(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.rightMouseUp(with: event) }
+    override func rightMouseDragged(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.rightMouseDragged(with: event) }
+    override func otherMouseDown(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.otherMouseDown(with: event) }
+    override func otherMouseUp(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.otherMouseUp(with: event) }
+    override func otherMouseDragged(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.otherMouseDragged(with: event) }
+    override func flagsChanged(with event: NSEvent) {
+        userInputDepth += 1; defer { userInputDepth -= 1 }
+        if !event.modifierFlags.contains(.control) { wheelZoom.reset() }
+        super.flagsChanged(with: event)
+    }
     override func scrollWheel(with event: NSEvent) {
+        userInputDepth += 1; defer { userInputDepth -= 1 }
         wordClickSeed = nil
+        if event.modifierFlags.contains(.control) {
+            if let step = wheelZoom.step(for: event) { owner?.adjustFontSize(by: step) }
+            return // Zoom must not also scroll history or send a TUI mouse event.
+        }
+        wheelZoom.reset()
         if let arrangement = enclosingScrollView as? TabArrangementView {
             let model = getTerminal()
             let horizontalGesture = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
@@ -75,6 +93,7 @@ final class OShellTerminal: LocalProcessTerminalView {
         super.scrollWheel(with: event)
     }
     override func mouseDown(with event: NSEvent) {
+        userInputDepth += 1; defer { userInputDepth -= 1 }
         guard owner?.isShutdown == false, let window else { return }
         if window.firstResponder !== self {
             wordClickSeed = nil
@@ -125,10 +144,12 @@ final class OShellTerminal: LocalProcessTerminalView {
         super.mouseDown(with: event)
     }
     override func mouseDragged(with event: NSEvent) {
+        userInputDepth += 1; defer { userInputDepth -= 1 }
         wordClickSeed = nil
         super.mouseDragged(with: event)
     }
     override func mouseUp(with event: NSEvent) {
+        userInputDepth += 1; defer { userInputDepth -= 1 }
         super.mouseUp(with: event)
         owner?.searchPanel.selectionChanged()
         copySelectedTextIfEnabled()
@@ -143,15 +164,14 @@ final class OShellTerminal: LocalProcessTerminalView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
         menu.addItem(.separator())
-        for (title, action) in [("用 AI 分析所选内容", #selector(analyzeWithAI)), ("用 AI 解释命令", #selector(explainWithAI)), ("打开 AI 助手", #selector(openAI))] {
+        for (title, action) in [("Agent 控制与审计", #selector(openAI))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         return menu
     }
-    @objc private func analyzeWithAI() { if let owner { owner.onAI?(owner, 0, selection.getSelectedText()) } }
-    @objc private func explainWithAI() { if let owner { owner.onAI?(owner, 2, selection.getSelectedText()) } }
     @objc private func openAI() { if let owner { owner.onAI?(owner, 0, nil) } }
     override func rightMouseDown(with event: NSEvent) {
+        userInputDepth += 1; defer { userInputDepth -= 1 }
         wordClickSeed = nil
         if owner?.rightClickPaste == true && !event.modifierFlags.contains(.shift) { window?.makeFirstResponder(self); paste(self) }
         else { super.rightMouseDown(with: event) }
@@ -185,8 +205,7 @@ final class OShellTerminal: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         guard owner?.isShutdown != true else { return }
         if userInputDepth > 0 {
-            if owner?.consumeAIControlledInput(Array(data)) == true { return }
-            owner?.noteAIUserIntervention()
+            if let owner, AgentCoordinator.shared.consumeHuman(Array(data), pane: owner) { return }
         }
         if let owner, owner.ended {
             if userInputDepth > 0, owner.onUserInput?(owner, Array(data)) == true { return }
@@ -199,6 +218,8 @@ final class OShellTerminal: LocalProcessTerminalView {
         if userInputDepth > 0, let owner, owner.onUserInput?(owner, Array(data)) == true { return }
         if userInputDepth > 0 { owner?.noteUserInput(data) }
         owner?.noteActivity()
+        if userInputDepth == 0 { owner?.agentInputKind = "terminal_reply" }
+        defer { if userInputDepth == 0 { owner?.agentInputKind = nil } }
         super.send(source: source, data: data)
     }
     override func becomeFirstResponder() -> Bool {
@@ -225,6 +246,20 @@ final class PaneCloseButton: NSButton {
 
 final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     let id = UUID()
+    var agentGeneration = UUID()
+    var agentAudit: AgentAudit?
+    var agentInputKind: String?
+    var agentSensitiveObservationBlocked = false
+    var agentLastEscape: TimeInterval = 0
+    var agentOperation: UUID?
+    var agentTask: UUID?
+    var agentHostContext: Int { hostEpoch }
+    var agentCanInitialize: Bool {
+        agentEligible && !userEditingLine && hostProbeToken == nil && !terminal.getTerminal().isCurrentBufferAlternate
+            && !RemoteHostIdentity.isAuthenticationPrompt(terminal.getTerminal().getCursorLineText())
+    }
+    var agentOutputRedactor = AgentRedactor()
+    var agentDisplayRedactor = AgentRedactor()
     private(set) var profile: SessionProfile
     let terminal: OShellTerminal
     let view = NSView()
@@ -258,6 +293,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     func markOutputUnread() { hasUnreadOutput = true }
     func markOutputRead() { hasUnreadOutput = false }
     private var preferences: Preferences
+    private var fontZoomOffset: CGFloat = 0 // Local to this pane; never persisted or synced.
     private var sshClientLocale: SSHClientLocale?
     private let knownHostsFile: URL?
     private var authBroker: AuthBroker?
@@ -280,9 +316,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var onUserInput: ((TerminalPane, [UInt8]) -> Bool)?
     var onPaste: ((TerminalPane, String) -> Void)?
     var onAI: ((TerminalPane, Int, String?) -> Void)?
-    var aiSession: AIAssistantSession?
-    private var aiAtPrompt = false
-    private var aiWorkingDirectory: (host: String, path: String)?
     var onPasteImage: ((TerminalPane, TerminalClipboardImage) -> Void)?
     var credentialsForConnection: (() -> SessionProfile)?
     var onSaveAuthenticatedPassword: ((SessionProfile, String, SSHIdentity) -> Void)? { didSet { authBroker?.onSavePassword = onSaveAuthenticatedPassword } }
@@ -299,63 +332,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     #if OSHELL_TEST_HARNESS
     var terminalOutputForTesting: ((Data) -> Void)?
     #endif
-    var aiTerminalOutput: ((Data) -> Data)?
-    var aiTerminalCaptureID: UUID?
-    var aiTerminalCommandRunning = false, aiTerminalNeedsConfirmation = false
-    private(set) var aiUserInputVersion = 0
-    private var aiDirectoryEpoch = 0
-    var aiContextEpoch: Int { hostEpoch + aiDirectoryEpoch }
-    var aiInteractivePrompt: String? {
-        guard canRunAIDiagnostics, !userEditingLine, !terminal.getTerminal().isCurrentBufferAlternate,
-              hostProbeToken == nil else { return nil }
-        let line = terminal.getTerminal().getCursorLineText().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !RemoteHostIdentity.isAuthenticationPrompt(line), !line.hasSuffix("=#"), line.utf8.count <= 1024,
-              line.range(of: #"^[^\r\n]*[$#%]$"#, options: .regularExpression) != nil else { return nil }
-        if hasShellIntegration && !aiAtPrompt { return nil }
-        return line
-    }
-    func confirmAIInteractiveReady() -> Bool {
-        guard aiInteractivePrompt != nil else { return false }
-        if aiTerminalNeedsConfirmation {
-            aiTerminalOutput = nil; aiTerminalCaptureID = nil; aiTerminalCommandRunning = false
-        }
-        guard !aiTerminalCommandRunning else { return false }
-        aiTerminalNeedsConfirmation = false; return true
-    }
-    func refreshAIContextAfterExecution() { schedulePromptScan() }
-    func noteAIUserIntervention() {
-        aiUserInputVersion += 1
-        if aiTerminalCommandRunning { aiTerminalNeedsConfirmation = true }
-    }
-    func sendAIInteractiveLine(_ line: String) throws {
-        guard canRunAIDiagnostics, aiInteractivePrompt != nil, !aiTerminalCommandRunning, !aiTerminalNeedsConfirmation else {
-            throw ModelError.invalid("当前终端状态已变化，未发送命令。")
-        }
-        hostProbeWork?.cancel(); hostProbeWork = nil
-        aiAtPrompt = false; userEditingLine = false; aiTerminalCommandRunning = true
-        let bytes = InputText.bytes(line, bracketed: terminal.getTerminal().bracketedPasteMode) + [13]
-        noteActivity(); terminal.process.send(data: bytes[...])
-    }
-    var aiTaskInterventionID: UUID?
-    var aiTaskIntervention: (() -> Void)?
-    var aiDiagnosticIntervention: (() -> Void)?
-    private var aiStopGesture = AIStopGesture()
-    /// Ordinary input cannot race the agent's PTY command stream. Escape is
-    /// consumed here (never sent to the remote shell); only an explicit stop
-    /// releases ownership. Programmatic terminal replies bypass this gate.
-    func consumeAIControlledInput(_ bytes: [UInt8]) -> Bool {
-        guard aiTaskIntervention != nil || aiDiagnosticIntervention != nil else { aiStopGesture.reset(); return false }
-        if aiStopGesture.consume(bytes) {
-            let task = aiTaskIntervention, capture = aiDiagnosticIntervention
-            if let task { task() } else { capture?() }
-            aiStopGesture.reset()
-        }
-        return true
-    }
     func sendManaged(_ bytes: [UInt8]) {
         guard acceptsManagedInput else { return }
-        if consumeAIControlledInput(bytes) { return }
-        noteAIUserIntervention()
+        if AgentCoordinator.shared.consumeHuman(bytes, pane: self) { return }
         if ended { handleEndedInput(bytes[...]); return }
         noteUserInput(bytes[...])
         noteActivity(); terminal.process.send(data: bytes[...])
@@ -412,7 +391,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var hostProbeEcho: HostProbeEcho?
     private(set) var hasShellIntegration = false
     private var integratedPromptPending = false
-    var aiUsesOriginalSSHContext: Bool { canBindInitialHost && interactiveTool == nil }
     var allowsActiveHostProbe: Bool { effectiveHostTitleMode == .activeProbe && !hasShellIntegration }
     private var userEditingLine = false
     private var initialRemoteHostname: String?
@@ -454,56 +432,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             .init(id: "address", title: "配置地址", value: ssh ? profile.host : nil, unavailable: "不适用（本地）"),
             .init(id: "port", title: "配置端口", value: ssh ? String(profile.port) : nil, unavailable: "不适用（本地）")
         ]
-    }
-    var aiTarget: AITarget {
-        let directory = aiWorkingDirectory.flatMap { matchesCurrentHost($0.host) ? $0.path : nil }
-        let stamp = "\(id.uuidString):\(terminal.process.shellPid):\(localToolPID):\(hostEpoch):\(remoteHostname ?? ""):\(remoteAddress ?? ""):\(directory ?? "")"
-        let title: String
-        if isBlank { title = "OShell >（本机工具）" }
-        else if profile.kind == .local { title = sessionTitleName + " · 本机" + (ended ? " · 已结束" : "") }
-        else { title = sessionTitleName + " · 当前终端" + (remoteHostname.map { " · " + $0 } ?? "") + (ended ? " · 已断开" : sessionReady ? " · 已连接" : " · 连接中") }
-        var fields = tabSessionFields.compactMap { field -> AIIdentityField? in
-            guard let value = field.value, !value.isEmpty else { return nil }
-            return .init(id: field.id, name: field.title, value: value)
-        }
-        if let directory { fields.append(.init(id: "directory", name: "当前目录", value: directory)) }
-        let route = profile.runtimeProxyRoute.map { $0.kind.title + " · " + $0.host + ":" + String($0.port) }.joined(separator: " → ")
-        if !route.isEmpty { fields.append(.init(id: "proxy", name: "代理链", value: route)) }
-        else if profile.proxy.kind != .none { fields.append(.init(id: "proxy", name: "代理", value: profile.proxy.kind.title + " · " + profile.proxy.host + ":" + String(profile.proxy.port))) }
-        else if !profile.jumpHost.isEmpty { fields.append(.init(id: "proxy", name: "跳板机", value: profile.jumpHost)) }
-        return AITarget(paneID: id, stamp: stamp, title: title, metadata: "会话：" + title + "\n" + connectionDetails + "\n当前目录：" + (directory ?? "未获取"), fields: fields)
-    }
-    var aiCanFill: Bool {
-        guard !isShutdown, !isTransferring, !isRunningLocalTool, acceptsManagedInput,
-              !terminal.getTerminal().isCurrentBufferAlternate else { return false }
-        if isBlank && ended {
-            let line = terminal.getTerminal().getCursorLineText()
-            return line == EndedSessionInput.prompt || line == EndedSessionInput.prompt.trimmingCharacters(in: .whitespaces)
-        }
-        return !ended && aiAtPrompt && hasShellIntegration && !integratedPromptPending && !userEditingLine
-            && !lastPromptText.isEmpty && terminal.getTerminal().getCursorLineText() == lastPromptText
-            && !RemoteHostIdentity.isAuthenticationPrompt(lastPromptText)
-    }
-    var aiCanConfirmPaste: Bool {
-        // OShell's own editor has an authoritative state; confirmation must
-        // never bypass its pending-input check after a process has exited.
-        guard !ended else { return aiCanFill }
-        return !isShutdown && !isTransferring && !isRunningLocalTool && acceptsManagedInput
-            && !terminal.getTerminal().isCurrentBufferAlternate && !userEditingLine
-            && (!hasShellIntegration || aiAtPrompt)
-            && !RemoteHostIdentity.isAuthenticationPrompt(terminal.getTerminal().getCursorLineText())
-    }
-    func aiOutput(lines: Int?) -> String {
-        let model = terminal.getTerminal()
-        var content: [String] = []
-        if let lines {
-            var low = 0, high = 1
-            while high < 200000 && model.bufferLine(atRow: high) != nil { high *= 2 }
-            while low < high { let mid = (low + high + 1) / 2; if model.bufferLine(atRow: mid) != nil { low = mid } else { high = mid - 1 } }
-            for row in max(0, low - lines + 1)...low { if let line = model.bufferLine(atRow: row) { content.append(String(line.translateToString(trimRight: true).prefix(2048))) } }
-        } else { for row in 0..<model.rows { if let line = model.getLine(row: row) { content.append(String(line.translateToString(trimRight: true).prefix(2048))) } } }
-        let text = content.joined(separator: "\n"), limit = ((try? AISettings.load().resolved(for: aiSession?.modelSelection).contextLimit) ?? AISettings.defaultContextCharacters) / 2
-        return (text.count > limit ? "[快照已截断，仅保留最后 \(limit) 个字符]\n" : "") + String(text.suffix(limit))
     }
     var connectionDetails: String {
         func display(_ value: String) -> String {
@@ -553,7 +481,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         return !ended && terminal.process.running && (profile.kind == .local || sessionReady)
     }
     private func resetHostIdentity() {
-        hasShellIntegration = false; integratedPromptPending = false; aiAtPrompt = false
+        hasShellIntegration = false; integratedPromptPending = false
         hostEpoch += 1; hostAliases = []; currentHostHint = nil; remoteHostname = nil; remoteAddress = nil
         attemptedHostEpoch = nil; lastPromptText = ""; userEditingLine = false
         hostProbeWork?.cancel(); hostProbeWork = nil; hostProbeTimeout?.cancel(); hostProbeTimeout = nil
@@ -609,6 +537,15 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         super.init()
         sshConnectionGroup?.attach(id)
         terminal.owner = self; terminal.processDelegate = self
+        terminal.process.inputGate = { [weak self] bytes, writeID in self?.agentWillSend(Data(bytes), writeID: writeID) ?? false }
+        terminal.process.inputCompletion = { [weak self] writeID, error in
+            guard let self, let audit = self.agentAudit else { return }
+            audit.append(.init(kind: "input_write_completion", fields: ["write_id": .number(writeID), "errno": .number(Int(error))]))
+            if error != 0 { AgentCoordinator.shared.takeover(self.id, reason: "PTY 写入失败，执行结果未知", interrupt: false) }
+        }
+        terminal.getTerminal().registerOscHandler(code: 779) { [weak self] bytes in
+            guard let self else { return }; AgentCoordinator.shared.shellEvent(String(decoding: bytes, as: UTF8.self), pane: self)
+        }
         terminal.registerForDraggedTypes([.fileURL])
         view.wantsLayer = true; view.layer?.cornerRadius = 0; view.layer?.masksToBounds = true
         header.font = .systemFont(ofSize: 11, weight: .medium); header.textColor = .secondaryLabelColor
@@ -667,14 +604,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
     func apply(_ prefs: Preferences) {
         guard !isShutdown else { return }
+        if prefs.fontName != preferences.fontName || prefs.fontSize != preferences.fontSize { fontZoomOffset = 0 }
         preferences = prefs
         terminal.preferColorEmoji = prefs.preferColorEmoji
-        let font = Self.font(prefs)
-        if terminal.font.fontName != font.fontName || terminal.font.pointSize != font.pointSize { terminal.font = font }
-        let fallback = TerminalSymbolFont.matching(font)
-        if terminal.privateUseFallbackFont?.fontName != fallback?.fontName || terminal.privateUseFallbackFont?.pointSize != fallback?.pointSize {
-            terminal.privateUseFallbackFont = fallback
-        }
+        applyFont()
         terminal.changeScrollback(prefs.scrollback)
         searchPanel.bufferDidChange(resized: true)
         let scheme = prefs.colorScheme
@@ -686,10 +619,27 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         searchPanel.appearance = transferProgress.appearance
         if !prefs.metal || terminal.window != nil { try? terminal.setUseMetal(prefs.metal) }
     }
-    private static func font(_ prefs: Preferences) -> NSFont {
+    func adjustFontSize(by step: Int) {
+        guard !isShutdown else { return }
+        let size = min(40, max(8, terminal.font.pointSize + CGFloat(step)))
+        guard size != terminal.font.pointSize else { return }
+        fontZoomOffset = size - preferences.fontSize
+        applyFont()
+        searchPanel.bufferDidChange(resized: true)
+    }
+    private func applyFont() {
+        let font = Self.font(preferences, size: preferences.fontSize + fontZoomOffset)
+        if terminal.font.fontName != font.fontName || terminal.font.pointSize != font.pointSize { terminal.font = font }
+        let fallback = TerminalSymbolFont.matching(font)
+        if terminal.privateUseFallbackFont?.fontName != fallback?.fontName || terminal.privateUseFallbackFont?.pointSize != fallback?.pointSize {
+            terminal.privateUseFallbackFont = fallback
+        }
+    }
+    private static func font(_ prefs: Preferences, size: CGFloat? = nil) -> NSFont {
         BundledTerminalFonts.register()
-        if !prefs.fontName.isEmpty, let font = NSFont(name: prefs.fontName, size: prefs.fontSize) { return font }
-        return .monospacedSystemFont(ofSize: prefs.fontSize, weight: .regular)
+        let pointSize: CGFloat = size ?? CGFloat(prefs.fontSize)
+        if !prefs.fontName.isEmpty, let font = NSFont(name: prefs.fontName, size: pointSize) { return font }
+        return .monospacedSystemFont(ofSize: pointSize, weight: .regular)
     }
     func setSelected(_ value: Bool, showFocusIndicator: Bool = true) {
         view.layer?.borderWidth = 0
@@ -834,13 +784,13 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         terminalOutputForTesting?(incoming)
         #endif
         guard !ignoreOutput, !isShutdown else { return }
+        if let audit = agentAudit {
+            audit.append(.init(kind: "output", fields: AgentCoordinator.shared.outputFields(self), bytes: agentOutputRedactor.consume(incoming)))
+        }
         let wasRetired = retiredPrimaryOutput; retiredPrimaryOutput = ended
         defer { retiredPrimaryOutput = wasRetired }
         noteActivity()
-        if isTransferring, aiTerminalOutput != nil {
-            aiTerminalOutput = nil; aiTerminalCaptureID = nil; aiTerminalCommandRunning = false; aiTerminalNeedsConfirmation = true
-        }
-        var bytes = aiTerminalOutput?(incoming) ?? incoming
+        var bytes = incoming
         receivedBytes += UInt64(incoming.count)
         bytes = identityOutput(bytes)
         if var drain = abortDrain {
@@ -857,8 +807,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             if selectionBytes.count > 64 * 1024 { cancelTransfer() }
             return
         }
-        // AI command output is data, not an implicit request to start a file transfer.
-        guard preferences.autoZmodem, aiTerminalCaptureID == nil else { display(bytes); return }
+        // Agent command output cannot implicitly start a file transfer.
+        guard preferences.autoZmodem, AgentCoordinator.shared.grants[id]?.task == nil else { display(bytes); return }
         let result = detector.consume(bytes)
         display(result.text)
         if finishingTransfer, !result.text.isEmpty { completeFinishing() }
@@ -872,7 +822,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
     private func display(_ bytes: Data) {
         guard !bytes.isEmpty else { return }
-        terminal.feed(byteArray: Array(bytes)[...]); logger?.append(bytes)
+        let recorded = agentDisplayRedactor.consume(bytes)
+        agentAudit?.append(.init(kind: "display", bytes: recorded))
+        if let audit = agentAudit, audit.pendingBytes >= 524_288, audit.error == nil { terminal.process.deliveryPaused = true }
+        terminal.feed(byteArray: Array(bytes)[...]); logger?.append(recorded)
+        AgentCoordinator.shared.observeTerminal(self)
         searchPanel.bufferDidChange()
         schedulePromptScan()
         if outputActivity.consume(bytes), !hasUnreadOutput { onOutput?(self) }
@@ -996,9 +950,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
     func stopLogging() { logger?.stop(); logger = nil; refreshHeader(); onState?() }
     func shutdown() {
+        agentConnectionEnded("终端关闭")
         guard !isShutdown else { return }
-        isShutdown = true; aiTaskIntervention?(); aiDiagnosticIntervention?(); aiSession?.cancel(); onAI = nil
-        aiTaskIntervention = nil; aiTaskInterventionID = nil; aiTerminalOutput = nil; aiTerminalCaptureID = nil; aiTerminalCommandRunning = false
+        isShutdown = true; onAI = nil
         searchPanel.dispose()
         if let window = terminal.window, let responder = window.firstResponder as? NSView,
            responder === terminal || responder.isDescendant(of: view) {
@@ -1029,7 +983,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         header.stringValue = title + (isRunningLocalTool ? " · 本机工具：" + (localToolName ?? "") : (ended ? " · 本机工具模式" : "")) + (isLogging ? " · 记录中" : "")
         header.toolTip = connectionDetails
     }
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) { searchPanel.bufferDidChange(resized: true) }
+    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
+        agentAudit?.append(.init(kind: "resize", fields: ["cols": .number(newCols), "rows": .number(newRows)]))
+        searchPanel.bufferDidChange(resized: true)
+    }
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         guard observesHostIdentity else { return }
         if let token = hostProbeToken, title.hasPrefix(token) {
@@ -1076,9 +1033,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         applyHighlights(highlightSet); refreshHeader(); onState?()
     }
     func noteUserInput(_ bytes: ArraySlice<UInt8>) {
-        if aiTerminalNeedsConfirmation && (bytes.contains(13) || bytes.contains(10)) {
-            aiTerminalOutput = nil; aiTerminalCaptureID = nil; aiTerminalCommandRunning = false
-        }
         hostProbeWork?.cancel(); hostProbeWork = nil
         if observesHostIdentity, bytes.contains(4) || bytes.contains(13) || bytes.contains(10) {
             let currentLine = terminal.getTerminal().getCursorLineText()
@@ -1094,7 +1048,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
         for byte in bytes {
-            if [3, 4, 10, 13].contains(byte) { aiAtPrompt = false }
             if [3, 4, 10, 13, 21].contains(byte) { userEditingLine = false }
             else { userEditingLine = true }
         }
@@ -1104,7 +1057,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }; self.promptScan = nil
             let model = self.terminal.getTerminal()
-            guard self.observesHostIdentity, (!self.aiTerminalCommandRunning || self.aiTerminalNeedsConfirmation), !model.isCurrentBufferAlternate else { return }
+            guard self.observesHostIdentity, AgentCoordinator.shared.grants[self.id]?.task == nil, !model.isCurrentBufferAlternate else { return }
             let text = model.getCursorLineText()
             guard let host = TerminalHostname.fromPrompt(text) else { return }
             self.startIdleTimer()
@@ -1112,7 +1065,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 // Bind the actual prompt alias to the just-reported identity.
                 self.integratedPromptPending = false; self.hostAliases.insert(host); self.lastPromptText = text
             } else if text != self.lastPromptText { self.lastPromptText = text; self.updateHostname(host) }
-            guard self.aiDiagnosticIntervention == nil, self.aiTaskIntervention == nil, self.allowsActiveHostProbe, self.matchesCurrentHost(host), !self.userEditingLine, self.hostProbeToken == nil,
+            guard AgentCoordinator.shared.grants[self.id]?.task == nil, self.allowsActiveHostProbe, self.matchesCurrentHost(host), !self.userEditingLine, self.hostProbeToken == nil,
                   self.attemptedHostEpoch != self.hostEpoch, self.hostProbeWork == nil,
                   self.identityShellReady, !self.isTransferring else { return }
             let epoch = self.hostEpoch
@@ -1128,7 +1081,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
     var canRefreshHostIdentity: Bool {
         if !isShutdown && ended && interactiveTool == nil { return true }
-        return observesHostIdentity && identityShellReady && aiDiagnosticIntervention == nil
+        return observesHostIdentity && identityShellReady && AgentCoordinator.shared.grants[id]?.task == nil
             && !isTransferring && !userEditingLine && !terminal.getTerminal().isCurrentBufferAlternate && hostProbeToken == nil
             && !RemoteHostIdentity.isAuthenticationPrompt(terminal.getTerminal().getCursorLineText())
     }
@@ -1156,7 +1109,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         guard effectiveHostTitleMode != .passive, observesHostIdentity, !terminal.getTerminal().isCurrentBufferAlternate,
               let identity = RemoteHostIdentity.integrationReport(bytes) else { return }
         if let previous = remoteHostname, !RemoteHostIdentity.sameHost(previous, identity.hostname) { hostEpoch += 1 }
-        hasShellIntegration = true; integratedPromptPending = true; aiAtPrompt = true
+        hasShellIntegration = true; integratedPromptPending = true
         currentHostHint = nil
         hostProbeWork?.cancel(); hostProbeWork = nil
         applyHostIdentity(identity)
@@ -1164,17 +1117,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         guard observesHostIdentity else { return }
         if let directory, let host = TerminalHostname.fromDirectory(directory) { updateHostname(host) }
-        if let directory, let url = URL(string: directory), url.scheme == "file", let host = url.host,
-           matchesCurrentHost(host), !url.path.isEmpty, (try? RemotePath.validate(url.path)) != nil,
-           aiWorkingDirectory?.host != host || aiWorkingDirectory?.path != url.path {
-            if let previous = aiWorkingDirectory, previous.path != url.path || !RemoteHostIdentity.sameHost(previous.host, host) { aiDirectoryEpoch += 1 }
-            aiWorkingDirectory = (host, url.path); onState?()
-        }
         if !ended, profile.kind == .ssh, let directory, let url = URL(string: directory), url.scheme == "file", let host = url.host,
            [profile.host, initialRemoteHostname ?? ""].contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }), !url.path.isEmpty,
            (try? RemotePath.validate(url.path)) != nil { remoteDirectory = url.path }
     }
     func processTerminated(source: TerminalView, exitCode: Int32?) {
+        agentConnectionEnded("连接结束", waitForOutput: true)
         sshConnectionGroup?.connectionProcessEnded()
         idleTimer?.cancel(); idleTimer = nil; sessionReady = false
         hostProbeWork?.cancel(); hostProbeWork = nil; hostProbeTimeout?.cancel(); hostProbeTimeout = nil; hostProbeToken = nil
@@ -1290,7 +1238,7 @@ final class TerminalTab {
         }
         return "\(panes.count) 个分屏\n" + lines.joined(separator: "\n") + "\n\n状态圆点及下方连接详情对应当前分屏。\n"
     }
-    var hasUnreadOutput: Bool { layout.panes.contains { $0.hasUnreadOutput || $0.aiSession?.unread == true } }
+    var hasUnreadOutput: Bool { layout.panes.contains { $0.hasUnreadOutput } }
     func markOutputRead() {
         if let zoomedPane { zoomedPane.markOutputRead() }
         else { layout.panes.forEach { $0.markOutputRead() } }

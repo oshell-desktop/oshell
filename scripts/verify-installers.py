@@ -47,7 +47,7 @@ def verify_app(candidate, staged, target, expected):
     assert bridge['LSMinimumSystemVersion'] == target.minimum
     for resource in ['OShell-LICENSE.txt', 'OShell.icns', 'oshell-integration.sh', 'THIRD_PARTY_NOTICES.txt', 'ColorSchemes-LICENSE.txt', 'Sparkle-LICENSE.txt']:
         assert digest(candidate/'Contents/Resources'/resource) == digest(staged/'Contents/Resources'/resource)
-    for relative in ['MacOS/OShell', 'MacOS/OShell-ZOC', 'Helpers/OShellAskpass', 'Helpers/OShellProxy', 'Helpers/lrz', 'Helpers/lsz', 'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla']:
+    for relative in ['MacOS/OShell', 'MacOS/OShell-ZOC', 'Helpers/OShell-MCP', 'Helpers/OShellAskpass', 'Helpers/OShellProxy', 'Helpers/lrz', 'Helpers/lsz', 'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla']:
         item = candidate/'Contents'/relative
         assert set(run(['lipo', '-archs', item]).split()) == set(target.architectures), (relative, 'wrong architecture')
         assert digest(item) == digest(staged/'Contents'/relative), (relative, 'stale payload')

@@ -27,7 +27,8 @@ final class MemoryCycleProfile {
     private var probes = [Probe](), samples = [[String: Any]](), checks = [String: Bool]()
     private var round = 0
     private var request: ZOCLaunchRequest!
-    private let cycles = 3, count = 16
+    private let cycles = 3
+    private let count = max(1, min(16, Int(ProcessInfo.processInfo.environment["OSHELL_MEMORY_SESSION_COUNT"] ?? "16") ?? 16))
     init(_ controller: WorkspaceController, root: URL) { self.controller = controller; self.root = root }
     static func run(_ controller: WorkspaceController) {
         guard let path = ProcessInfo.processInfo.environment["OSHELL_MEMORY_CYCLE_ROOT"] else { return }
@@ -39,9 +40,29 @@ final class MemoryCycleProfile {
         request = try ZOCLaunchRequest.parse(["/DEV:SSH", "/CONNECT:test:\(fixture["password"] as! String)@127.0.0.1:\(fixture["port"] as! Int)", "/TITLE:内存回归", "/EMU:Xterm"])
         try FileManager.default.createDirectory(at: controller.store.url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(contentsOf: root.appendingPathComponent("known_hosts")).write(to: controller.store.url.deletingLastPathComponent().appendingPathComponent("known_hosts"))
+        if ProcessInfo.processInfo.environment["OSHELL_MEMORY_PANEL"] == "1", let original = controller.window {
+            // Explicit component benchmark for hosts whose active fullscreen
+            // Space hides ordinary test windows. Not a system-fullscreen test.
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+                                styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.hidesOnDeactivate = false
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications]
+            panel.level = .floating
+            let content = original.contentView
+            original.contentView = nil; original.orderOut(nil)
+            controller.window = panel; panel.contentView = content; panel.delegate = controller
+            panel.center(); panel.makeKeyAndOrderFront(nil); panel.orderFrontRegardless()
+        }
         controller.window?.setContentSize(NSSize(width: 1180, height: 760))
         if ProcessInfo.processInfo.environment["OSHELL_MEMORY_SOFTWARE"] == "1" { controller.configuration.preferences.metal = false }
-        later(2) { self.sample("empty"); self.openRound() }
+        later(2) {
+            if ProcessInfo.processInfo.environment["OSHELL_MEMORY_FULLSCREEN"] == "1" {
+                self.controller.window?.toggleFullScreen(nil)
+                self.wait("enteredFullscreen", until: { self.controller.window?.styleMask.contains(.fullScreen) == true }) {
+                    self.later(2) { self.sample("empty"); self.openRound() }
+                }
+            } else { self.sample("empty"); self.openRound() }
+        }
     }
     private func later(_ seconds: Double, _ work: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work) }
     private func wait(_ label: String, until condition: @escaping () -> Bool, then next: @escaping () -> Void) {
@@ -55,7 +76,9 @@ final class MemoryCycleProfile {
     }
     private func openRound() {
         round += 1
+        sample("opening_\(round)")
         for _ in 0..<count { controller.openExternal(request); probes.append(Probe(controller.selectedTab!.activePane)) }
+        sample("created_\(round)")
         wait("round\(round)Output", until: {
             self.controller.inputPanes.count == self.count && self.controller.inputPanes.allSatisfy {
                 $0.sessionReady && String(decoding: $0.terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains("MEMORY_OUTPUT_COMPLETE")
@@ -63,15 +86,30 @@ final class MemoryCycleProfile {
         }) {
             self.controller.arrange(.tiled)
             self.later(2) {
-                self.sample("open_\(self.round)")
-                self.controller.inputPanes.forEach { $0.sendManaged(Array("exit\r".utf8)) }
-                self.wait("round\(self.round)Ended", until: { self.controller.inputPanes.allSatisfy { $0.ended } }) {
-                    self.sample("ended_\(self.round)")
-                    while !self.controller.tabs.isEmpty { self.controller.closeTab() }
-                    self.controller.arrange(.tabs)
-                    self.later(4) { self.closedSample(3) }
-                }
+                if ProcessInfo.processInfo.environment["OSHELL_MEMORY_OPEN_EDITOR"] == "1" {
+                    self.sample("connected_\(self.round)")
+                    self.later(6) {
+                        self.sample("before_editor_\(self.round)")
+                        let timer = Timer(timeInterval: 3, repeats: false) { _ in
+                            self.sample("editor_\(self.round)")
+                            if let window = NSApp.modalWindow { _ = PopupKeyboard.dismiss(window: window) }
+                        }
+                        RunLoop.main.add(timer, forMode: .common); RunLoop.main.add(timer, forMode: .modalPanel)
+                        self.controller.createSession(kind: .ssh); timer.invalidate()
+                        self.sample("after_editor_\(self.round)"); self.endRound()
+                    }
+                } else { self.endRound() }
             }
+        }
+    }
+    private func endRound() {
+        sample("open_\(round)")
+        controller.inputPanes.forEach { $0.sendManaged(Array("exit\r".utf8)) }
+        wait("round\(round)Ended", until: { self.controller.inputPanes.allSatisfy { $0.ended } }) {
+            self.sample("ended_\(self.round)")
+            while !self.controller.tabs.isEmpty { self.controller.closeTab() }
+            self.controller.arrange(.tabs)
+            self.later(4) { self.closedSample(3) }
         }
     }
     private func closedSample(_ remaining: Int) {
@@ -94,6 +132,10 @@ final class MemoryCycleProfile {
         value["panes"] = probes.filter { $0.pane != nil }.count; value["views"] = probes.filter { $0.view != nil }.count
         value["emulators"] = probes.filter { $0.emulator != nil }.count; value["processes"] = probes.filter { $0.process != nil }.count
         value["groups"] = probes.filter { $0.group != nil }.count
+        value["metalFrames"] = controller.inputPanes.map { $0.terminal.metalRendererStatus.presentedFrameCount }
+        value["backingScale"] = controller.window?.backingScaleFactor ?? 0
+        value["windowVisible"] = controller.window?.occlusionState.contains(.visible) == true
+        value["fullscreen"] = controller.window?.styleMask.contains(.fullScreen) == true
         value["reclaimPasses"] = controller.idleMemoryReclaimer.completedPasses
         value["reclaimedMiB"] = Double(controller.idleMemoryReclaimer.releasedBytes) / 1048576
         value["reclaimMilliseconds"] = controller.idleMemoryReclaimer.lastDurationMilliseconds
@@ -101,7 +143,7 @@ final class MemoryCycleProfile {
         try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]).write(to: root.appendingPathComponent("phase.json"))
     }
     private func finish() {
-        let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 } && round == cycles, "checks": checks, "samples": samples,
+        let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 } && round == cycles, "checks": checks, "samples": samples, "sessionsPerRound": count,
                                   "metal": controller.configuration.preferences.metal, "scrollback": controller.configuration.preferences.scrollback]
         try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: root.appendingPathComponent("result.json"))
         controller.shutdown(); Self.active = nil; NSApp.terminate(nil)

@@ -21,7 +21,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     let globalProxyButton = NSButton()
     let aiButton = NSButton(title: "AI", target: nil, action: nil)
     var aiHost: AIWorkspaceHost?
-    var loadedAI: AIAssistantView?
+    var loadedAI: AgentControlView?
     var selectedPaneForAI: TerminalPane? { selectedTab?.activePane }
     let currentPropertiesButton = NSButton(), defaultPropertiesButton = NSButton(), updateButton = NSButton()
     let splitButton = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -78,7 +78,6 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     private var activationObserver: NSObjectProtocol?
     private var updateStateObserver: NSObjectProtocol?
     private var syncStateObserver: NSObjectProtocol?
-    private var aiStateObserver: NSObjectProtocol?
     private var quickSendRefreshPending = false
     let syncIndicator = NSTextField(labelWithString: "")
     let stopSyncButton = NSButton()
@@ -155,14 +154,6 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             guard let self, let sync = note.object as? WebDAVSync, sync === self.windowCoordinator?.webDAV else { return }
             self.refreshSyncStatusButton()
         }
-        aiStateObserver = NotificationCenter.default.addObserver(forName: AIAssistantSession.didChange, object: nil, queue: .main) { [weak self] note in
-            guard let self, let session = note.object as? AIAssistantSession,
-                  self.tabs.contains(where: { $0.layout.panes.contains { $0.aiSession === session } }) else { return }
-            self.refreshTabTitles()
-            let unread = self.tabs.contains { $0.layout.panes.contains { $0.aiSession?.unread == true } }
-            self.aiButton.contentTintColor = unread ? .systemOrange : .labelColor
-            self.aiButton.setAccessibilityValue(unread ? "有 AI 结果待查看" : "")
-        }
         pinsObserver = NotificationCenter.default.addObserver(forName: SessionPins.didChange, object: nil, queue: .main) { [weak self] _ in
             self?.sessionManager?.reload(); self?.refreshSessionSidebar()
         }
@@ -171,7 +162,6 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: NSApp, queue: .main) { [weak self] _ in self?.markSelectedOutputRead() }
     }
     deinit {
-        if let aiStateObserver { NotificationCenter.default.removeObserver(aiStateObserver) }
         if let pinsObserver { NotificationCenter.default.removeObserver(pinsObserver) }
         if let globalProxyObserver { NotificationCenter.default.removeObserver(globalProxyObserver) }
         if let titleSettingsObserver { NotificationCenter.default.removeObserver(titleSettingsObserver) }
@@ -243,7 +233,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         configurePropertyButtons(); configureSyncStatusButton()
         configureGlobalProxyButton()
         aiButton.bezelStyle = .texturedRounded; aiButton.setButtonType(.toggle)
-        aiButton.identifier = .init("toolbar.ai"); aiButton.setAccessibilityLabel("AI 助手")
+        aiButton.identifier = .init("toolbar.ai"); aiButton.setAccessibilityLabel("Agent 控制与审计")
         aiButton.target = self; aiButton.action = #selector(toggleAIAssistant)
         aiButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         refreshAIShortcut()
@@ -982,10 +972,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let securityView = SecuritySettingsView(workspace: self)
         let titleView = SessionTitleSettingsView()
         let imagePasteView = ImagePasteSettingsControl()
-        let aiView = AISettingsView(); defer { aiView.dispose() }
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
-        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, aiView: aiView, aiSelected: aiSelected, selectionView: { autoCopy, trim in
+        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
         }, localShortcutSelection: { localShortcut = $0 }) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
@@ -995,7 +984,6 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             let openProfiles = (windowCoordinator?.workspaces ?? [self]).flatMap { $0.inputPanes.filter { !$0.isBlank }.map(\.profile) }
             try titleView.apply(profiles: configuration.profiles + openProfiles)
         } catch { Dialogs.message("标题设置未保存：" + error.localizedDescription) }
-        do { try aiView.apply(); refreshAIShortcut() } catch { Dialogs.message("AI 设置未保存：" + error.localizedDescription) }
         do { try imagePasteView.apply() } catch { Dialogs.message("图片粘贴设置未保存：" + error.localizedDescription) }
         if let selection = try? selectionView?.values() { selection.save() }
         SessionSidebarPreferences.saveShortcut(localShortcut)

@@ -6,18 +6,16 @@ import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASES = {
+ 'agent-resources':'OSHELL_AGENT_RESOURCES_OUTPUT',
+ 'agent-control':'OSHELL_AGENT_OUTPUT',
+ 'agent-replay':'OSHELL_AGENT_REPLAY_OUTPUT',
+ 'wheel-gestures':'OSHELL_WHEEL_OUTPUT',
  'fullscreen-activation':'OSHELL_FULLSCREEN_ACTIVATION_OUTPUT',
- 'ai-compaction':'OSHELL_AI_COMPACTION_OUTPUT',
- 'ai-record-selection':'OSHELL_AI_RECORD_SELECTION_OUTPUT',
  'finder-service':'OSHELL_FINDER_SERVICE_OUTPUT',
- 'ai-history-scroll':'OSHELL_AI_HISTORY_SCROLL_OUTPUT',
- 'activation-latency':'OSHELL_ACTIVATION_LATENCY_OUTPUT','ai-context':'OSHELL_AI_CONTEXT_OUTPUT',
+ 'activation-latency':'OSHELL_ACTIVATION_LATENCY_OUTPUT',
  'terminal-focus':'OSHELL_FOCUS_OUTPUT',
  'tiled-input':'OSHELL_TILED_INPUT_OUTPUT',
  'terminal-interrupt':'OSHELL_INTERRUPT_OUTPUT',
- 'ai-history-close':'OSHELL_AI_HISTORY_CLOSE_OUTPUT',
- 'ai-assistant':'OSHELL_AI_OUTPUT',
- 'ai-model-discovery':'OSHELL_AI_DISCOVERY_OUTPUT',
  'tab-session-info':'OSHELL_TAB_SESSION_INFO_OUTPUT',
  'marked-text':'OSHELL_MARKED_TEXT_OUTPUT',
  'image-paste':'OSHELL_IMAGE_PASTE_OUTPUT',
@@ -137,11 +135,19 @@ def run_case(source, case, timeout):
         subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True, capture_output=True)
         report = ROOT/'validation'/f'ui-{case}.json'; report.unlink(missing_ok=True)
         log = report.with_suffix('.log'); log.write_text('')
+        ssh_fixture = None
+        if case == 'agent-control' and os.environ.get('OSHELL_AGENT_SSH') == '1':
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('agent_ssh', ROOT/'scripts/test-agent-ssh.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            ssh_fixture = module.Fixture(data)
         destination = base/'results' if case == 'session-list' else report
         if case == 'session-list': destination.mkdir()
         args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data),
                 '--env', CASES[case]+'='+str(destination), '--stdout', str(log), '--stderr', str(log),
                 str(app), '--args', '--'+case+'-test']
+        if case == 'agent-control':
+            args[1:1] = ['--env', 'OSHELL_AGENT_RUNNER='+str(ROOT/'scripts/test-agent-protocol.py'), '--env', 'OSHELL_AGENT_REAL_CLIENTS='+os.environ.get('OSHELL_AGENT_REAL_CLIENTS','0')]
+            if os.environ.get('OSHELL_AGENT_REAL_CLIENTS') == '1': args[1:1] = ['--env', 'PATH='+os.environ.get('PATH','')]
         if case in ['activation-latency', 'fullscreen-activation'] and os.environ.get('OSHELL_ACTIVATION_METAL') == '1':
             args[1:1] = ['--env', 'OSHELL_ACTIVATION_METAL=1']
         if case == 'fullscreen-activation':
@@ -154,6 +160,16 @@ def run_case(source, case, timeout):
             subprocess.run(args, timeout=timeout, check=True, capture_output=True)
             if case == 'session-list': report.write_bytes((destination/'session-list-result.json').read_bytes())
             result = json.loads(report.read_text())
+            if case == 'agent-control':
+                if (data/'protocol.log').exists(): (ROOT/'validation/agent-protocol.log').write_bytes((data/'protocol.log').read_bytes())
+                for client in ['codex','opencode']:
+                    for name in ['client.log','observed.json','error.txt','request-error.txt']:
+                        path=data/client/name
+                        if path.exists(): (ROOT/'validation'/('agent-'+client+'-'+name)).write_bytes(path.read_bytes())
+            if ssh_fixture is not None:
+                result['checks']['sshAuthenticatedOnce'] = ssh_fixture.facts['authenticated'] == 1
+                result['checks']['sshUsesOneVisiblePTYNoExec'] = ssh_fixture.facts['shells'] == 1 and ssh_fixture.facts['execRequests'] == 0
+                report.write_text(json.dumps(result,ensure_ascii=False,indent=2))
             passed = result.get('passed', result.get('ok'))
             if case == 'stress': passed = result.get('samples', 0) > 0
             checks = result.get('checks', {})
@@ -161,6 +177,7 @@ def run_case(source, case, timeout):
             if passed is not True or failures: raise RuntimeError(f'{case} failed: {failures}; see {log.relative_to(ROOT)}')
             print(f'{case}: passed', flush=True)
         finally:
+            if ssh_fixture is not None: ssh_fixture.close()
             # Stop only this disposable clone on timeout; never kill the user's app.
             executable = str(app/'Contents/MacOS/OShell')
             for line in subprocess.check_output(['ps','-axo','pid=,comm='], text=True).splitlines():

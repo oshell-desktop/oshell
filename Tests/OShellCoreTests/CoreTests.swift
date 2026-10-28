@@ -3,6 +3,7 @@
 
 import Foundation
 import CoreFoundation
+import CryptoKit
 import Darwin
 import OShellCore
 
@@ -22,6 +23,112 @@ private func XCTAssertThrowsError<T>(_ value: @autoclosure () throws -> T, file:
 }
 
 final class CoreTests {
+    func testAgentAuditAndPolicy() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agent-audit-test-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let audit = try AgentAudit(directory: root, metadata: ["title": .string("合成终端"), "screen": .string("\u{1b}[31m中文\u{1b}[0m")])
+        let intent = DispatchSemaphore(value: 0)
+        XCTAssertTrue(audit.append(.init(kind: "execution_intent", fields: ["command": .string("printf fixture")]), completion: { ok in if ok { intent.signal() } }))
+        XCTAssertTrue(intent.wait(timeout: .now() + 5) == .success)
+        XCTAssertTrue(audit.durableSequence >= 2)
+        let bytes = Data("中文\u{1b}[32mUTF8\u{1b}[0m\r\n".utf8)
+        let operation = UUID()
+        for part in bytes { XCTAssertTrue(audit.append(.init(kind: "output", fields: ["operation": .string(operation.uuidString)], bytes: Data([part])))) }
+        audit.finish(reason: "fixture"); audit.flush()
+        let key = try AgentAudit.key(directory: root, create: false)
+        var decoded = Data(), kinds = [String](), next = 1
+        let sealed = try AgentAudit.read(url: audit.url, key: key) { event in
+            XCTAssertEqual(event.sequence, next); next += 1; kinds.append(event.kind)
+            if event.kind == "output" { decoded.append(event.bytes ?? Data()) }; return true
+        }
+        XCTAssertTrue(sealed)
+        XCTAssertEqual(decoded, bytes); XCTAssertEqual(kinds.first, "baseline"); XCTAssertEqual(kinds.last, "seal")
+        let cursor = try AgentOutputCursor(url: audit.url, key: key, operation: operation, start: 0)
+        var streamed = Data()
+        while true { let chunk = try cursor.read(limit: 3, watermark: audit.durableSequence); if chunk.isEmpty { break }; streamed.append(chunk) }
+        XCTAssertEqual(streamed, bytes); XCTAssertEqual(cursor.position, bytes.count)
+        let seek = try AgentOutputCursor(url: audit.url, key: key, operation: operation, start: 5)
+        XCTAssertEqual(try seek.read(limit: 65_536, watermark: audit.durableSequence), Data(bytes.dropFirst(5)))
+        let index = try AgentAudit.index(url: audit.url, master: key)
+        XCTAssertEqual(index["title"]?.string, "合成终端")
+        let indexURL = audit.url.appendingPathExtension("index"), originalIndex = try Data(contentsOf: indexURL)
+        let oversized = try FileHandle(forWritingTo: indexURL)
+        try oversized.truncate(atOffset: 64 * 1024 * 1024); try oversized.close()
+        XCTAssertThrowsError(try AgentAudit.index(url: audit.url, master: key))
+        try PrivateFile.write(originalIndex, to: indexURL)
+        let export = root.appendingPathComponent("portable.oshell-audit-export")
+        let password = "synthetic-export-password"
+        try AgentAuditExport.write(archive: audit.url, root: root, password: password, destination: export)
+        let beforeCancel = try Data(contentsOf: export)
+        var visits = 0
+        XCTAssertThrowsError(try AgentAuditExport.write(archive: audit.url, root: root, password: password, destination: export, cancelled: { visits += 1; return visits > 2 }))
+        XCTAssertEqual(try Data(contentsOf: export), beforeCancel)
+        let exported = try Data(contentsOf: export), magic = Data("OSHELL-AUDIT-EXPORT-1\n".utf8)
+        XCTAssertTrue(exported.starts(with: magic))
+        let length = exported[magic.count..<(magic.count + 4)].reduce(0) { ($0 << 8) | Int($1) }
+        let envelope = Data(exported[(magic.count + 4)..<(magic.count + 4 + length)])
+        let archiveKey = AgentAudit.archiveKey(master: key, id: audit.id).withUnsafeBytes { Data($0) }
+        XCTAssertEqual(try SharedVault.open(envelope, password: password), archiveKey)
+        XCTAssertThrowsError(try SharedVault.open(envelope, password: "wrong-synthetic-password"))
+        XCTAssertEqual(Data(exported.dropFirst(magic.count + 4 + length)), try Data(contentsOf: audit.url))
+        let raw = try Data(contentsOf: audit.url)
+        XCTAssertTrue(raw.range(of: Data("fixture".utf8)) == nil && raw.range(of: Data("合成终端".utf8)) == nil)
+        let corrupt = root.appendingPathComponent("corrupt.oshell-audit")
+        var changed = raw; changed[changed.count - 2] ^= 1; try changed.write(to: corrupt)
+        XCTAssertThrowsError(try AgentAudit.read(url: corrupt, key: key) { _ in true })
+        try raw.dropLast(5).write(to: corrupt)
+        XCTAssertThrowsError(try AgentAudit.read(url: corrupt, key: key) { _ in true })
+        XCTAssertThrowsError(try AgentAudit.read(url: audit.url, key: SymmetricKey(size: .bits256)) { _ in true })
+        let open = try AgentAudit(directory: root, metadata: [:]); open.flush()
+        let unsealed = try AgentAudit.read(url: open.url, key: key) { _ in true }; XCTAssertTrue(!unsealed)
+        XCTAssertTrue(!open.append(.init(kind: "output", bytes: Data(repeating: 1, count: AgentAudit.maximumQueuedBytes + 1))))
+        XCTAssertTrue(open.error != nil); XCTAssertTrue(!open.append(.init(kind: "execution_intent")))
+        let other = try AgentAudit(directory: root, metadata: [:]); other.finish(reason: "end"); other.flush()
+        XCTAssertTrue(AgentAudit.archiveKey(master: key, id: audit.id).withUnsafeBytes { Data($0) } != AgentAudit.archiveKey(master: key, id: other.id).withUnsafeBytes { Data($0) })
+        XCTAssertEqual(AgentCommandPolicy.decide("uptime", permission: .assist), .automatic)
+        XCTAssertEqual(AgentCommandPolicy.decide("uptime", permission: .ask), .approve)
+        XCTAssertEqual(AgentCommandPolicy.decide("printf hello | wc -c", permission: .full), .approve)
+        XCTAssertEqual(AgentCommandPolicy.decide("hostname changed", permission: .assist), .approve)
+        XCTAssertEqual(AgentCommandPolicy.decide("date -s 2000", permission: .assist), .approve)
+        XCTAssertEqual(AgentCommandPolicy.decide("uname -S changed", permission: .assist), .approve)
+        XCTAssertEqual(AgentCommandPolicy.decide("echo $(whoami)", permission: .full), .approve)
+        for command in ["rm -rf /", "rm -f -r /tmp/test", "mkfs.ext4 /dev/fake", "dd if=a of=b", "reboot"] {
+            if case .deny = AgentCommandPolicy.decide(command, permission: .full) {} else { XCTAssertTrue(false) }
+        }
+        for command in ["sudo cat /etc/hosts", "vim file", "ssh other", "passwd"] {
+            if case .human = AgentCommandPolicy.decide(command, permission: .full) {} else { XCTAssertTrue(false) }
+        }
+        let secret = "合成-秘密-123"; let original = Data(("before:" + secret + ":after").utf8)
+        for boundary in 0...original.count {
+            var redactor = AgentRedactor(); try redactor.add(secret)
+            let result = redactor.consume(original.prefix(boundary)) + redactor.consume(original.dropFirst(boundary)) + redactor.finish()
+            XCTAssertEqual(String(decoding: result, as: UTF8.self), "before:[敏感输入已隐藏]:after")
+        }
+        var search = try AgentAuditSearch(query: "中文")
+        var hits = [String]()
+        for byte in Data("before 中\u{1b}[31m文 after".utf8) {
+            if let hit = try search.consume(.init(kind: "display", bytes: Data([byte]))) { hits.append(hit) }
+        }
+        XCTAssertEqual(hits.count, 1); XCTAssertTrue(hits.first?.contains("中文") == true)
+        var commandSearch = try AgentAuditSearch(query: "PIPELINE")
+        let commandMatch = try commandSearch.consume(.init(kind: "execution_intent", fields: ["command": .string("printf pipeline | cat")]))
+        XCTAssertTrue(commandMatch != nil)
+        var redactor = AgentRedactor(); try redactor.add(secret)
+        var redacted = Data(); for byte in original { redacted.append(redactor.consume(Data([byte]))) }; redacted.append(redactor.finish())
+        XCTAssertEqual(String(decoding: redacted, as: UTF8.self), "before:[敏感输入已隐藏]:after")
+        let budget = AgentRequestBudget()
+        func request(_ id: Int) -> Data { Data("{\"jsonrpc\":\"2.0\",\"id\":\(id),\"method\":\"tools/call\"}".utf8) }
+        for id in 0..<8 { try budget.reserve(request(id)) }
+        XCTAssertEqual(budget.count, 8)
+        XCTAssertThrowsError(try budget.reserve(request(8)))
+        budget.complete(Data("{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{}}".utf8))
+        try budget.reserve(request(8)); XCTAssertEqual(budget.count, 8)
+        XCTAssertThrowsError(try budget.reserve(request(8)))
+        let batch = AgentRequestBudget()
+        XCTAssertThrowsError(try batch.reserve(Data("[{\"id\":1,\"method\":\"ping\"},{\"id\":1,\"method\":\"ping\"}]".utf8)))
+        XCTAssertEqual(batch.count, 0)
+    }
+
     func testUpdateSource() throws {
         let modern: UpdateFlavor = .arm64
         for minimum in ["15.0", "15.0.0", "16.0", "26.0"] { XCTAssertTrue(modern.acceptsMinimumOS(minimum)) }
@@ -2164,6 +2271,7 @@ extension CoreTests {
             print("PASS: encrypted session interoperability"); return
         }
         let tests = CoreTests()
+        try tests.testAgentAuditAndPolicy()
         try tests.testUpdateSource()
         try tests.testGitHubReleaseMetadata()
         try tests.testMasterStartupProtection()
@@ -2236,7 +2344,7 @@ extension CoreTests {
         tests.testInvalidZmodemHeadersRemainOrdinaryOutput()
         try tests.testLoggerFlushesEveryAcceptedChunk()
         tests.testCancellationDropsInFlightBytesAcrossEveryBoundary()
-        if failures.isEmpty { print("PASS: 72 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
+        if failures.isEmpty { print("PASS: 73 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
         else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
     }
 }

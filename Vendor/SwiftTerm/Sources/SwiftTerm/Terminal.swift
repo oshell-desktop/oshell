@@ -8119,3 +8119,60 @@ public extension TerminalDelegate {
     func createImage (source: Terminal, data: Data, width: ImageSizeRequest, height: ImageSizeRequest, preserveAspectRatio: Bool) {
     }    
 }
+
+extension Terminal {
+    /// Current screen only, never prior scrollback. SGR/cursor/margins form a replay seed.
+    public func auditBaselineANSI() -> String {
+        let buffer = displayBuffer
+        var result = "\u{1b}c"
+        func screen(_ buffer: Buffer) {
+            result += "\u{1b}[?7l\u{1b}[?6l"
+            var previous: Attribute?
+            for row in 0..<rows {
+                result += "\u{1b}[\(row + 1);1H"
+                for col in 0..<cols {
+                    let cell = buffer.getChar(atBufferRelative: Position(col: col, row: row + buffer.yBase))
+                    if cell.width == 0 { continue }
+                    if previous != cell.attribute { result += "\u{1b}[" + cell.attribute.auditSGR(); previous = cell.attribute }
+                    let character = getCharacter(for: cell)
+                    result += character == "\0" ? " " : String(character)
+                }
+            }
+            result += "\u{1b}[0m\u{1b}[\(buffer.scrollTop + 1);\(buffer.scrollBottom + 1)r"
+            result += "\u{1b}[\(buffer.y + 1);\(buffer.x + 1)H"
+        }
+        screen(normalBuffer)
+        if isCurrentBufferAlternate {
+            result += "\u{1b}[" + normalBuffer.savedAttr.auditSGR() + "\u{1b}[?1049h"
+            screen(altBuffer)
+        }
+        result += "\u{1b}[" + curAttr.auditSGR()
+        result += wraparound ? "\u{1b}[?7h" : "\u{1b}[?7l"
+        result += cursorHidden ? "\u{1b}[?25l" : "\u{1b}[?25h"
+        result += insertMode ? "\u{1b}[4h" : "\u{1b}[4l"
+        if originMode { result += "\u{1b}[?6h\u{1b}[\(buffer.y - buffer.scrollTop + 1);\(buffer.x + 1)H" }
+        if reverseColors { result += "\u{1b}[?5h" }
+        result += bracketedPasteMode ? "\u{1b}[?2004h" : "\u{1b}[?2004l"
+        result += applicationCursor ? "\u{1b}[?1h" : "\u{1b}[?1l"
+        return result
+    }
+}
+
+private extension Attribute {
+    func auditSGR() -> String {
+        var codes = ["0"]
+        for (flag, code) in [(CharacterStyle.bold,"1"), (.dim,"2"), (.italic,"3"), (.blink,"5"), (.inverse,"7"), (.invisible,"8"), (.crossedOut,"9")] where style.contains(flag) { codes.append(code) }
+        if underlineStyle != .none { codes.append("4:" + String(underlineStyle.rawValue)) }
+        else if style.contains(.underline) { codes.append("4") }
+        func color(_ color: Color, prefix: String) {
+            switch color {
+            case .ansi256(let value): codes.append(prefix + ";5;" + String(value))
+            case .trueColor(let r, let g, let b): codes.append(prefix + ";2;\(r);\(g);\(b)")
+            default: break
+            }
+        }
+        color(fg, prefix: "38"); color(bg, prefix: "48")
+        if let underlineColor { color(underlineColor, prefix: "58") }
+        return codes.joined(separator: ";") + "m"
+    }
+}

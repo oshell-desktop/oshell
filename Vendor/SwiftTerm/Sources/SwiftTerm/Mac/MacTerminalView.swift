@@ -1506,7 +1506,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // We monitor the flags changed to enable URL previews on mouse-hover like iTerm
     // when the Command key is pressed.
     
-    public override func flagsChanged(with event: NSEvent) {
+    open override func flagsChanged(with event: NSEvent) {
         if event.modifierFlags.contains(.command){
             commandActive = true
             startTracking()
@@ -3152,7 +3152,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         return calculateMouseHit(at: point).grid
     }
     
-    public override func mouseMoved(with event: NSEvent) {
+    open override func mouseMoved(with event: NSEvent) {
         if #available(macOS 26, *) {
             // On macOS 26 movement arrives via `acceptsMouseMovedEvents`, which delivers
             // to the first responder regardless of the pointer's location. Ignore moves

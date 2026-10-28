@@ -52,10 +52,11 @@ cp "$binary_dir/OShell-FileZilla" "$file_bridge/Contents/MacOS/OShell-FileZilla"
 cp "$project_root/scripts/FileZilla-Info.plist" "$file_bridge/Contents/Info.plist"
 cp "$binary_dir/OShellProxy" "$app_dir/Contents/Helpers/OShellProxy"
 cp "$binary_dir/OShellAskpass" "$app_dir/Contents/Helpers/OShellAskpass"
+cp "$binary_dir/OShell-MCP" "$app_dir/Contents/Helpers/OShell-MCP"
 cp "$helper_source/src/lrz" "$helper_source/src/lsz" "$app_dir/Contents/Helpers/"
 ln -sf lrz "$app_dir/Contents/Helpers/rz"
 ln -sf lsz "$app_dir/Contents/Helpers/sz"
-cp -R "$binary_dir/SwiftTerm_SwiftTerm.bundle" "$app_dir/Contents/Resources/"
+for resource in "$binary_dir/"*.bundle; do cp -R "$resource" "$app_dir/Contents/Resources/"; done
 for font_directory in NerdFonts DejaVuFonts CascadiaCode; do
     rm -rf "$app_dir/Contents/Resources/$font_directory"
     cp -R "$project_root/Vendor/$font_directory" "$app_dir/Contents/Resources/$font_directory"
@@ -76,13 +77,14 @@ swift "$project_root/scripts/icon.swift" "$build_dir/OShell.iconset"
 iconutil -c icns "$build_dir/OShell.iconset" -o "$app_dir/Contents/Resources/OShell.icns"
 # Drop debug maps and local linker names from shipped executables. Keep external
 # symbols and runtime metadata; never apply this to bundled third-party frameworks.
-for executable in "$app_dir/Contents/MacOS/OShell" "$app_dir/Contents/MacOS/OShell-ZOC" "$file_bridge/Contents/MacOS/OShell-FileZilla" "$app_dir/Contents/Helpers/OShellProxy" "$app_dir/Contents/Helpers/OShellAskpass" "$app_dir/Contents/Helpers/lrz" "$app_dir/Contents/Helpers/lsz"; do
+for executable in "$app_dir/Contents/MacOS/OShell" "$app_dir/Contents/MacOS/OShell-ZOC" "$file_bridge/Contents/MacOS/OShell-FileZilla" "$app_dir/Contents/Helpers/OShellProxy" "$app_dir/Contents/Helpers/OShellAskpass" "$app_dir/Contents/Helpers/OShell-MCP" "$app_dir/Contents/Helpers/lrz" "$app_dir/Contents/Helpers/lsz"; do
     xcrun strip -S -x "$executable"
 done
 codesign --force --sign - "$app_dir/Contents/Helpers/lrz"
 codesign --force --sign - "$app_dir/Contents/Helpers/lsz"
 codesign --force --sign - "$app_dir/Contents/Helpers/OShellAskpass"
 codesign --force --sign - "$app_dir/Contents/Helpers/OShellProxy"
+codesign --force --sign - "$app_dir/Contents/Helpers/OShell-MCP"
 codesign --force --sign - "$app_dir/Contents/MacOS/OShell-ZOC"
 codesign --force --sign - "$file_bridge"
 python3 "$project_root/scripts/embed-sparkle.py" "$app_dir" "$(uname -m)"

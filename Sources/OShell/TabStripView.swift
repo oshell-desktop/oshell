@@ -30,7 +30,11 @@ final class TabStripView: InterfaceSurfaceView {
         override func menu(for event: NSEvent) -> NSMenu? { makeMenu?() }
         override func scrollWheel(with event: NSEvent) {
             guard let documentView else { return }
-            let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) ? event.scrollingDeltaX : event.scrollingDeltaY
+            // AppKit may already translate Shift + vertical wheel onto X.
+            let delta = event.modifierFlags.contains(.shift)
+                ? (abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) ? event.scrollingDeltaX : event.scrollingDeltaY)
+                : event.scrollingDeltaX
+            guard delta != 0 else { return }
             let limit = max(0, documentView.bounds.width - contentView.bounds.width)
             let x = min(limit, max(0, contentView.bounds.minX - delta * (event.hasPreciseScrollingDeltas ? 1 : 16)))
             contentView.scroll(to: NSPoint(x: x, y: 0)); reflectScrolledClipView(contentView)
@@ -239,7 +243,7 @@ final class TabStripView: InterfaceSurfaceView {
         registerForDraggedTypes([TabDropHost.pasteboardType])
         // No reserved scroller track, including macOS's “Always” preference.
         // Wheel/trackpad, keyboard navigation and the all-tabs menu remain available.
-        scroll.drawsBackground = false; scroll.hasHorizontalScroller = false
+        scroll.drawsBackground = false; scroll.hasHorizontalScroller = false; scroll.hasVerticalScroller = false
         scroll.scrollerStyle = .overlay; scroll.autohidesScrollers = true
         scroll.horizontalScrollElasticity = .none; scroll.verticalScrollElasticity = .none
         let clip = Clip(); clip.drawsBackground = false; scroll.contentView = clip
@@ -281,9 +285,8 @@ final class TabStripView: InterfaceSurfaceView {
         let numbers = numbers ?? Dictionary(uniqueKeysWithValues: tabs.enumerated().map { ($0.element.id, $0.offset + 1) })
         update(entries: tabs.map { tab in
             let title = tab.title
-            let aiNotice = tab.layout.panes.contains { $0.aiSession?.unread == true } ? "AI 结果已就绪，打开对应分屏的 AI 助手查看。\n" : ""
             let action = tab.activePane.canDuplicateConnection ? "双击新建相同会话" : "当前状态不响应双击"
-            return Entry(id: tab.id, title: title, detail: aiNotice + tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus, sessionFields: tab.activePane.tabSessionFields)
+            return Entry(id: tab.id, title: title, detail: tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus, sessionFields: tab.activePane.tabSessionFields)
         }, selectedID: selected?.id)
     }
     func update(entries: [Entry], selectedID: UUID?) {
