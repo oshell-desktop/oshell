@@ -378,6 +378,7 @@ jobs:
       - name: Prepare signed original-repository Pages metadata (two DMGs)
         if: github.repository == 'oshell-desktop/oshell'
         env:
+          GH_TOKEN: ${{ github.token }}
           OSHELL_UPDATE_SIGNING_KEY: ${{ secrets.OSHELL_UPDATE_SIGNING_KEY }}
         run: work/compat-tools/bin/python scripts/publish-legacy-updates.py --tag "$RELEASE_TAG" --release-output dist/github-release --output work/compat-sites
       - name: Upload as draft, verify all assets, then publish Release

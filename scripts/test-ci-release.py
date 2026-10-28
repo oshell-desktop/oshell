@@ -62,6 +62,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('git merge-base --is-ancestor', jobs['metadata'])
         self.assertIn('git checkout --detach "refs/tags/$RELEASE_TAG"', jobs['metadata'])
 
+    def test_post_migration_metadata_can_read_frozen_release(self):
+        _, jobs = self.workflow_jobs('release.yml')
+        steps = re.split(r'^      - ', jobs['release'], flags=re.MULTILINE)
+        migration = [step for step in steps if 'scripts/publish-legacy-updates.py' in step]
+        self.assertEqual(len(migration), 1)
+        # Later versions must fetch the immutable 0.4.1 handoff using gh in CI.
+        self.assertIn('GH_TOKEN: ${{ github.token }}', migration[0])
+
     def test_signing_dependencies_cached_and_tested_without_release_secrets(self):
         _, jobs = self.workflow_jobs('release.yml')
         build = jobs['build']
