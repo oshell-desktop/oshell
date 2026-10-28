@@ -394,7 +394,7 @@ jobs:
 
   update-pages:
     needs: [metadata, release]
-    if: needs.metadata.outputs.publish == 'true'
+    if: always() && needs.metadata.outputs.publish == 'true' && needs.release.result == 'success'
     permissions:
       contents: read
       pages: write

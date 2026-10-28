@@ -77,6 +77,10 @@ class ReleaseTests(unittest.TestCase):
         # Later versions must fetch the immutable 0.4.1 handoff using gh in CI.
         self.assertIn('GH_TOKEN: ${{ github.token }}', migration[0])
 
+    def test_pages_runs_after_successful_release_when_bridge_is_skipped(self):
+        _, jobs = self.workflow_jobs('release.yml')
+        self.assertIn("if: always() && needs.metadata.outputs.publish == 'true' && needs.release.result == 'success'", jobs['update-pages'])
+
     def test_signing_dependencies_cached_and_tested_without_release_secrets(self):
         _, jobs = self.workflow_jobs('release.yml')
         build = jobs['build']
