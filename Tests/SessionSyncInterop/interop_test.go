@@ -24,7 +24,14 @@ func TestOShellSessionScopeCompatibility(t *testing.T) {
 		}
 	}
 	ctx := context.Background()
-	engine, cfg, master := syncEngineFixture(t, t.TempDir())
+	remoteDirectory := t.TempDir()
+	engine, cfg, master := syncEngineFixture(t, remoteDirectory)
+	// Font attachments are outside shared-vault. Desktop must leave them intact.
+	fontDirectory := filepath.Join(remoteDirectory, "fonts")
+	if e := os.Mkdir(fontDirectory, 0700); e != nil { t.Fatal(e) }
+	fontAttachments := map[string][]byte{"library.json": []byte(`{"format":"OShell.font-library","version":1,"fonts":[]}`), "fixture.ttf": []byte("synthetic font attachment")}
+	for name, data := range fontAttachments { if e := os.WriteFile(filepath.Join(fontDirectory,name),data,0600); e != nil { t.Fatal(e) } }
+	t.Cleanup(func() { for name, data := range fontAttachments { saved,e := os.ReadFile(filepath.Join(fontDirectory,name)); if e != nil || !bytes.Equal(saved,data) { t.Error("Desktop changed font attachment",name,e) } } })
 	cfg.Settings.FontSize = 17
 	cfg.SessionDefaults.SSHPort = 2217
 	if e := engine.Store.Save(cfg); e != nil {

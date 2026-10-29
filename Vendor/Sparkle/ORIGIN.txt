@@ -4,5 +4,7 @@ SHA256 8d5fb41d960b43f4a68aa14126bf62b098544ec8d191cdcc73eb14e63a8e7606
 
 Packaging adjustment: upstream dSYM files are kept outside the public source tree; DebugSymbolsPath is removed from the XCFramework container manifest. Framework executables and their upstream licenses are unchanged.
 
+Unused upstream developer utilities (BinaryDelta, generate_appcast, generate_keys and legacy DSA sign_update) are omitted. The Ed25519 sign_update tool is retained for integration tests. Runtime app bundles omit framework headers and module maps; the build-time XCFramework retains them.
+
 Upstream source: https://codeload.github.com/sparkle-project/Sparkle/tar.gz/refs/tags/2.9.6
 Source SHA256 1dcf4a6ace36d25cf09e734756f8aba6ce1de4ad5506a4b9563fde8c6542cc75

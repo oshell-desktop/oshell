@@ -6,6 +6,10 @@ import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASES = {
+ 'font-library':'OSHELL_FONT_LIBRARY_OUTPUT',
+ 'interface-design':'OSHELL_INTERFACE_DESIGN_OUTPUT',
+ 'file-presentation':'OSHELL_FILE_PRESENTATION_OUTPUT',
+ 'agent-panel':'OSHELL_AGENT_PANEL_OUTPUT',
  'agent-resources':'OSHELL_AGENT_RESOURCES_OUTPUT',
  'agent-control':'OSHELL_AGENT_OUTPUT',
  'agent-replay':'OSHELL_AGENT_REPLAY_OUTPUT',
@@ -142,7 +146,7 @@ def run_case(source, case, timeout):
             ssh_fixture = module.Fixture(data)
         destination = base/'results' if case == 'session-list' else report
         if case == 'session-list': destination.mkdir()
-        args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data),
+        args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data), '--env', 'OSHELL_TEST_FONT_ROOT='+str(ROOT/'Vendor'),
                 '--env', CASES[case]+'='+str(destination), '--stdout', str(log), '--stderr', str(log),
                 str(app), '--args', '--'+case+'-test']
         if case == 'agent-control':

@@ -9,15 +9,15 @@ import OShellCore
 enum TerminalSymbolsTest {
     static func run(_ workspace: WorkspaceController) {
         var checks = [String: Bool]()
-        BundledTerminalFonts.register()
+        UserTerminalFonts.register()
         if let base = NSFont(name: "DejaVuSansMono", size: 13) {
-            checks["dejavuBundledRegular"] = base.fontName == "DejaVuSansMono"
+            checks["dejavuImportedRegular"] = base.fontName == "DejaVuSansMono"
             for (traits, name) in [(NSFontTraitMask.boldFontMask, "DejaVuSansMono-Bold"),
                                    (NSFontTraitMask.italicFontMask, "DejaVuSansMono-Oblique"),
                                    ([NSFontTraitMask.boldFontMask, .italicFontMask], "DejaVuSansMono-BoldOblique")] {
                 checks[name] = NSFontManager.shared.convert(base, toHaveTrait: traits).fontName == name
             }
-        } else { checks["dejavuBundledRegular"] = false }
+        } else { checks["dejavuImportedRegular"] = false }
         if let base = NSFont(name: "CascadiaCode-Regular", size: 13) {
             checks["cascadiaRegularIsMonospaced"] = TerminalFontCatalog.isMonospaced(base)
             for (traits, name) in [(NSFontTraitMask.boldFontMask, "CascadiaCode-Bold"),
@@ -26,10 +26,22 @@ enum TerminalSymbolsTest {
                 checks[name] = NSFontManager.shared.convert(base, toHaveTrait: traits).fontName == name
             }
             let picker = NSPopUpButton(); TerminalFontCatalog.populate(picker, selected: base.fontName)
-            checks["cascadiaSelectedAndPreviewed"] = picker.selectedItem?.title == "Cascadia Code（内置）" && TerminalFontCatalog.previewFont(picker).fontName == base.fontName
+            checks["cascadiaSelectedAndPreviewed"] = picker.selectedItem?.title.hasSuffix("（已导入）") == true && TerminalFontCatalog.previewFont(picker).fontName == base.fontName
             checks["cascadiaListedOnce"] = picker.itemArray.filter { ($0.representedObject as? String) == base.fontName }.count == 1
-            checks["cascadiaLoadedFromApp"] = (CTFontCopyAttribute(base as CTFont, kCTFontURLAttribute) as? URL)?.path.hasPrefix(Bundle.main.bundlePath) == true
+            checks["cascadiaLoadedFromLibrary"] = (CTFontCopyAttribute(base as CTFont, kCTFontURLAttribute) as? URL)?.path.hasPrefix(UserTerminalFonts.library.directory.path) == true
         } else { checks["cascadiaRegularIsMonospaced"] = false }
+        if let base = NSFont(name: "CascadiaCode-Light", size: 13) {
+            checks["cascadiaLightIsMonospaced"] = TerminalFontCatalog.isMonospaced(base)
+            checks["cascadiaLightLoadedFromLibrary"] = (CTFontCopyAttribute(base as CTFont, kCTFontURLAttribute) as? URL)?.path.hasPrefix(UserTerminalFonts.library.directory.path) == true
+            for (traits, name) in [(NSFontTraitMask.boldFontMask, "CascadiaCode-Bold"),
+                                   (NSFontTraitMask.italicFontMask, "CascadiaCode-LightItalic"),
+                                   ([NSFontTraitMask.boldFontMask, .italicFontMask], "CascadiaCode-BoldItalic")] {
+                checks["cascadiaLightTo-" + name] = NSFontManager.shared.convert(base, toHaveTrait: traits).fontName == name
+            }
+            let picker = NSPopUpButton(); TerminalFontCatalog.populate(picker, selected: base.fontName)
+            checks["cascadiaLightSelectedAndPreviewed"] = picker.selectedItem?.title.hasSuffix("（已导入）") == true && TerminalFontCatalog.previewFont(picker).fontName == base.fontName
+            checks["cascadiaLightListedOnce"] = picker.itemArray.filter { ($0.representedObject as? String) == base.fontName }.count == 1
+        } else { checks["cascadiaLightIsMonospaced"] = false }
         let output = ProcessInfo.processInfo.environment["OSHELL_SYMBOLS_OUTPUT"].map { URL(fileURLWithPath: $0) }
         let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 960, height: 320))
         let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -45,12 +57,12 @@ enum TerminalSymbolsTest {
         }
         let symbols = "\u{e0a0} \u{e0a1} \u{e0a2} \u{f07b} \u{f015} \u{f120} \u{f02a2}"
         for size in [13.0, 22.0] {
-            let fonts = [NSFont.monospacedSystemFont(ofSize: size, weight: .regular), NSFont(name: "Menlo-Regular", size: size)!, NSFont(name: "Monaco", size: size)!] + [NSFont(name: "DejaVuSansMono", size: size), NSFont(name: "CascadiaCode-Regular", size: size)].compactMap { $0 }
+            let fonts = [NSFont.monospacedSystemFont(ofSize: size, weight: .regular), NSFont(name: "Menlo-Regular", size: size)!, NSFont(name: "Monaco", size: size)!] + [NSFont(name: "DejaVuSansMono", size: size), NSFont(name: "CascadiaCode-Regular", size: size), NSFont(name: "CascadiaCode-Light", size: size)].compactMap { $0 }
             for base in fonts {
                 view.font = base
                 let key = "\(base.fontName)-\(size)"
                 let fallback = TerminalSymbolFont.matching(base)
-                checks[key + "-bundledFontLoaded"] = fallback?.fontName == "SymbolsNFM"
+                checks[key + "-importedFontLoaded"] = fallback?.fontName == "SymbolsNFM"
                 if let fallback {
                     let attributed = NSAttributedString(string: symbols, attributes: [.font: fallback])
                     let runs = CTLineGetGlyphRuns(CTLineCreateWithAttributedString(attributed)) as! [CTRun]
@@ -92,6 +104,52 @@ enum TerminalSymbolsTest {
         let cursorBefore = snapshot()
         view.privateUseFallbackFont = TerminalSymbolFont.matching(view.font)
         checks["symbolsUnderBlockCursor"] = cursorBefore != nil && cursorBefore != snapshot()
+
+        // Proportional fonts must use a compact, content-independent grid, and
+        // their widest letters must stay in the assigned cell at every style.
+        view.nativeBackgroundColor = .black; view.nativeForegroundColor = .white
+        for name in ["ArialNarrow", "Helvetica", "Times-Roman", "Menlo-Regular"] {
+            guard let font = NSFont(name: name, size: 24) else { checks[name + "-available"] = false; continue }
+            view.font = font
+            let cell = view.cellSizeInPixels(source: view.getTerminal())!
+            let factor = CGFloat(window.backingScaleFactor)
+            let w = font.advancement(forGlyph: font.glyph(withName: "W")).width
+            let proportional = !TerminalFontCatalog.isMonospaced(font)
+            checks[name + "-compactGrid"] = proportional ? CGFloat(cell.width) < w * factor * 0.9 : abs(CGFloat(cell.width) - w * factor) <= 1
+            for (style, escape) in [("normal", ""), ("bold", "\u{1b}[1m"), ("italic", "\u{1b}[3m"), ("boldItalic", "\u{1b}[1;3m")] {
+                feed(escape + " W ")
+                if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    var left = bitmap.pixelsWide, right = -1
+                    for y in 0..<bitmap.pixelsHigh {
+                        for x in 0..<min(cell.width * 4, bitmap.pixelsWide) {
+                            if let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), c.redComponent > 0.3 {
+                                left = min(left, x); right = max(right, x)
+                            }
+                        }
+                    }
+                    // Italic monospace fonts may intentionally overhang; adaptive
+                    // proportional faces must fit even the italic ink bounds.
+                    checks[name + "-" + style + "-inkFitsCell"] = right >= left && (!proportional || (left >= cell.width - 1 && right <= cell.width * 2 + 1))
+                } else { checks[name + "-" + style + "-inkFitsCell"] = false }
+            }
+            let sample = "Wiil 0123 A\u{20d7} 中文 😀"
+            feed(sample)
+            let model = view.getTerminal(), cols = view.getTerminal().buffer.x
+            checks[name + "-copyPreservesText"] = model.getText(start: Position(col: 0, row: 0), end: Position(col: cols, row: 0)) == sample
+            checks[name + "-contentDoesNotChangeGrid"] = view.cellSizeInPixels(source: model)!.width == cell.width
+            if name == "ArialNarrow", let output {
+                try? snapshot()?.write(to: output.deletingPathExtension().appendingPathExtension("proportional.png"))
+            }
+            do {
+                try view.setUseMetal(true)
+                feed("Wiil A\u{20d7} 中文 😀\r\u{1b}[?25h\u{1b}[2 q")
+                view.drawMetalFrameNow()
+                checks[name + "-metalAndCursor"] = view.isUsingMetalRenderer && view.cellSizeInPixels(source: model)!.width == cell.width
+                try view.setUseMetal(false)
+            } catch { checks[name + "-metalAndCursor"] = false }
+        }
+        view.font = .monospacedSystemFont(ofSize: 22, weight: .regular)
 
         // Exercise the real GPU pipeline with shared row shaping and a block
         // cursor over the branch icon. Standard-render snapshots above cover

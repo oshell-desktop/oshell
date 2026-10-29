@@ -124,7 +124,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     private let searchScope = NSPopUpButton()
     private let resultStatus = NSTextField(labelWithString: "")
     private let emptyLabel = EmptyLabel(labelWithString: "没有匹配的会话或目录\n可调整关键词、协议或搜索范围")
-    private let connectButton = NSButton()
+    private let connectButton = AppUI.button("连接", primary: true, action: {})
     private var sourceProfiles = [SessionProfile](), sortedProfiles = [SessionProfile]()
     private var sourceDirectories = [String](), allDirectories = [String]()
     private var sourceLinks = [SessionLink](), sourceLinkFolders = [String](), linkMetadata = [UUID: String]()
@@ -165,8 +165,8 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             kindFilter.addItems(withTitles: ["全部协议", "SSH", "SFTP", "FTP", "本地"])
             reload(); return
         }
-        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 550), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.title = "会话管理"; window.minSize = NSSize(width: 720, height: 400); window.isReleasedWhenClosed = false
+        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "会话管理"; window.minSize = NSSize(width: 720, height: 460); window.isReleasedWhenClosed = false
         super.init(window: window); window.delegate = self; window.onFind = { [weak self] in self?.focusSearch() }; window.center(); build(); reload()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -188,6 +188,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     private func button(_ title: String, _ action: Selector) -> NSButton { let button = NSButton(title: title, target: self, action: action); button.bezelStyle = .rounded; return button }
     private func build() {
         guard let content = window?.contentView else { return }
+        let heading = AppUI.pageHeading("会话管理", subtitle: "查找服务器，管理目录，连接所选会话。")
         search.placeholderString = "名称、IP、用户名、端口；空格分隔关键词"; search.delegate = self
         search.toolTip = "搜索名称、主机/IP、用户名、端口、协议和目录。多个关键词需同时匹配，例如：生产 root 2222。搜索快捷键可在设置中修改；↓ 进入结果；回车打开选中项。"
         search.setAccessibilityLabel("会话搜索")
@@ -236,7 +237,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             guard let self, self.rows.indices.contains(row), case .parent = self.rows[row] else { return false }
             self.up(); return true
         }
-        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; AppUI.styleScrollSurface(scroll)
         resultStatus.font = .systemFont(ofSize: 11); resultStatus.textColor = .secondaryLabelColor
         resultStatus.lineBreakMode = .byTruncatingTail; resultStatus.setAccessibilityLabel("会话搜索结果")
         resultStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -244,9 +245,10 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         connectButton.title = "连接"; connectButton.target = self; connectButton.action = #selector(activateSelection); connectButton.bezelStyle = .rounded
         let bottom = NSStackView(views: [resultStatus, NSView(), connectButton, button("关闭", #selector(hide))]); bottom.spacing = 10
         emptyLabel.alignment = .center; emptyLabel.maximumNumberOfLines = 2; emptyLabel.textColor = .secondaryLabelColor; emptyLabel.font = .systemFont(ofSize: 13)
-        [navigation, filters, scroll, bottom, emptyLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
+        [heading, navigation, filters, scroll, bottom, emptyLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
         NSLayoutConstraint.activate([
-            navigation.topAnchor.constraint(equalTo: content.topAnchor, constant: 14), navigation.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14), navigation.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+            heading.topAnchor.constraint(equalTo: content.topAnchor, constant: 20), heading.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20), heading.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            navigation.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 18), navigation.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14), navigation.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
             filters.topAnchor.constraint(equalTo: navigation.bottomAnchor, constant: 8), filters.leadingAnchor.constraint(equalTo: navigation.leadingAnchor), filters.trailingAnchor.constraint(equalTo: navigation.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: filters.bottomAnchor, constant: 10), scroll.leadingAnchor.constraint(equalTo: navigation.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: navigation.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -12),
             emptyLabel.centerYAnchor.constraint(equalTo: scroll.centerYAnchor), emptyLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: 20), emptyLabel.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -20),

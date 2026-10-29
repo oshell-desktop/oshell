@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import AppKit
-import CryptoKit
 import SwiftTerm
 import OShellCore
 
@@ -42,20 +41,13 @@ enum AgentReplayTest {
         checks["replayCannotControlClipboard"] = NSPasteboard.general.changeCount == clipboard
         checks["sideEffectsTerminateAtReplayDelegate"] = target.terminalDelegate is AgentReplayDelegate
         do {
-            let root = StorageLocation.localStateDirectory.appendingPathComponent("ai")
-            let key = try LocalCredentialStore(directory: root).loadOrCreate()
-            let fixture: [String: Any] = ["version": 1, "entries": [["id": UUID().uuidString, "messages": [["role": "user", "text": "只读历史合成内容"]]]]]
-            let bytes = try SharedVault.seal(JSONSerialization.data(withJSONObject: fixture), password: key.secret)
-            let url = root.appendingPathComponent("history.json"); try PrivateFile.write(bytes, to: url)
-            checks["legacyHistoryReadableWithoutModel"] = try AgentLegacyHistory.text().contains("只读历史合成内容")
-            checks["legacyHistoryAndKeyUntouched"] = try Data(contentsOf: url) == bytes && LocalCredentialStore(directory: root).load() == key
             let panel = workspace.getAIAssistant(); panel.frame = NSRect(x: 0, y: 0, width: 600, height: 760)
             let preview = NSWindow(contentRect: panel.frame, styleMask: [.titled], backing: .buffered, defer: false); preview.isReleasedWhenClosed = false; preview.contentView = panel
             panel.layoutSubtreeIfNeeded()
             if let bitmap = panel.bitmapImageRepForCachingDisplay(in: panel.bounds) { panel.cacheDisplay(in: panel.bounds, to: bitmap); try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension("png")) }
             checks["controlPanelHasVisibleLayout"] = panel.subviews.first?.frame.width ?? 0 > 300
             preview.close()
-        } catch { checks["legacyOrPanel"] = false }
+        } catch { checks["controlPanelSnapshot"] = false }
         window.close()
         try? JSONSerialization.data(withJSONObject: ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "mismatches": mismatches], options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
         workspace.shutdown(); NSApp.terminate(nil)

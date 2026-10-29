@@ -7,9 +7,13 @@ import OShellCore
 /// Each tab owns its backend, worker queue and complete browsing/transfer UI.
 final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
     override func showWindow(_ sender: Any?) {
-        if let popup = window as? PopupWindow, let owner = workspace?.window { popup.present(over: owner) }
-        else { super.showWindow(sender) }
+        do { present(try FileManagementSettings.load().placement) }
+        catch { Dialogs.message(error.localizedDescription) }
     }
+    let content = FileManagerSurface()
+    private(set) var isDocked = false
+    private var settingsObserver: NSObjectProtocol?
+    private var configuredPlacement = FileManagementSettings.Placement.window
     private weak var workspace: WorkspaceController?
     private let strip = TabStripView(), host = NSView()
     private(set) var sessions = [RemoteFileSession]()
@@ -24,7 +28,8 @@ final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
         window.attachesToOwner = false
         window.title = "文件管理 · SFTP / FTP"; window.minSize = NSSize(width: 800, height: 490); window.isReleasedWhenClosed = false
         super.init(window: window); window.delegate = self; window.center()
-        let root = window.contentView!
+        window.contentView = content
+        let root = content
         [strip, host].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; root.addSubview($0) }
         NSLayoutConstraint.activate([
             strip.topAnchor.constraint(equalTo: root.topAnchor), strip.leadingAnchor.constraint(equalTo: root.leadingAnchor), strip.trailingAnchor.constraint(equalTo: root.trailingAnchor), strip.heightAnchor.constraint(equalToConstant: TabStripView.barHeight),
@@ -43,15 +48,57 @@ final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
             self.open(profile, directory: session.directory, password: session.transientPassword, connectionGroup: session.connectionGroup)
         }
         _ = addBlank()
+        configuredPlacement = (try? FileManagementSettings.load().placement) ?? .window
+        settingsObserver = NotificationCenter.default.addObserver(forName: FileManagementSettings.changed, object: nil, queue: .main) { [weak self] _ in
+            guard let self, let setting = try? FileManagementSettings.load(), setting.placement != self.configuredPlacement else { return }
+            self.configuredPlacement = setting.placement
+            if self.window?.isVisible == true || self.workspace?.fileHost?.isPresenting(self) == true { self.present(setting.placement) }
+        }
+    }
+    deinit { if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) } }
+    func present(_ placement: FileManagementSettings.Placement) {
+        guard !closed, let workspace else { return }
+        if placement == .window {
+            parkDockedContent()
+            if let popup = window as? PopupWindow, let owner = workspace.window { popup.present(over: owner) }
+            else { super.showWindow(nil) }
+            window?.makeKeyAndOrderFront(nil)
+        } else if let host = workspace.fileHost {
+            if !isDocked {
+                window?.makeFirstResponder(nil); window?.orderOut(nil)
+                window?.contentView = NSView(); content.removeFromSuperview()
+            }
+            isDocked = true; host.attach(self, content: content, placement: placement)
+            workspace.window?.makeKeyAndOrderFront(nil)
+        }
+    }
+    func parkDockedContent() {
+        guard isDocked else { return }
+        if let first = content.window?.firstResponder as? NSView, first.isDescendant(of: content) { content.window?.makeFirstResponder(nil) }
+        workspace?.fileHost?.detach(self); content.removeFromSuperview(); window?.contentView = content; isDocked = false
+    }
+    override func close() {
+        finishClosing(); super.close()
+    }
+    private func finishClosing() {
+        guard !closed else { return }; closed = true
+        parkDockedContent()
+        sessions.forEach { $0.shutdown() }; sessions = []; selectedSession = nil; host.subviews.forEach { $0.removeFromSuperview() }
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver); self.settingsObserver = nil }
+        onClosed?(); onClosed = nil
     }
     /// Transfer ownership without closing any backend or interrupting transfers.
     func reassignWorkspace(_ workspace: WorkspaceController) {
         guard !closed else { return }
+        let wasDocked = isDocked
+        let wasVisible = self.workspace?.fileHost?.isPresenting(self) == true
+        if wasDocked { parkDockedContent() }
         self.workspace = workspace
         sessions.forEach { $0.reassignWorkspace(workspace) }
         onClosed = { [weak workspace, weak self] in
             guard let self else { return }; workspace?.fileWindows.removeAll { $0 === self }
         }
+        if wasDocked && wasVisible { present(configuredPlacement) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @discardableResult private func addBlank() -> RemoteFileSession? {
@@ -62,7 +109,7 @@ final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
         sessions.append(session); select(session); return session
     }
     func show(profile: SessionProfile? = nil, directory: String = ".", uploading: [URL] = [], password: String? = nil, connectionGroup: SSHConnectionGroup? = nil, sourcePaneID: UUID? = nil) {
-        showWindow(nil); window?.makeKeyAndOrderFront(nil)
+        showWindow(nil)
         if let profile { open(profile, directory: directory, uploading: uploading, password: password, connectionGroup: connectionGroup, sourcePaneID: sourcePaneID) } else { chooseSession() }
     }
     func open(_ profile: SessionProfile, directory: String? = nil, uploading: [URL] = [], password: String? = nil, connectionGroup: SSHConnectionGroup? = nil, sourcePaneID: UUID? = nil) {
@@ -91,6 +138,11 @@ final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
         updateTabs(); strip.revealSelection()
     }
     private func updateTabs() {
+        guard !closed else { return }
+        let minimum = (selectedSession?.minimumPresentationHeight ?? 340) + TabStripView.barHeight
+        if content.minimumHeight != minimum {
+            content.minimumHeight = minimum; content.enclosingScrollView?.needsLayout = true
+        }
         strip.update(entries: sessions.map { .init(id: $0.id, title: $0.tabTitle, detail: ($0.profile?.kind == .ftp ? "FTP" : "SFTP") + " · " + ($0.profile?.host ?? "") + "\n" + $0.directory + "\n双击新建相同文件会话") }, selectedID: selectedSession?.id)
         window?.title = "文件管理 · " + (selectedSession?.tabTitle ?? "SFTP / FTP")
     }
@@ -108,7 +160,7 @@ final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
         guard !closed else { return }
         workspace?.showFileSessions { [weak self] profile in
             guard let self, !self.closed else { return }
-            self.showWindow(nil); self.window?.makeKeyAndOrderFront(nil); self.open(profile)
+            self.showWindow(nil); self.open(profile)
         }
     }
     func windowDidBecomeKey(_ notification: Notification) {
@@ -117,20 +169,23 @@ final class RemoteFileWindow: NSWindowController, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         !hasActiveOperation || Dialogs.confirm("关闭文件管理？", text: "将取消所有文件标签中的连接和传输。", action: "关闭")
     }
-    func windowWillClose(_ notification: Notification) {
-        guard !closed else { return }; closed = true
-        sessions.forEach { $0.shutdown() }; sessions = []; selectedSession = nil; host.subviews.forEach { $0.removeFromSuperview() }
-        onClosed?(); onClosed = nil
-    }
+    func windowWillClose(_ notification: Notification) { finishClosing() }
+
 }
 
 extension WorkspaceController {
     var credentialProfiles: [SessionProfile] { ConfigurationCredentials.profiles(in: configuration) }
     @objc func showFiles() {
+        do {
+            if try FileManagementSettings.load().mode == .terminal { launchTerminalFileManager(); return }
+        } catch { Dialogs.message(error.localizedDescription); return }
         if let pane = selectedTab?.activePane, !pane.ended, pane.profile.kind.usesSSH { openFiles(from: pane) }
         else { openFiles(for: nil) }
     }
     func openFiles(from pane: TerminalPane, uploading: [URL] = []) {
+        do {
+            if uploading.isEmpty, try FileManagementSettings.load().mode == .terminal { launchTerminalFileManager(in: pane); return }
+        } catch { Dialogs.message(error.localizedDescription); return }
         guard isSecurityUnlocked, !pane.isShutdown, !pane.ended, pane.profile.kind.usesSSH else { return }
         guard let group = pane.sshConnectionGroup, group.isAvailable else {
             Dialogs.message("当前 SSH 连接尚未完成认证或已失效。请先重新连接 SSH 会话，再打开 SFTP 文件管理。"); return
@@ -141,7 +196,7 @@ extension WorkspaceController {
             let owners = windowCoordinator?.workspaces ?? [self]
             for manager in owners.flatMap(\.fileWindows) {
                 if let session = manager.session(for: pane.id, connectionGroup: group) {
-                    manager.select(session); manager.showWindow(nil); manager.window?.makeKeyAndOrderFront(nil)
+                    manager.select(session); manager.showWindow(nil)
                     return
                 }
             }

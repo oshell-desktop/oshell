@@ -13,6 +13,8 @@ open dist/OShell.app
 
 正式 app 不编入 UI 测试、内存诊断或预览入口。兼容版发布交给 [GitHub Actions](releases.md)。
 
+安装包仅复制运行所需文件，不包含仓库文档和测试脚本。五个辅助程序仅通过命令行或 IPC 提供接口，Release 链接时隐藏动态导出符号，便于移除未引用代码；主应用保留原有链接策略。Sparkle 头文件和模块描述保留在编译用 XCFramework 中，嵌入运行包时去除。字体、许可证、运行时更新组件和集成测试使用的 Ed25519 签名工具须保留。
+
 ## 开发测试应用
 
 ```sh
@@ -111,7 +113,7 @@ python3 scripts/check-public-source.py --app dist/OShell.app
 
 `SSHClientLocale` 为本机 SSH 提供 `LC_CTYPE=UTF-8`，在私有临时配置中加载原用户/系统配置或显式 `-F` 配置，最后应用 `SendEnv -LANG -LANGUAGE -LC_*`。仅把移除规则放在命令行会被后读入的默认配置重新追加，无法防止 locale 转发。原 `SSHEnvironment.remoteClient` 继续用于清理继承变量，共享配置格式不变。`SSHClientLocaleTest` 用真实 `ssh -G` 检查别名、账号、端口和非 locale 转发保留；`run-ssh-clone-tests.py` 增加中文认证 Banner 和原样八进制文本断言，同时验证服务端未收到语言变量、克隆仅一次认证。依据 [OpenSSH UTF-8 输出处理](https://github.com/openssh/openssh-portable/blob/master/utf8.c) 和 [SendEnv 文档](https://man.openbsd.org/ssh_config#SendEnv)。
 
-`run-ui-tests.py terminal-interrupt` 使用无用户插件的本地 zsh 和临时原始输入接收程序，测量 Ctrl+C 按键处理与 PTY 回包耗时；同时验证 Agent 快捷键查找只访问内存，不读取或解密旧模型设置。测试不修改用户 shell 配置，也不把组件耗时当成所有输入法、桌面事件与远端网络场景的端到端保证。
+`run-ui-tests.py terminal-interrupt` 使用无用户插件的本地 zsh 和临时原始输入接收程序，测量 Ctrl+C 按键处理与 PTY 回包耗时；同时验证 Agent 快捷键查找只访问内存，不在按键事件中执行磁盘 I/O。测试不修改用户 shell 配置，也不把组件耗时当成所有输入法、桌面事件与远端网络场景的端到端保证。
 
 平铺输入焦点由 WorkspaceController 在布局重建前清空旧终端 responder、重建后恢复当前选中终端；正文点击只更新选中元数据，不在 becomeFirstResponder 回调中重建视图。WorkspaceWindow 在交接前拒绝隐藏、已移走或已关闭终端，保留原 responder；命令栏/Agent 面板焦点不由布局重建强行替换。`run-ui-tests.py tiled-input terminal-focus quicksend-focus arrangement-scroll` 覆盖三组六标签、重建、点击、文字与 readline 控制键、真实 PTY 路由、命令栏焦点及滚动。
 

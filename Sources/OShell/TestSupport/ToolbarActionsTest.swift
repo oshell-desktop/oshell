@@ -56,6 +56,15 @@ enum ToolbarActionsTest {
             }
             let frames = toolbar.arrangedSubviews.filter { !$0.isHiddenOrHasHiddenAncestor && $0 is NSControl }.map { $0.convert($0.bounds, to: toolbar) }
             checks["toolbarNoOverlap-\(width)"] = frames.enumerated().allSatisfy { index, frame in frames.dropFirst(index + 1).allSatisfy { !frame.intersects($0) } }
+            if checks["toolbarNoOverlap-\(width)"] == false {
+                let controls = toolbar.arrangedSubviews.filter { !$0.isHiddenOrHasHiddenAncestor && $0 is NSControl }
+                for (i, left) in controls.enumerated() {
+                    for right in controls.dropFirst(i + 1) {
+                        let a = left.convert(left.bounds, to: toolbar), b = right.convert(right.bounds, to: toolbar)
+                        if a.intersects(b) { print("OVERLAP", width, left.identifier?.rawValue ?? (left as? NSButton)?.title ?? String(describing: type(of: left)), a, right.identifier?.rawValue ?? (right as? NSButton)?.title ?? String(describing: type(of: right)), b) }
+                    }
+                }
+            }
             checks["compactIconsAtNarrowWidth-\(width)"] = toolbar.compactButtons.allSatisfy { $0.imagePosition == (CGFloat(width) < WorkspaceToolbar.compactThreshold ? .imageOnly : .imageLeading) }
         }
         // Bind a disposable SSH profile without starting any network connection.

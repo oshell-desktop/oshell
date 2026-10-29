@@ -98,7 +98,7 @@ def main():
                 subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True, capture_output=True)
                 config = base/('config-'+flavor); config.mkdir()
                 report = ROOT/'validation'/('webdav-'+flavor+'.json'); log = report.with_suffix('.log')
-                env = {'OSHELL_DATA_DIR':str(config), 'ZDOTDIR':str(config), 'OSHELL_DAV_TEST_SERVER':f'http://127.0.0.1:{server.server_port}/', 'OSHELL_DAV_OUTPUT':str(report)}
+                env = {'OSHELL_TEST_FONT_ROOT':str(ROOT/'Vendor'), 'OSHELL_DATA_DIR':str(config), 'ZDOTDIR':str(config), 'OSHELL_DAV_TEST_SERVER':f'http://127.0.0.1:{server.server_port}/', 'OSHELL_DAV_OUTPUT':str(report)}
                 if flavor == 'arm64': env['OSHELL_DAV_INTEROP_OUTPUT'] = str(interchange)
                 elif interchange.exists(): env['OSHELL_DAV_INTEROP_INPUT'] = str(interchange)
                 command = ['open', '-n', '-W']
@@ -117,7 +117,8 @@ def main():
                     assert not any(p.startswith(('/file/', '/propdenied/', '/wronghref/', '/denied/', '/badxml/')) for p in DAV.created)
                     assert '/engine/oshell/oshell-vault.json' in DAV.bodies
                     assert '/engine/oshell-vault.json' not in DAV.bodies
-                    assert all(json.loads(data)['format'] == 'OShell.shared-vault' for data in DAV.bodies.values())
+                    assert all(json.loads(data)['format'] == 'OShell.shared-vault' for path, data in DAV.bodies.items() if path.endswith('oshell-vault.json'))
+                    assert json.loads(DAV.bodies['/engine/oshell/fonts/library.json'])['format'] == 'OShell.font-library'
                     startup = base/('startup-'+flavor); startup.mkdir()
                     (startup/'configuration.json').write_bytes((config/'configuration.json').read_bytes())
                     startup_report = ROOT/'validation'/('encrypted-startup-'+flavor+'.json')

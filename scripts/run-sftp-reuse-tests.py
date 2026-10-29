@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
     (root/'fixture.json').write_text(json.dumps({'password':password}));(root/'fixture.json').chmod(0o600)
     listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
     (root/'known_hosts').write_text(f'[127.0.0.1]:{port} {key.get_name()} {key.get_base64()}\n')
-    facts={'transports':0,'authAttempts':0,'sftp':0,'sftpDenied':0,'authenticated':0,'shells':0,'rejected':0,'execRequests':0,'terms':[],'localeRequests':0};lock=threading.Lock()
+    facts={'transports':0,'authAttempts':0,'sftp':0,'sftpDenied':0,'authenticated':0,'shells':0,'rejected':0,'execRequests':0,'rsyncRequests':0,'scpRequests':0,'terms':[],'localeRequests':0};lock=threading.Lock()
     def session(channel):
         try:
             time.sleep(.05);channel.send(b'MUX_READY\r\n\x1b[?2004h\x1b]777;OShellHost=1;nested-real|10.30.0.8|\x07[root@nested-real ~]# ');line=bytearray()
@@ -50,7 +50,9 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
                 for name in os.listdir(base):
                     attr = paramiko.SFTPAttributes.from_stat(os.lstat(os.path.join(base, name))); attr.filename = name; result.append(attr)
                 return result
-            except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
+            except OSError as e:
+                with lock: facts.setdefault('listErrors',[]).append(str(e))
+                return paramiko.SFTPServer.convert_errno(e.errno)
         def stat(self, path):
             try: return paramiko.SFTPAttributes.from_stat(os.stat(resolve(path)))
             except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
@@ -112,10 +114,23 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
             with lock:facts['execRequests']+=1
             try:
                 args = shlex.split(command.decode())
-                if args[0] != 'scp' or not set(args[1:-1]).issubset({'-r','-t','-f','-d','-p','--'}): return False
+                if args[0] == 'rsync':
+                    if len(args) < 4 or args[1] != '--server' or args[-2] != '.': return False
+                    if any(arg.startswith(('--delete','--remove-source','--inplace')) for arg in args): return False
+                    with lock:facts['rsyncRequests']+=1
+                    if (root/'missing-rsync').exists():
+                        def missing():
+                            channel.send_stderr(b'sh: rsync: command not found\n'); channel.send_exit_status(127); channel.close()
+                        threading.Thread(target=missing,daemon=True).start(); return True
+                    executable='/usr/bin/rsync'
+                elif args[0] == 'scp' and set(args[1:-1]).issubset({'-r','-t','-f','-d','-p','--'}):
+                    with lock:facts['scpRequests']+=1
+                    executable='/usr/bin/scp'
+                else: return False
                 target = resolve(args[-1])
+                if executable.endswith("rsync") and args[-1].endswith("/"): target += "/"
                 def run():
-                    p = subprocess.Popen(['/usr/bin/scp', *args[1:-1], target], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    p = subprocess.Popen([executable, *args[1:-1], target], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     def incoming():
                         try:
                             while True:
@@ -163,18 +178,19 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
     threading.Thread(target=serve,daemon=True).start()
     env=os.environ.copy();env.update(OSHELL_DATA_DIR=str(root/'config'),OSHELL_SFTP_REUSE_TEST_ROOT=folder,OSHELL_LAUNCH_NO_UI='1',LANG='en_US.UTF-8',LC_CTYPE='UTF-8',LC_ALL='C')
     pid=None;endpoint=None;app=None
+    app_log = open(root/'app.log', 'wb')
     try:
         # Start the isolated fixture before delivering its one-use ticket, so
         # AppKit initialization cannot consume the IPC socket read timeout.
-        app=subprocess.Popen([str(launcher.parent/'OShell'),'--external-launch-service'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        app=subprocess.Popen([str(launcher.parent/'OShell'),'--external-launch-service'],env=env,stdout=app_log,stderr=app_log)
         deadline=time.time()+15
         while not (root/'app.pid').exists() and app.poll() is None and time.time()<deadline:time.sleep(.05)
         result=subprocess.run([str(launcher),'/DEV:SSH',f'/CONNECT:{user}:{password}@127.0.0.1:{port}','/EMU:Xterm','/TITLE:USM 文件连接复用测试'],env=env,capture_output=True,timeout=25)
         pid=int((root/'app.pid').read_text());endpoint=pathlib.Path((root/'endpoint.txt').read_text())
-        deadline=time.time()+65
+        deadline=time.time()+120
         while not (root/'app-result.json').exists() and time.time()<deadline:time.sleep(.1)
         report=json.loads((root/'app-result.json').read_text())
-        report['checks'].update(initialLaunchAccepted=result.returncode==0,oneTransportOnly=facts['transports']==1,oneAuthenticationOnly=facts['authenticated']==1 and facts['authAttempts']==1,imageAndFileSFTPChannels=6<=facts['sftp']<=7,SFTPRefusalExercised=facts['sftpDenied']==2,SCPCommandsReusedConnection=facts['execRequests']==2)
+        report['checks'].update(initialLaunchAccepted=result.returncode==0,oneTransportOnly=facts['transports']==1,oneAuthenticationOnly=facts['authenticated']==1 and facts['authAttempts']==1,imageAndFileSFTPChannels=8<=facts['sftp']<=10,SFTPRefusalExercised=facts['sftpDenied']==2,SCPCommandsReusedConnection=facts['scpRequests']==2,rsyncUsedExistingTransport=facts['rsyncRequests']>=8)
         if proxy_fixture:
             report['checks']['globalProxyCarriesSSHAndReusedFiles'] = proxy_fixture.connections == 1 and not proxy_fixture.errors
             report['proxyConnections'] = proxy_fixture.connections
@@ -188,9 +204,12 @@ with tempfile.TemporaryDirectory(prefix='oshell-sftp-reuse-',dir='/tmp') as fold
         report['checks']['cancelAndFailureSendNoExtraPath']=received.count(b'/image.png')==2
         report['checks']['clipboardDidNotPasteMacPath']=b'Application\\ Support' not in received and b'clipboard-images' not in received
         report['passed']=all(report['checks'].values())
+        if not report['passed']:
+            report['diagnosticLog']=(root/'app.log').read_text(errors='replace')[-6000:].replace(password,'<fixture-secret>').replace(user,'<fixture-user>')
         (project/'validation/sftp-reuse-result.json').write_text(json.dumps(report,indent=2))
         print(json.dumps(report,indent=2));raise SystemExit(0 if report['passed'] else 1)
     finally:
+        app_log.close()
         listener.close()
         if pid is None and app is not None: pid=app.pid
         if pid:

@@ -17,7 +17,11 @@ enum SessionTransfer {
         options.informativeText = "导出 \(profiles.count) 个会话、\(links.count) 个快捷引用及目录结构。包含代理、隧道、保活等连接设置；不包含私钥文件、主机指纹或终端历史。"
         options.addButton(withTitle: "选择保存位置…"); options.addButton(withTitle: "取消")
         let passwords = NSButton(checkboxWithTitle: hasLocal ? "包含已保存密码（单独设置导出文件密码）" : "包含已保存的加密密码（导入时需要原主密码）", target: nil, action: nil)
-        passwords.frame = NSRect(x: 0, y: 0, width: 420, height: 26); passwords.state = .off; options.accessoryView = passwords
+        passwords.state = .off
+        let fonts = NSButton(checkboxWithTitle: "包含字体文件（明文附件，默认不包含）", target: nil, action: nil)
+        fonts.state = .off; fonts.identifier = .init("export.fonts")
+        let choices = NSStackView(views: [passwords, fonts]); choices.orientation = .vertical; choices.alignment = .leading; choices.spacing = 10
+        choices.frame = NSRect(x: 0, y: 0, width: 480, height: 64); options.accessoryView = choices
         guard options.runModal() == .alertFirstButtonReturn else { return }
         do {
             var archive = SessionArchive(profiles: currentProfiles, directories: directories, includePasswords: passwords.state == .on, links: links, proxies: current.proxies)
@@ -36,8 +40,24 @@ enum SessionTransfer {
             let panel = NSSavePanel(); panel.title = "导出 OShell 会话"; panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = "OShell-sessions.oshell.json"; panel.canCreateDirectories = true
             guard panel.runPopupModal() == .OK, let url = panel.url else { return }
-            try PrivateFile.write(data, to: url)
-            Dialogs.message("已导出 \(archive.profiles.count) 个会话。" + (archive.passwordCount > 0 ? (hasLocal ? "导入时使用刚设置的导出文件密码；本机密钥没有导出。" : "导入加密密码时请使用此次导出时的主密码。") : "文件未包含已保存密码。"))
+            let attachments = url.appendingPathExtension("assets")
+            guard !FileManager.default.fileExists(atPath: attachments.path) else { throw ModelError.invalid("此文件名已有字体附件备份，请选择新的备份文件名，避免混入旧字体。") }
+            var createdAttachments = false
+            do {
+                if fonts.state == .on {
+                    guard let result = CredentialTask.run(title: "正在备份字体…", message: "仅复制字体文件，不包含本机密钥、证书或其他文件。", work: { token in
+                        let draft = try FontBackupDraft(parent: url.deletingLastPathComponent())
+                        try UserTerminalFonts.library.copyActive(to: FontLibrary(configurationDirectory: draft.directory), check: token.check)
+                        try token.check(); return draft
+                    }) else { return }
+                    try result.get().publish(to: attachments); createdAttachments = true
+                }
+                try PrivateFile.write(data, to: url)
+            } catch {
+                if createdAttachments { try? FileManager.default.removeItem(at: attachments) }
+                throw error
+            }
+            Dialogs.message((fonts.state == .on ? "字体已保存到同名 .assets 文件夹；恢复时请与 JSON 文件放在一起。\n" : "") + "已导出 \(archive.profiles.count) 个会话。" + (archive.passwordCount > 0 ? (hasLocal ? "导入时使用刚设置的导出文件密码；本机密钥没有导出。" : "导入加密密码时请使用此次导出时的主密码。") : "文件未包含已保存密码。"))
         } catch { Dialogs.message("导出失败：\(error.localizedDescription)") }
     }
 
@@ -150,8 +170,12 @@ enum SessionTransfer {
             protection.selectItem(at: workspace.configuration.hasMasterPassword ? 1 : 0)
             protection.isEnabled = archive.passwordCount > 0
             if workspace.configuration.hasMasterPassword { protection.autoenablesItems = false; protection.item(at: 0)?.isEnabled = false }
-            let choices = NSStackView(views: [passwords, protection]); choices.orientation = .vertical; choices.alignment = .leading; choices.spacing = 10
-            choices.frame = NSRect(x: 0, y: 0, width: 450, height: 64); preview.accessoryView = choices
+            let fontBackup = FontLibrary(configurationDirectory: url.appendingPathExtension("assets"))
+            let fonts = NSButton(checkboxWithTitle: "恢复备份中的字体文件（保留现有字体）", target: nil, action: nil)
+            fonts.state = .off; fonts.identifier = .init("import.fonts")
+            fonts.isEnabled = FileManager.default.fileExists(atPath: fontBackup.manifestURL.path)
+            let choices = NSStackView(views: [passwords, protection, fonts]); choices.orientation = .vertical; choices.alignment = .leading; choices.spacing = 10
+            choices.frame = NSRect(x: 0, y: 0, width: 450, height: 100); preview.accessoryView = choices
             guard preview.runModal() == .alertFirstButtonReturn else { return }
             let include = passwords.state == .on
             var sourceMaster: String?, destinationMaster: String?, destinationLocalKeyID: UUID?
@@ -176,6 +200,13 @@ enum SessionTransfer {
                 }
             }
             let migrationKeys = localKeys
+            var stagedFonts: (before: FontManifest, merged: FontManifest)?
+            if fonts.state == .on {
+                guard let result = CredentialTask.run(title: "正在验证备份字体…", message: "验证文件后合并字体；取消不会改变当前字体选择。", work: { token in
+                    try UserTerminalFonts.library.stageImport(from: fontBackup, validate: UserTerminalFonts.validate, check: token.check)
+                }) else { return }
+                stagedFonts = try result.get()
+            }
             guard let result = CredentialTask.run(title: "正在导入会话…", work: { token in
                 var merged = try archive.merging(into: snapshot, directory: directory, includePasswords: include,
                                     sourceMaster: sourceMaster, destinationMaster: destinationMaster, destinationLocalKeyID: destinationLocalKeyID, check: token.check)
@@ -196,7 +227,13 @@ enum SessionTransfer {
                 if let migration { PasswordVault.shared.acceptRotation(migration, master: destinationMaster) }
                 else { PasswordVault.shared.acceptMaster(destinationMaster) }
             }
-            Dialogs.message("已导入 \(archive.profiles.count) 个会话，原有会话已保留。")
+            if let stagedFonts {
+                do {
+                    try UserTerminalFonts.library.commit(stagedFonts.merged, expecting: stagedFonts.before)
+                    UserTerminalFonts.didChange()
+                } catch { Dialogs.message("会话已导入；字体未能应用：" + error.localizedDescription); return }
+            }
+            Dialogs.message("已导入 \(archive.profiles.count) 个会话，原有会话已保留。" + (stagedFonts == nil ? "" : "字体备份已恢复。"))
         } catch { Dialogs.message("导入失败，未修改配置：\(error.localizedDescription)") }
     }
 }

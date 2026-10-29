@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -46,6 +46,22 @@ class ReleaseBuildTests(unittest.TestCase):
         native = Path('/synthetic/arm64')
         self.assertEqual(PACK.core_check_command({'arm64': native}, 'arm64'),
                          [native/'OShellCoreChecks'])
+
+    def test_packaging_uses_swift_reported_products_not_stale_arch_folder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fresh = root/'work/build-arm64/swift/out/Products/Release'
+            fresh.mkdir(parents=True)
+            stale = root/'work/build-arm64/swift/arm64-apple-macosx/release'
+            stale.mkdir(parents=True)
+            module = PACK.release_compilation
+            with patch.object(module, 'CompilationCache') as cache, patch.object(module, 'IncrementalCache') as incremental, patch.object(module.subprocess, 'check_output', return_value=str(fresh)+'\n') as query:
+                cache.return_value.restore.return_value = False
+                incremental.return_value.restored = False
+                actual = module.build_swift(root, root, MagicMock(), 'arm64', 'arm64', '15.0')
+                self.assertEqual(actual, fresh)
+                self.assertIn('--show-bin-path', query.call_args.args[0])
+                self.assertEqual(cache.return_value.store.call_args.args[0], fresh)
 
     def test_unsupported_host_does_not_skip_core_checks(self):
         with self.assertRaises(RuntimeError):

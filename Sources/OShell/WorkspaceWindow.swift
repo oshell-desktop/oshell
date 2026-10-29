@@ -51,6 +51,7 @@ final class WorkspaceWindow: NSWindow {
         let shortcut = KeyboardShortcut(event: event)
         guard workspace.isSecurityUnlocked, shortcut.isValid else { return false }
         let configured = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: shortcut)
+        if workspace.handleLocalShellShortcut(event, configured: configured) { return true }
         if configured == nil, shortcut == AgentShortcut.binding {
             if !event.isARepeat { workspace.toggleAIAssistant() }; return true
         }
@@ -88,5 +89,17 @@ final class WorkspaceWindow: NSWindow {
         #endif
         if navigate(event) { return }
         super.sendEvent(event)
+    }
+}
+
+extension WorkspaceController {
+    /// Called by the active window after modal/security checks. Kept separate so
+    /// session preservation can also be exercised without desktop activation.
+    @discardableResult func handleLocalShellShortcut(_ event: NSEvent, configured: ShortcutAction?) -> Bool {
+        guard isSecurityUnlocked, configured == nil, event.type == .keyDown,
+              KeyboardShortcut(event: event) == TerminalPane.localShellShortcut,
+              window?.firstResponder is OShellTerminal else { return false }
+        if !event.isARepeat { newLocal() }
+        return true
     }
 }

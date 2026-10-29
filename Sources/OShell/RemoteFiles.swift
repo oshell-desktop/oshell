@@ -106,7 +106,7 @@ final class FileProcess {
         }
         return result
     }
-    func outputToEnd(limit: Int = 4 * 1024 * 1024, sink: FileHandle? = nil, progress: ((UInt64) -> Void)? = nil, limiter: FileTransferRateLimiter? = nil) throws -> Data {
+    func outputToEnd(limit: Int = 4 * 1024 * 1024, sink: FileHandle? = nil, progress: ((UInt64) -> Void)? = nil, limiter: FileTransferRateLimiter? = nil, consume: ((Data) -> Void)? = nil) throws -> Data {
         let fd = output.fileHandleForReading.fileDescriptor
         var result = Data(), total: UInt64 = 0
         while true {
@@ -117,7 +117,7 @@ final class FileProcess {
             let size = Darwin.read(fd, &bytes, bytes.count)
             if size < 0 && (errno == EAGAIN || errno == EINTR) { continue }
             if size == 0 { break }
-            guard size > 0, sink != nil || result.count + size <= limit else { cancel(); throw ModelError.invalid("目录输出过大或连接读取失败。") }
+            guard size > 0, sink != nil || consume != nil || result.count + size <= limit else { cancel(); throw ModelError.invalid("目录输出过大或连接读取失败。") }
             let data = Data(bytes.prefix(size))
             if let sink, let limiter {
                 try limiter.paced(data, checkCancellation: self.checkCancelled) { chunk in
@@ -125,7 +125,7 @@ final class FileProcess {
                     total += UInt64(chunk.count); progress?(total)
                 }
             } else {
-                if let sink { try sink.write(contentsOf:data) } else { result.append(data) }
+                if let sink { try sink.write(contentsOf:data) } else if let consume { consume(data) } else { result.append(data) }
                 total += UInt64(size); progress?(total)
             }
         }

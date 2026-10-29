@@ -2270,6 +2270,8 @@ extension CoreTests {
             }
             print("PASS: encrypted session interoperability"); return
         }
+        try FontLibraryChecks.run()
+        if CommandLine.arguments.contains("--font-library-checks") { return }
         let tests = CoreTests()
         try tests.testAgentAuditAndPolicy()
         try tests.testUpdateSource()

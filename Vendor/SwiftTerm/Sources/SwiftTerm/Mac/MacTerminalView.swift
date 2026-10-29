@@ -157,6 +157,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let bold: NSFont
         let italic: NSFont
         let boldItalic: NSFont
+        let proportionalCellWidth: CGFloat?
         
         static var defaultFont: NSFont {
             return NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -164,6 +165,19 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         
         public init(font baseFont: NSFont, fontSize: CGFloat? = nil) {
             self.normal = baseFont
+            // Measure once per font change. A proportional font's widest letter
+            // makes every narrow letter look tracked out; digits give a useful
+            // terminal pitch while preserving a stable, content-independent grid.
+            let units = Array("iMW0 .123456789".utf16)
+            var glyphs = [CGGlyph](repeating: 0, count: units.count)
+            var advances = [CGSize](repeating: .zero, count: units.count)
+            if CTFontGetGlyphsForCharacters(baseFont as CTFont, units, &glyphs, units.count) {
+                CTFontGetAdvancesForGlyphs(baseFont as CTFont, .horizontal, glyphs, &advances, units.count)
+                let widths = advances.map(\.width)
+                let digits = [widths[3]] + Array(widths.dropFirst(6))
+                let pitch = digits.max() ?? 0
+                proportionalCellWidth = pitch.isFinite && pitch > 0 && (widths.max()! - widths.min()!) > 0.05 ? pitch : nil
+            } else { proportionalCellWidth = nil }
             self.bold = NSFontManager.shared.convert(baseFont, toHaveTrait: [.boldFontMask])
             self.italic = NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask])
             self.boldItalic = NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask, .boldFontMask])

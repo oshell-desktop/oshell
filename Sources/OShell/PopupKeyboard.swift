@@ -80,6 +80,11 @@ final class PopupColorWell: NSColorWell {
 
 /// Marks an auxiliary window. Esc never closes the main terminal window.
 final class PopupWindow: NSWindow {
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        contentView = InterfaceSurfaceView(frame: NSRect(origin: .zero, size: contentRect.size))
+        titlebarSeparatorStyle = .none
+    }
     // Modeless file browsers share the current Space but must not remain above
     // their workspace. Dialogs retain the default child-window behavior.
     var attachesToOwner = true
@@ -113,6 +118,7 @@ final class PopupWindow: NSWindow {
 /// an editable text view would normally consume Esc for completion.
 final class PopupAlert: NSAlert {
     @discardableResult override func runModal() -> NSApplication.ModalResponse {
+        if let view = accessoryView { accessoryView = AppUI.formCard(view) }
         if let url = Bundle.main.url(forResource: "OShell", withExtension: "icns"), let bundledIcon = NSImage(contentsOf: url) { icon = bundledIcon }
         PopupKeyboard.install()
         let cancel = buttons.first { $0.title == "取消" }

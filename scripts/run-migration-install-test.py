@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Two real Sparkle installs with three source-built apps and synthetic isolated identity/data."""
-import argparse,base64,functools,hashlib,http.server,json,os,plistlib,shutil,subprocess,tempfile,threading,time,uuid,xml.etree.ElementTree as ET
+import argparse, base64, functools, hashlib, http.server, json, os, plistlib, subprocess, tempfile, threading, time, uuid, xml.etree.ElementTree as ET
 from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization

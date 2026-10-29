@@ -1,6 +1,6 @@
 # Cascadia Code
 
-Unmodified static TrueType faces from Microsoft's official [v2407.24 release](https://github.com/microsoft/cascadia-code/releases/tag/v2407.24): Regular, Bold, Italic and Bold Italic, extracted from `ttf/static/`.
+Unmodified static TrueType faces from Microsoft's official [v2407.24 release](https://github.com/microsoft/cascadia-code/releases/tag/v2407.24): Light, Light Italic, Regular, Bold, Italic and Bold Italic, extracted from `ttf/static/`.
 
 - Archive: `CascadiaCode-2407.24.zip`
 - Archive SHA-256: `e67a68ee3386db63f48b9054bd196ea752bc6a4ebb4df35adce6733da50c8474`

@@ -11,7 +11,7 @@ func textEditor(_ text: String, editable: Bool = true) -> (NSScrollView, NSTextV
     let view = CommandTextView(frame: .zero, textContainer: nil); view.isRichText = false; view.isEditable = editable; view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
     view.string = text; view.isVerticallyResizable = true; view.isHorizontallyResizable = false
     view.autoresizingMask = [.width]; view.textContainer?.widthTracksTextView = true; view.textContainerInset = NSSize(width: 8, height: 8)
-    let scroll = NSScrollView(); scroll.documentView = view; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+    let scroll = NSScrollView(); scroll.documentView = view; scroll.hasVerticalScroller = true; AppUI.styleScrollSurface(scroll)
     return (scroll, view)
 }
 
@@ -116,16 +116,17 @@ final class QuickCommandManager: NSWindowController, NSTableViewDataSource, NSTa
     private let table = NSTableView()
     init(workspace: WorkspaceController) {
         self.workspace = workspace
-        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 430), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 500), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "快速命令管理器"; window.minSize = NSSize(width: 650, height: 350); window.isReleasedWhenClosed = false
         super.init(window: window); window.center()
         let content = window.contentView!
+        let heading = AppUI.pageHeading("快速命令", subtitle: "整理常用命令，选中后填入撰写窗。")
         for (id, title, width) in [("name", "名称", 180.0), ("group", "分组", 120.0), ("text", "命令", 400.0)] { let c = NSTableColumn(identifier: .init(id)); c.title = title; c.width = width; table.addTableColumn(c) }
         table.delegate = self; table.dataSource = self; table.target = self; table.doubleAction = #selector(useCommand); table.rowHeight = 28
-        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; AppUI.styleScrollSurface(scroll)
         let bar = NSStackView(views: [operatorButton("新建", target: self, action: #selector(add)), operatorButton("编辑", target: self, action: #selector(edit)), operatorButton("删除", target: self, action: #selector(remove)), NSView(), operatorButton("填入撰写窗", target: self, action: #selector(useCommand))]); bar.spacing = 8
-        [bar, scroll].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
-        NSLayoutConstraint.activate([bar.topAnchor.constraint(equalTo: content.topAnchor, constant: 12), bar.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), bar.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), scroll.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 12), scroll.leadingAnchor.constraint(equalTo: bar.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: bar.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
+        [heading, bar, scroll].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
+        NSLayoutConstraint.activate([heading.topAnchor.constraint(equalTo: content.topAnchor, constant: 20), heading.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20), heading.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20), bar.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 18), bar.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), bar.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), scroll.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 12), scroll.leadingAnchor.constraint(equalTo: bar.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: bar.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private var commands: [QuickCommand] { workspace?.configuration.quickCommands ?? [] }
@@ -145,7 +146,6 @@ final class QuickCommandManager: NSWindowController, NSTableViewDataSource, NSTa
         guard Dialogs.confirm("删除“\(command.name)”？", text: "删除已保存的快速命令。", action: "删除") else { return }
         var config = workspace.configuration; config.quickCommands.removeAll { $0.id == command.id }; if workspace.saveConfiguration(config) { table.reloadData() }
     }
-    func addSuggestedCommand(_ text: String) { editCommand(QuickCommand(name: "AI 建议", group: "AI", text: text, appendReturn: false)) }
     private func editCommand(_ existing: QuickCommand?) {
         guard let workspace else { return }; var command = existing ?? QuickCommand()
         let alert = PopupAlert(); alert.messageText = existing == nil ? "新建快速命令" : "编辑快速命令"; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消")

@@ -8,9 +8,8 @@ public protocol SharedSyncTransport: AnyObject {
     func put(_ data: Data, matching etag: String?) throws
     func cancel()
 }
-extension WebDAVClient: SharedSyncTransport {}
 
-public final class DirectorySyncClient: SharedSyncTransport {
+public final class DirectorySyncClient: FontSyncTransport {
     public let directory: URL
     public var url: URL { directory.appendingPathComponent("configuration.json") }
     private let lock = NSLock()
@@ -62,4 +61,39 @@ public final class DirectorySyncClient: SharedSyncTransport {
         if let result { try result.get(); return }
         throw error ?? ModelError.invalid("无法写入同步目录，本地数据已保留。") as NSError
     }
+    public func checkFontSyncActive() throws { try check() }
+    private func fontURL(_ name: String, create: Bool) throws -> URL {
+        try check(); guard FontLibrary.validAttachmentName(name) else { throw ModelError.invalid("字体附件路径无效。") }
+        let folder = directory.appendingPathComponent("fonts", isDirectory: true)
+        if FileManager.default.fileExists(atPath: folder.path) {
+            let flags = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard flags.isDirectory == true, flags.isSymbolicLink != true else { throw ModelError.invalid("同步字体位置不是普通目录。") }
+        }
+        if create { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
+        let target = folder.appendingPathComponent(name)
+        guard (NSFileVersion.unresolvedConflictVersionsOfItem(at: target) ?? []).isEmpty else { throw WebDAVFailure.conflict }
+        return target
+    }
+    public func fetchFont(_ name: String) throws -> WebDAVObject? {
+        let target = try fontURL(name, create: false)
+        var error: NSError?, result: Result<WebDAVObject?, Error>?
+        NSFileCoordinator().coordinate(readingItemAt: target, options: [], error: &error) { actual in
+            result = Result { try SharedDataFile.readIfPresent(actual).map { WebDAVObject(data: $0, etag: stamp($0)) } }
+        }
+        if let result { return try result.get() }; throw error ?? ModelError.invalid("无法读取字体附件。") as NSError
+    }
+    public func putFont(_ data: Data, name: String, matching etag: String?) throws {
+        guard data.count <= FontLibrary.maximumFileSize else { throw WebDAVFailure.tooLarge }
+        let target = try fontURL(name, create: true)
+        var error: NSError?, result: Result<Void, Error>?
+        NSFileCoordinator().coordinate(writingItemAt: target, options: .forReplacing, error: &error) { actual in
+            result = Result {
+                try check(); let previous = try SharedDataFile.readIfPresent(actual)
+                guard previous.map(stamp) == etag else { throw WebDAVFailure.conflict }
+                if previous == nil { try SharedDataFile.create(data, at: actual) } else { try PrivateFile.write(data, to: actual) }
+            }
+        }
+        if let result { try result.get() } else { throw error ?? ModelError.invalid("无法写入字体附件。") as NSError }
+    }
+
 }

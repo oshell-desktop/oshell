@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Compile unchanged published validators and prove the signed migration documents they accept."""
-import argparse,base64,importlib.util,json,subprocess,tempfile
+import argparse, importlib.util, json, subprocess, tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('fixtures',ROOT/'scripts/test-update-migration.py');F=importlib.util.module_from_spec(spec);spec.loader.exec_module(F)

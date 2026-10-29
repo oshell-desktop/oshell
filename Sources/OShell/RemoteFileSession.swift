@@ -36,6 +36,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     private let ratePresets = [0, 128*1024, 512*1024, 1024*1024, 5*1024*1024, 10*1024*1024]
     private var backend: RemoteFileBackend?
     private var scp: SCPTransfer?
+    private var rsync: RsyncTransfer?
     private var sshProfile: SessionProfile?
     private var launchPassword: String?
     private var sharedLease: SSHConnectionLease?
@@ -59,6 +60,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     var filterText: String { get { filter.stringValue } set { filter.stringValue = newValue; filterRows() } }
     var listedNames: [String] { visibleEntries.map(\.name) }
     var hasActiveOperation: Bool { busy }
+    var minimumPresentationHeight: CGFloat { historyVisible ? 520 : 340 }
     private let worker = DispatchQueue(label: "OShell.file-operations", qos: .userInitiated)
     private var operationID = UUID()
     private var pendingUploads = [URL]()
@@ -72,11 +74,13 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     private var selected: [RemoteFileEntry] { table.selectedRowIndexes.compactMap { visibleEntries.indices.contains($0) ? visibleEntries[$0] : nil } }
     private func build() {
         let content = view
-        transferMode.addItems(withTitles: ["SFTP 传输", "SCP 兼容传输"]); transferMode.toolTip = "目录浏览使用 SFTP；SCP 模式使用系统 scp -O。"
-        let top = NSStackView(views: [operatorButton("新会话…", target: self, action: #selector(chooseConnection)), operatorButton("重连", target: self, action: #selector(reconnect)), operatorButton("上一级", target: self, action: #selector(up)), path, operatorButton("转到", target: self, action: #selector(go)), operatorButton("刷新", target: self, action: #selector(refresh))]); top.spacing = 8
+        transferMode.identifier = .init("files.transferMode")
+        transferMode.addItems(withTitles: ["SFTP 传输", "SCP 兼容传输", "rsync 增量传输"]); transferMode.toolTip = "目录浏览使用 SFTP；SCP 用于兼容传输；rsync 更新同名文件但不删除目标额外文件，远端需安装 rsync。"
+        let top = NSStackView(views: [operatorButton("上一级", target: self, action: #selector(up)), path, operatorButton("转到", target: self, action: #selector(go)), operatorButton("刷新", target: self, action: #selector(refresh))]); top.spacing = 8
         path.target = self; path.action = #selector(go); path.setContentHuggingPriority(.defaultLow, for: .horizontal); path.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         filter.placeholderString = "筛选当前目录"; filter.delegate = self
-        let tools = NSStackView(views: [operatorButton("上传…", target: self, action: #selector(chooseUpload)), operatorButton("下载…", target: self, action: #selector(downloadSelected)), operatorButton("SCP…", target: self, action: #selector(standaloneSCP)), transferMode, NSView(), filter]); tools.spacing = 8
+        let toolsRow = NSStackView(views: [operatorButton("新会话…", target: self, action: #selector(chooseConnection)), operatorButton("重连", target: self, action: #selector(reconnect)), operatorButton("上传…", target: self, action: #selector(chooseUpload)), operatorButton("下载…", target: self, action: #selector(downloadSelected)), operatorButton("SCP…", target: self, action: #selector(standaloneSCP)), operatorButton("rsync…", target: self, action: #selector(standaloneRsync)), transferMode, NSView(), filter]); toolsRow.spacing = 8
+        let tools = FileControlStrip(toolsRow)
         filter.widthAnchor.constraint(equalToConstant: 220).isActive = true
         for (id, title, width) in [("name", "名称", 250.0), ("type", "类型", 65.0), ("size", "大小", 85.0), ("permissions", "权限", 165.0), ("owner", "所属用户", 85.0), ("group", "所属组", 85.0), ("modified", "修改时间", 170.0)] { let c = NSTableColumn(identifier: .init(id)); c.title = title; c.width = width; c.minWidth = id == "name" ? 140 : 60; table.addTableColumn(c) }
         table.columnAutoresizingStyle = .noColumnAutoresizing
@@ -88,15 +92,17 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
             self.upload(urls, to: destination)
         }
         table.context = { [weak self] row in self?.menu(for: row) }
-        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autohidesScrollers = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autohidesScrollers = true; AppUI.styleScrollSurface(scroll)
         let hint = NSTextField(labelWithString: "拖入文件或文件夹上传；右键下载、重命名、删除。重名传输默认自动编号。")
         hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
+        hint.lineBreakMode = .byTruncatingTail; hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        status.identifier = .init("files.status")
         status.font = .systemFont(ofSize: 11); status.lineBreakMode = .byTruncatingMiddle; status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         progress.style = .bar; progress.isIndeterminate = true; progress.isDisplayedWhenStopped = false; progress.widthAnchor.constraint(equalToConstant: 160).isActive = true
         cancelButton.bezelStyle = .rounded; cancelButton.target = self; cancelButton.action = #selector(cancelFileOperation); cancelButton.isEnabled = false
         rateControl.identifier = .init("files.rateLimit")
         rateControl.setAccessibilityLabel("传输限速")
-        rateControl.toolTip = "当前文件标签的上传 / 下载速率上限。SFTP、FTP 可在传输中实时调整；SCP 兼容模式在下次传输生效。0 表示不限速，速率按文件内容计算，缓冲可能造成短时波动。"
+        rateControl.toolTip = "当前文件标签的上传 / 下载速率上限。SFTP、FTP 可在传输中实时调整；SCP / rsync 在下次传输生效。0 表示不限速，速率按文件内容计算，缓冲可能造成短时波动。"
         rateControl.target = self; rateControl.action = #selector(changeTransferRate)
         rateControl.widthAnchor.constraint(equalToConstant: 174).isActive = true
         refreshRateControl()
@@ -114,13 +120,15 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         historyView.canResume = { [weak self] in self?.canResumeTransfer($0) == true }
         historyView.onPause = { [weak self] in self?.pauseTransfer() }
         historyView.onResume = { [weak self] in self?.resumeTransfer($0) }
-        let bottom = NSStackView(views: [historyButton, status, NSView(), rateControl, progress, cancelButton]); bottom.spacing = 8
-        [top, tools, scroll, historyHost, hint, bottom].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
-        NSLayoutConstraint.activate([top.topAnchor.constraint(equalTo: content.topAnchor, constant: 12), top.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), top.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), tools.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 10), tools.leadingAnchor.constraint(equalTo: top.leadingAnchor), tools.trailingAnchor.constraint(equalTo: top.trailingAnchor), scroll.topAnchor.constraint(equalTo: tools.bottomAnchor, constant: 10), scroll.leadingAnchor.constraint(equalTo: top.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: top.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: historyHost.topAnchor, constant: -8), historyHost.leadingAnchor.constraint(equalTo: top.leadingAnchor), historyHost.trailingAnchor.constraint(equalTo: top.trailingAnchor), historyHost.bottomAnchor.constraint(equalTo: hint.topAnchor, constant: -4), historyHeight, hint.leadingAnchor.constraint(equalTo: top.leadingAnchor), hint.trailingAnchor.constraint(lessThanOrEqualTo: top.trailingAnchor), hint.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -8), bottom.leadingAnchor.constraint(equalTo: top.leadingAnchor), bottom.trailingAnchor.constraint(equalTo: top.trailingAnchor), bottom.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
+        let bottomRow = NSStackView(views: [historyButton, rateControl, progress, cancelButton]); bottomRow.spacing = 8
+        let bottom = FileControlStrip(bottomRow)
+        [top, tools, scroll, historyHost, hint, status, bottom].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
+        NSLayoutConstraint.activate([top.topAnchor.constraint(equalTo: content.topAnchor, constant: 12), top.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), top.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), tools.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 10), tools.leadingAnchor.constraint(equalTo: top.leadingAnchor), tools.trailingAnchor.constraint(equalTo: top.trailingAnchor), scroll.topAnchor.constraint(equalTo: tools.bottomAnchor, constant: 10), scroll.leadingAnchor.constraint(equalTo: top.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: top.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: historyHost.topAnchor, constant: -8), historyHost.leadingAnchor.constraint(equalTo: top.leadingAnchor), historyHost.trailingAnchor.constraint(equalTo: top.trailingAnchor), historyHost.bottomAnchor.constraint(equalTo: hint.topAnchor, constant: -4), historyHeight, hint.leadingAnchor.constraint(equalTo: top.leadingAnchor), hint.trailingAnchor.constraint(equalTo: top.trailingAnchor), hint.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -4), status.leadingAnchor.constraint(equalTo: top.leadingAnchor), status.trailingAnchor.constraint(equalTo: top.trailingAnchor), status.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -4), bottom.leadingAnchor.constraint(equalTo: top.leadingAnchor), bottom.trailingAnchor.constraint(equalTo: top.trailingAnchor), bottom.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
     }
     @objc func toggleHistory() { showHistory(!historyVisible) }
-    private func showHistory(_ visible: Bool) { historyVisible = visible; historyHost.isHidden = !visible; historyHeight.constant = visible ? 180 : 0; historyView.updateActions() }
-    private var historyTransport: String { profile?.kind == .ftp ? "FTP" : (transferMode.indexOfSelectedItem == 1 ? "SCP" : "SFTP") }
+    private func showHistory(_ visible: Bool) { historyVisible = visible; historyHost.isHidden = !visible; historyHeight.constant = visible ? 180 : 0; historyView.updateActions(); onStateChanged?() }
+    private var usesRsync: Bool { sshProfile != nil && transferMode.indexOfSelectedItem == 2 }
+    private var historyTransport: String { profile?.kind == .ftp ? "FTP" : (usesRsync ? "rsync" : (transferMode.indexOfSelectedItem == 1 ? "SCP" : "SFTP")) }
     func connect(_ profile: SessionProfile, directory: String? = nil, uploading: [URL] = [], password: String? = nil, connectionGroup: SSHConnectionGroup? = nil, sourcePaneID: UUID? = nil) {
         guard let workspace, !busy, !closed, profile.kind != .local else { return }
         var profile = profile
@@ -149,7 +157,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         do {
             backend?.cancel(); backend = nil; connected = false; sharedLease = lease
             sshProfile = profile.kind.usesSSH ? profile : nil
-            transferMode.removeAllItems(); transferMode.addItems(withTitles: profile.kind == .ftp ? ["FTP 传输"] : ["SFTP 传输", "SCP 兼容传输"])
+            transferMode.removeAllItems(); transferMode.addItems(withTitles: profile.kind == .ftp ? ["FTP 传输"] : ["SFTP 传输", "SCP 兼容传输", "rsync 增量传输"])
             transferMode.isEnabled = profile.kind.usesSSH
             if let backendFactory { backend = try backendFactory(profile); connectBackend(destination); return }
             if profile.kind.usesSSH {
@@ -213,7 +221,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
             }
             DispatchQueue.main.async {
                 guard let self, !self.closed, self.operationID == token else { return }
-                self.busy = false; self.cancelButton.isEnabled = false; self.progress.stopAnimation(nil); if historyBatch != nil { self.scp = nil }; self.onStateChanged?(); self.historyView.updateActions()
+                self.busy = false; self.cancelButton.isEnabled = false; self.progress.stopAnimation(nil); if historyBatch != nil { self.scp = nil; self.rsync = nil }; self.onStateChanged?(); self.historyView.updateActions()
                 switch result {
                 case .success(let value): self.status.stringValue = "完成"; completion(value)
                 case .failure(let error): self.reportError(error)
@@ -236,7 +244,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     func setTransferRateLimit(_ bytesPerSecond: Int) {
         transferRateLimit = min(FileTransferRateLimiter.maximum, max(0,bytesPerSecond))
         backend?.setTransferRateLimit(transferRateLimit); refreshRateControl()
-        if busy && scp != nil { status.stringValue = "限速已修改，当前 SCP 仍使用启动时的上限；下次传输生效。" }
+        if busy && (scp != nil || rsync != nil) { status.stringValue = "限速已修改，当前 SSH 传输仍使用启动时的上限；下次传输生效。" }
     }
     static func parseTransferRate(_ text: String, unit: Int) -> Int? {
         guard unit == 1024 || unit == 1048576, let value = Double(text.trimmingCharacters(in:.whitespacesAndNewlines)), value.isFinite, value >= 0 else { return nil }
@@ -248,7 +256,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         guard let selected = rateControl.selectedItem else { return }
         if selected.tag >= 0 { setTransferRateLimit(selected.tag); return }
         let alert = PopupAlert(); alert.messageText = "传输速率上限"
-        alert.informativeText = "仅作用于当前文件标签。0 表示不限速；范围为 1 KiB/s–1024 MiB/s。SFTP / FTP 实时生效；SCP 下次传输生效。"
+        alert.informativeText = "仅作用于当前文件标签。0 表示不限速；范围为 1 KiB/s–1024 MiB/s。SFTP / FTP 实时生效；SCP / rsync 下次传输生效。"
         alert.addButton(withTitle:"应用"); alert.addButton(withTitle:"取消")
         let value = NSTextField(string:String(format:"%g",Double(transferRateLimit)/1024)), unit = NSPopUpButton()
         unit.addItems(withTitles:["KiB/s","MiB/s"])
@@ -261,6 +269,23 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
             alert.informativeText = "请输入有效速率：0 为不限速，非零范围为 1 KiB/s–1024 MiB/s。"
         }
         refreshRateControl()
+    }
+    private func makeRsyncTransfer() throws -> RsyncTransfer {
+        guard let profile = sshProfile, let workspace else { throw ModelError.invalid("请先选择 SSH / SFTP 会话。") }
+        return try RsyncTransfer(profile: connectionGroup == nil ? try workspace.resolvedConnectionProfile(profile) : profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit)
+    }
+    private func rsyncProgressCallback(_ name: String, token: UUID, record: UUID) -> (UInt64, Double) -> Void {
+        let history = transferHistory; var last: UInt64 = 0
+        return { [weak self] bytes, percent in
+            let now = DispatchTime.now().uptimeNanoseconds, refresh = now - last >= 100_000_000
+            history.progress(record, bytes: bytes, total: 0, notify: refresh)
+            guard refresh else { return }; last = now
+            DispatchQueue.main.async {
+                guard let self, !self.closed, self.operationID == token else { return }
+                self.status.stringValue = "\(name) · 已处理 \(ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .binary)) · 当前文件 \(Int(percent))%"
+                self.progress.isIndeterminate = false; self.progress.doubleValue = percent
+            }
+        }
     }
     private func progressCallback(_ name: String, token: UUID, recordID: UUID? = nil) -> (UInt64, UInt64) -> Void {
         var last = DispatchTime.now().uptimeNanoseconds, previousBytes: UInt64 = 0
@@ -336,7 +361,8 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     }
     func upload(_ urls: [URL], to destination: String) {
         guard connected, !busy, !urls.isEmpty else { return }
-        let alert = PopupAlert(); alert.messageText = "上传 \(urls.count) 个项目"; alert.informativeText = "目标：\(profile?.name ?? "") · \(profile?.host ?? "") · \(destination)\n" + urls.map(\.lastPathComponent).prefix(10).joined(separator: "\n") + "\n重名自动编号；文件夹将递归上传。"
+        let useRsync = usesRsync
+        let alert = PopupAlert(); alert.messageText = useRsync ? "rsync 上传 \(urls.count) 个项目" : "上传 \(urls.count) 个项目"; alert.informativeText = "目标：\(profile?.name ?? "") · \(profile?.host ?? "") · \(destination)\n" + urls.map(\.lastPathComponent).prefix(10).joined(separator: "\n") + (useRsync ? "\n将增量更新同名文件及目录内容，保留目标额外文件。中断后可重新执行相同路径。" : "\n重名自动编号；文件夹将递归上传。")
         let input = NSTextField(string: destination); input.frame = NSRect(x: 0, y: 0, width: 500, height: 26); alert.accessoryView = input; alert.addButton(withTitle: "上传"); alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let target = input.stringValue, useSCP = sshProfile != nil && transferMode.indexOfSelectedItem == 1
@@ -344,18 +370,26 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         let records = urls.map { history.enqueue(batch: token, upload: true, transport: historyTransport, local: $0.path, remote: RemotePath.join(target, $0.lastPathComponent)) }
         showHistory(true)
         do { if useSCP, let profile = sshProfile, let workspace { scp = try SCPTransfer(profile: connectionGroup == nil ? try workspace.resolvedConnectionProfile(profile) : profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit) } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
-        let scp = self.scp
+        do { if useRsync { rsync = try makeRsyncTransfer() } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
+        let scp = self.scp, rsync = self.rsync
         perform("正在上传…", id: token, historyBatch: token) { [weak self] backend in
-            var names = Set(try backend.list(target).map(\.name))
+            let existingEntries = try backend.list(target)
+            var names = Set(existingEntries.map(\.name)), kinds = [String: (directory: Bool, link: Bool)]()
+            for entry in existingEntries { kinds[entry.name] = (entry.directory, entry.symbolicLink) }
             for (index, url) in urls.enumerated() {
                 let record = records[index]
                 let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
                 guard history.start(record, directory: isDirectory) else { throw ModelError.invalid("传输已取消。") }
                 guard RemotePath.safeName(url.lastPathComponent) else { throw ModelError.invalid("文件名包含不支持的字符。") }
-                let name = Self.uniqueName(url.lastPathComponent, existing: names); names.insert(name)
+                let name = useRsync ? url.lastPathComponent : Self.uniqueName(url.lastPathComponent, existing: names); names.insert(name)
                 let remote = RemotePath.join(target, name)
                 history.remoteDestination(record, remote: remote)
-                if useSCP { guard let scp else { throw ModelError.invalid("SCP 连接不可用。"); }; try scp.run(local: url, remote: remote, upload: true) }
+                if useRsync {
+                    if let existing = kinds[name], existing.link || existing.directory != isDirectory { throw ModelError.invalid("远程同名目标类型不匹配，未覆盖。") }
+                    kinds[name] = (isDirectory, false)
+                    guard let rsync else { throw ModelError.invalid("rsync 连接不可用。") }
+                    try rsync.run(local: url, remote: remote, upload: true, directory: isDirectory, progress: self?.rsyncProgressCallback(name, token: token, record: record) ?? { _,_ in })
+                } else if useSCP { guard let scp else { throw ModelError.invalid("SCP 连接不可用。"); }; try scp.run(local: url, remote: remote, upload: true) }
                 else if let resumable = backend as? ResumableFileBackend, !isDirectory {
                     let job = ResumableFileTransfer(local: url, remote: remote, upload: true)
                     self?.registerResume(job, record: record)
@@ -364,7 +398,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
                 history.succeed(record)
             }
             return (target, try backend.list(target))
-        } completion: { [weak self] in self?.scp = nil; self?.display($0) }
+        } completion: { [weak self] in self?.scp = nil; self?.rsync = nil; self?.display($0) }
     }
     @objc private func downloadSelected() {
         guard connected, !busy, !selected.isEmpty else { return }; let files = selected, parent = directory
@@ -374,21 +408,28 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     }
     func download(_ files: [RemoteFileEntry], from parent: String, to destination: URL) {
         guard connected, !busy, !files.isEmpty else { return }
+        let useRsync = usesRsync
+        if useRsync, !Dialogs.confirm("rsync 下载到本地？", text: "源：\(profile?.name ?? "") · \(parent)\n目标：\(destination.path)\n\n将更新选中项目的同名文件及目录内容，保留目标额外文件。", action: "更新并下载") { return }
         let useSCP = sshProfile != nil && transferMode.indexOfSelectedItem == 1
         let token = UUID(), history = transferHistory
         let records = files.map { history.enqueue(batch: token, upload: false, transport: historyTransport, local: destination.appendingPathComponent($0.name).path, remote: RemotePath.join(parent, $0.name), directory: $0.directory) }
         showHistory(true)
         do { if useSCP, let profile = sshProfile, let workspace { scp = try SCPTransfer(profile: connectionGroup == nil ? try workspace.resolvedConnectionProfile(profile) : profile, knownHosts: workspace.knownHostsURL, oneTimePassword: launchPassword, connectionGroup: connectionGroup, rateLimit: transferRateLimit) } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
-        let scp = self.scp
+        do { if useRsync { rsync = try makeRsyncTransfer() } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
+        let scp = self.scp, rsync = self.rsync
         perform("正在下载…", id: token, historyBatch: token) { [weak self] backend in
             var names = Set(try FileManager.default.contentsOfDirectory(atPath: destination.path))
             for (index, entry) in files.enumerated() {
                 let record = records[index]
                 guard history.start(record) else { throw ModelError.invalid("传输已取消。") }
                 guard RemotePath.safeName(entry.name) else { throw ModelError.invalid("远程文件名无效。") }
-                let name = Self.uniqueName(entry.name, existing: names); names.insert(name); let local = destination.appendingPathComponent(name), remote = RemotePath.join(parent, entry.name)
+                let name = useRsync ? entry.name : Self.uniqueName(entry.name, existing: names); names.insert(name); let local = destination.appendingPathComponent(name), remote = RemotePath.join(parent, entry.name)
                 history.destination(record, local: local.path)
-                if useSCP {
+                if useRsync {
+                    guard !entry.symbolicLink, !entry.unknownType else { throw ModelError.invalid("rsync 入口不接受符号链接或未知文件类型。") }
+                    guard let rsync else { throw ModelError.invalid("rsync 连接不可用。") }
+                    try rsync.run(local: local, remote: remote, upload: false, directory: entry.directory, progress: self?.rsyncProgressCallback(name, token: token, record: record) ?? { _,_ in })
+                } else if useSCP {
                     // Stage SCP in a fresh directory so it cannot overwrite an
                     // existing destination even if another process creates it.
                     let stage = destination.appendingPathComponent(".oshell-scp-" + UUID().uuidString)
@@ -404,7 +445,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
                 history.succeed(record)
             }
             return files.count
-        } completion: { [weak self] count in self?.scp = nil; self?.status.stringValue = "已下载 \(count) 个项目到 \(destination.path)" }
+        } completion: { [weak self] count in self?.scp = nil; self?.rsync = nil; self?.status.stringValue = "已下载 \(count) 个项目到 \(destination.path)" }
     }
     private static func uniqueName(_ name: String, existing: Set<String>) -> String { var next = name, index = 1; while existing.contains(next) { next = name + ".\(index)"; index += 1 }; return next }
     private func askName(_ title: String, initial: String) -> String? {
@@ -440,7 +481,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     func pauseTransfer() {
         guard pausableRecord != nil else { return }
         transferHistory.pause(operationID)
-        operationID = UUID(); pendingResume = nil; backend?.cancel(); backend = nil; scp?.cancel(); scp = nil
+        operationID = UUID(); pendingResume = nil; backend?.cancel(); backend = nil; scp?.cancel(); scp = nil; rsync?.cancel(); rsync = nil
         busy = false; connected = false; pendingUploads = []; cancelButton.isEnabled = false; progress.stopAnimation(nil)
         status.stringValue = "已暂停并保留临时文件；选中记录后点击继续。后续未开始项目请重新传输。"
         historyView.reload(); onStateChanged?()
@@ -468,13 +509,48 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         let resumable = transferHistory.snapshot.contains { $0.batch == operationID && resumeJobs[$0.id] != nil }
         pendingResume = nil
         transferHistory.cancel(operationID)
-        operationID = UUID(); backend?.cancel(); backend = nil; scp?.cancel(); scp = nil; busy = false; connected = false; pendingUploads = []
+        operationID = UUID(); backend?.cancel(); backend = nil; scp?.cancel(); scp = nil; rsync?.cancel(); rsync = nil; busy = false; connected = false; pendingUploads = []
         cancelButton.isEnabled = false; progress.stopAnimation(nil); status.stringValue = resumable ? "已取消并保留临时片段；选中记录后可重试续传。" : "已取消并断开文件连接，部分文件可能保留；可点击重连恢复。"; onStateChanged?(); historyView.updateActions()
     }
     func shutdown() {
         guard !closed else { return }; closed = true; launchPassword = nil; identityID = UUID(); cancelFileOperation(); sharedLease = nil; onStateChanged = nil; onChooseConnection = nil; transferHistory.observe(nil); transferHistory.reset(); resumeJobs.removeAll(); historyView.dispose()
     }
     @objc private func chooseConnection() { onChooseConnection?() }
+    @objc private func standaloneRsync() {
+        guard !busy, sshProfile != nil else { Dialogs.message("请先选择 SSH / SFTP 会话；FTP 不支持 rsync。"); return }
+        let alert = PopupAlert(); alert.messageText = "rsync 目录同步"
+        alert.informativeText = "填写远程目录，再选择本地目录。同步目录内容、更新同名文件，不删除目标额外文件。远端需要安装 rsync；此入口不依赖 SFTP 目录浏览。"
+        alert.addButton(withTitle: "上传…"); alert.addButton(withTitle: "下载…"); alert.addButton(withTitle: "取消")
+        let remote = NSTextField(string: path.stringValue); remote.frame = NSRect(x: 0, y: 0, width: 560, height: 26); alert.accessoryView = remote
+        let choice = alert.runModal(); guard choice == .alertFirstButtonReturn || choice == .alertSecondButtonReturn else { return }
+        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = choice == .alertSecondButtonReturn
+        guard panel.runPopupModal() == .OK, let local = panel.url else { return }
+        synchronizeRsyncDirectory(local: local, remote: remote.stringValue, upload: choice == .alertFirstButtonReturn)
+    }
+    func synchronizeRsyncDirectory(local: URL, remote: String, upload: Bool) {
+        guard !busy, !closed, sshProfile != nil else { return }
+        guard Dialogs.confirm(upload ? "确认 rsync 上传同步？" : "确认 rsync 下载同步？", text: "本地：\(local.path)\n远程：\(profile?.name ?? "") · \(remote)\n\n将更新目标目录内的同名文件，保留目标额外文件。中断后可对相同路径再次同步，复用临时片段。", action: "开始同步") else { return }
+        let token = UUID(), history = transferHistory
+        let record = history.enqueue(batch: token, upload: upload, transport: "rsync", local: local.path, remote: remote, directory: true)
+        showHistory(true)
+        do {
+            let task = try makeRsyncTransfer(); rsync = task
+            operationID = token; busy = true; cancelButton.isEnabled = true; progress.isIndeterminate = true; progress.startAnimation(nil); status.stringValue = "rsync 同步中…"; onStateChanged?()
+            let update = rsyncProgressCallback(local.lastPathComponent, token: token, record: record)
+            worker.async { [weak self] in
+                let result = Result {
+                    guard history.start(record) else { throw ModelError.invalid("传输已取消。") }
+                    try task.run(local: local, remote: remote, upload: upload, directory: true, progress: update)
+                }
+                switch result { case .success: history.succeed(record); case .failure(let error): history.finishBatch(token, error: error) }
+                DispatchQueue.main.async {
+                    guard let self, !self.closed, self.operationID == token else { return }
+                    self.busy = false; self.rsync = nil; self.cancelButton.isEnabled = false; self.progress.stopAnimation(nil); self.onStateChanged?(); self.historyView.updateActions()
+                    switch result { case .success: self.status.stringValue = "rsync 同步完成"; if self.connected { self.refresh() }; case .failure(let error): self.reportError(error) }
+                }
+            }
+        } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription) }
+    }
     @objc private func standaloneSCP() {
         guard !busy, let profile = sshProfile, let workspace else { Dialogs.message("请先选择一个 SSH 会话；FTP 不使用 SCP。"); return }
         let alert = PopupAlert(); alert.messageText = "SCP 文件传输"; alert.informativeText = "使用系统 scp -O，可用于没有 SFTP 子系统的 SSH 服务器。填写完整远程路径；确认后可能覆盖该目标路径。"

@@ -10,11 +10,12 @@ enum SSHCloneTest {
         guard let location = ProcessInfo.processInfo.environment["OSHELL_ZOC_CLONE_TEST_ROOT"] else { return }
         let root = URL(fileURLWithPath: location)
         var checks = SSHClientLocaleTest.run(), finished = false
+        var keyboardEnvironment = [String: Bool]()
         func text(_ pane: TerminalPane) -> String { String(decoding: pane.terminal.getTerminal().getBufferAsData(), as: UTF8.self) }
         func send(_ pane: TerminalPane, _ command: String) { pane.sendManaged(Array((command + "\r").utf8)) }
         func finish() {
             guard !finished else { return }; finished = true
-            let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
+            let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "keyboardEnvironment": keyboardEnvironment]
             try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: root.appendingPathComponent("app-result.json"))
             controller.shutdown(); NSApp.terminate(nil)
         }
@@ -74,6 +75,34 @@ enum SSHCloneTest {
                 return pane.sessionReady && pane.sshConnectionGroup?.isAvailable == true && text(pane).contains("MUX_READY") && pane.remoteAddress != nil
             }) {
                 let sourceTab = controller.selectedTab!, source = sourceTab.activePane, group = source.sshConnectionGroup!
+                let transcript = text(source)
+                let start = "Connecting to \(source.profile.host):\(source.profile.port)..."
+                checks["connectionStartShowsActualTarget"] = transcript.contains(start)
+                checks["connectionEstablishedOnlyOnce"] = transcript.components(separatedBy: "Connection established.").count == 2
+                let noticePositions = [start, "Connection established.", "MUX_READY"].compactMap { transcript.range(of: $0)?.lowerBound }
+                checks["connectionStatusPrecedesRemoteShell"] = noticePositions.count == 3 && noticePositions == noticePositions.sorted()
+                checks["localShellShortcutHint"] = transcript.contains("To open a local shell, press Ctrl+Alt+].")
+                NSApp.activate(ignoringOtherApps: true); controller.window?.makeKeyAndOrderFront(nil); source.activate()
+                let focusDeadline = Date().addingTimeInterval(2)
+                while (controller.window?.isKeyWindow != true || controller.window?.firstResponder !== source.terminal) && Date() < focusDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.025)); source.activate() }
+                let oldPID = source.terminal.process.shellPid, oldCount = controller.tabs.count
+                func localKey(repeating: Bool = false) -> NSEvent { NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control, .option], timestamp: 0, windowNumber: controller.window!.windowNumber, context: nil, characters: "]", charactersIgnoringModifiers: "]", isARepeat: repeating, keyCode: 30)! }
+                keyboardEnvironment["keyWindowAvailable"] = controller.window?.isKeyWindow == true
+                checks["shortcutFocusIsTerminal"] = controller.window?.firstResponder === source.terminal
+                checks["shortcutHasNoModalBlocker"] = NSApp.modalWindow == nil && controller.window?.attachedSheet == nil
+                checks["shortcutSecurityUnlocked"] = controller.isSecurityUnlocked
+                checks["shortcutNoConfiguredConflict"] = SessionSidebarPreferences.shortcuts(controller.configuration.preferences.keyboardShortcuts).action(for: TerminalPane.localShellShortcut) == nil
+                checks["shortcutEventRecognized"] = KeyboardShortcut(event: localKey()) == TerminalPane.localShellShortcut && TerminalPane.localShellShortcut.isValid
+                checks["shortcutHandlerRouted"] = controller.handleLocalShellShortcut(localKey(), configured: nil)
+                checks["shortcutOpensLocalTerminal"] = controller.tabs.count == oldCount + 1 && controller.selectedTab?.activePane.profile.kind == .local
+                if controller.tabs.count == oldCount + 1 {
+                    checks["shortcutRepeatDoesNotCreateMoreTabs"] = controller.handleLocalShellShortcut(localKey(repeating: true), configured: nil) && controller.tabs.count == oldCount + 1
+                    modal(accept: true) { controller.closeTab() }
+                }
+                controller.select(sourceTab); source.activate()
+                let conflictCount = controller.tabs.count
+                checks["configuredShortcutTakesPriority"] = !controller.handleLocalShellShortcut(localKey(), configured: .find) && controller.tabs.count == conflictCount
+                checks["localShortcutKeepsSSHAlive"] = !source.ended && source.terminal.process.shellPid == oldPID && group.isAvailable
                 checks["UTF8AuthenticationBannerReadable"] = text(source).filter { !$0.isWhitespace && $0 != "\0" }.contains("中文登录提示：仅供授权人员使用。")
                 checks["UTF8BannerNotOctalEscaped"] = !text(source).contains("\\344\\270\\255")
                 checks["literalOctalTextNotDecoded"] = text(source).contains("Literal \\350\\277\\231 stays literal.")
@@ -83,6 +112,7 @@ enum SSHCloneTest {
                 checks["cloneCannotFallBackToPasswordOrTCP"] = cloneArguments?.contains("ProxyCommand=/usr/bin/false") == true && cloneArguments?.contains("BatchMode=yes") == true
                 controller.duplicateTab(sourceTab); let clonedTab = controller.selectedTab!, clone = clonedTab.activePane
                 wait("doubleClickCloneConnected", { clone !== source && clone.sessionReady && text(clone).contains("MUX_READY") && clone.remoteAddress != nil }) {
+                    checks["cloneReportsExistingTransport"] = text(clone).contains("Reusing established connection to \(source.profile.host):\(source.profile.port)...") && !text(clone).contains("Connection established.")
                     checks["cloneKeepsConnectionIdentityAndTitle"] = clone.sshConnectionGroup === group && clone.profile == source.profile && clone.externalTerminalType == source.externalTerminalType
                     checks["clonedSessionUsesDetectedHost"] = (source.title == "nested-real" && source.remoteAddress == "10.30.0.8") && clone.title == source.title
                     checks["independentLocalPTYs"] = clone.terminal.process.shellPid != source.terminal.process.shellPid
@@ -101,6 +131,7 @@ enum SSHCloneTest {
                                     try? Data("reject".utf8).write(to: root.appendingPathComponent("reject-next"))
                                     controller.duplicateTab(nextTab); let refusedTab = controller.selectedTab!, refused = refusedTab.activePane
                                     wait("serverRefusalEndsOnlyNewPane", { refused.ended }) {
+                                        checks["refusedChannelDoesNotClaimNewConnection"] = !text(refused).contains("Connection established.")
                                         checks["refusalKeepsOtherChannels"] = !clone.ended && !split.ended && !next.ended
                                         controller.closeTab()
                                         checks["refusedTabClosesWithoutAuthentication"] = !controller.tabs.contains { $0 === refusedTab }

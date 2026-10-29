@@ -15,7 +15,8 @@ enum LayoutTest {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         guard let window = controller.window, let content = window.contentView else { return }
         let strip = descendants(content).compactMap { $0 as? TabStripView }.first!
-        check(!descendants(content).contains(where: { $0 is NSTableView }), "main window has no session sidebar")
+        check(descendants(content).contains(where: { $0 === controller.sessionSidebar }), "main window contains the session sidebar")
+        check(controller.sessionSidebar.isHiddenOrHasHiddenAncestor == !controller.sessionSidebarVisible, "sidebar follows its visibility setting")
         var catalog = controller.configuration
         let saved = SessionProfile(name: "目录保存测试", group: "测试/原目录", host: "example.test")
         catalog.profiles.append(saved)

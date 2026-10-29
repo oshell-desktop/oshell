@@ -164,12 +164,12 @@ final class OShellTerminal: LocalProcessTerminalView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
         menu.addItem(.separator())
-        for (title, action) in [("Agent 控制与审计", #selector(openAI))] {
+        for (title, action) in [("MCP 控制中心", #selector(openAI))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         return menu
     }
-    @objc private func openAI() { if let owner { owner.onAI?(owner, 0, nil) } }
+    @objc private func openAI() { if let owner { owner.onAI?(owner) } }
     override func rightMouseDown(with event: NSEvent) {
         userInputDepth += 1; defer { userInputDepth -= 1 }
         wordClickSeed = nil
@@ -315,7 +315,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var onCloseRequested: ((TerminalPane) -> Void)?
     var onUserInput: ((TerminalPane, [UInt8]) -> Bool)?
     var onPaste: ((TerminalPane, String) -> Void)?
-    var onAI: ((TerminalPane, Int, String?) -> Void)?
+    var onAI: ((TerminalPane) -> Void)?
     var onPasteImage: ((TerminalPane, TerminalClipboardImage) -> Void)?
     var credentialsForConnection: (() -> SessionProfile)?
     var onSaveAuthenticatedPassword: ((SessionProfile, String, SSHIdentity) -> Void)? { didSet { authBroker?.onSavePassword = onSaveAuthenticatedPassword } }
@@ -400,6 +400,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var promptScan: DispatchWorkItem?
     private var idleTimer: DispatchSourceTimer?
     private var lastActivity = ProcessInfo.processInfo.systemUptime
+    private var connectionNoticeShown = false
+    static let localShellShortcut = KeyboardShortcut(30, KeyboardShortcut.control | KeyboardShortcut.option)
     private(set) var sessionReady = false
     var title: String {
         if isBlank && !isRunningLocalTool { return "空白标签页" }
@@ -636,9 +638,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
     private static func font(_ prefs: Preferences, size: CGFloat? = nil) -> NSFont {
-        BundledTerminalFonts.register()
+        UserTerminalFonts.register()
         let pointSize: CGFloat = size ?? CGFloat(prefs.fontSize)
-        if !prefs.fontName.isEmpty, let font = NSFont(name: prefs.fontName, size: pointSize) { return font }
+        if !prefs.fontName.isEmpty, let font = UserTerminalFonts.resolve(prefs.fontName, size: pointSize) { return font }
         return .monospacedSystemFont(ofSize: pointSize, weight: .regular)
     }
     func setSelected(_ value: Bool, showFocusIndicator: Bool = true) {
@@ -704,6 +706,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 broker.onSavePassword = onSaveAuthenticatedPassword
                 broker.onAuthenticated = { [weak self] in
                     self?.sshConnectionGroup?.authenticatedConnectionReady()
+                    self?.showConnectionEstablished()
                     self?.sessionReady = true; self?.noteActivity(); self?.startIdleTimer(); self?.observeTransportPeer(); self?.refreshHeader(); self?.onState?()
                     self?.schedulePromptScan()
                 }
@@ -711,11 +714,29 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
             // Running the bundled transfer helpers from the local test terminal is convenient.
             environment["PATH"] = ZmodemTransfer.helperDirectory.path + ":" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+            if profile.kind == .ssh {
+                let host = profile.host.contains(":") && !profile.host.hasPrefix("[") ? "[\(profile.host)]" : profile.host
+                let message = reusesSSHConnection ? "Reusing established connection to \(host):\(profile.port)..." : "Connecting to \(host):\(profile.port)..."
+                display(Data((message + "\r\n").utf8))
+                if reusesSSHConnection { showLocalShellHint() }
+            }
             terminal.startProcess(executable: executable, args: args, environment: environment.map { "\($0.key)=\($0.value)" },
                                   currentDirectory: profile.kind == .local ? (localStartDirectory?.path ?? NSHomeDirectory()) : NSHomeDirectory())
             if reusesSSHConnection { sessionReady = true; noteActivity(); startIdleTimer() }
             refreshHeader(); onState?()
         } catch { sshConnectionGroup?.connectionProcessEnded(); ended = true; refreshHeader(); beginEndedInput(); onState?(); onError?(error.localizedDescription) }
+    }
+    private func showConnectionEstablished() {
+        guard !connectionNoticeShown, !isShutdown, !ended else { return }
+        connectionNoticeShown = true
+        display(Data("Connection established.\r\n".utf8))
+        showLocalShellHint()
+    }
+    private func showLocalShellHint() {
+        let shortcuts = SessionSidebarPreferences.shortcuts(ShortcutRuntime.current)
+        let configured = shortcuts.action(for: Self.localShellShortcut)
+        let label = configured == nil || configured == .local ? "Ctrl+Alt+]" : shortcuts.bindings(for: .local).first?.display
+        if let label { display(Data("To open a local shell, press \(label).\r\n\r\n".utf8)) }
     }
     private func beginEndedInput() {
         guard endedInput == nil else { return }

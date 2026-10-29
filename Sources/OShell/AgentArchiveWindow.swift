@@ -66,20 +66,21 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
     private var selectionGeneration = UUID(), scanning = false
     init() {
         let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 820), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Agent 存档与只读回放"; window.minSize = NSSize(width: 800, height: 640); window.isReleasedWhenClosed = false
+        window.title = "MCP 审计与只读回放"; window.minSize = NSSize(width: 800, height: 640); window.isReleasedWhenClosed = false
         super.init(window: window); window.delegate = self
         terminal.terminalDelegate = replayDelegate; terminal.allowMouseReporting = false
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8; stack.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView(); window.contentView = content; content.addSubview(stack)
+        let content = InterfaceSurfaceView(); window.contentView = content; content.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 12), stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
+        AppUI.add(AppUI.pageHeading("存档与回放", subtitle: "查看受控会话的操作记录与终端输出。"), to: stack)
         filter.placeholderString = "按时间、会话、客户端或任务 ID 筛选"; filter.delegate = self
-        stack.addArrangedSubview(NSStackView(views: [filter, AgentButton("刷新存档", action: { [weak self] in self?.reload() }), AgentButton("加密导出…", action: { [weak self] in self?.export() }), AgentButton("删除选定记录…", action: { [weak self] in self?.delete() })]))
+        stack.addArrangedSubview(NSStackView(views: [filter, ActionButton("刷新存档", action: { [weak self] in self?.reload() }), ActionButton("加密导出…", action: { [weak self] in self?.export() }), ActionButton("删除选定记录…", action: { [weak self] in self?.delete() })]))
         let column = NSTableColumn(identifier: .init("archive")); column.title = "时间 · 会话 · 客户端"; column.width = 960; table.addTableColumn(column); table.dataSource = self; table.delegate = self
-        let list = NSScrollView(); list.documentView = table; list.hasVerticalScroller = true; list.heightAnchor.constraint(equalToConstant: 140).isActive = true
+        let list = NSScrollView(); list.documentView = table; list.hasVerticalScroller = true; AppUI.styleScrollSurface(list); list.heightAnchor.constraint(equalToConstant: 140).isActive = true
         stack.addArrangedSubview(list); list.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         speed.addItems(withTitles: ["0.5×", "1×", "2×", "4×", "8×"]); speed.selectItem(at: 1); idle.state = .on
         slider.target = self; slider.action = #selector(seek(_:)); slider.isContinuous = false
-        let controls = NSStackView(views: [AgentButton("播放 / 暂停", action: { [weak self] in self?.paused.toggle() }), speed, idle, slider]); stack.addArrangedSubview(controls); controls.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let controls = NSStackView(views: [ActionButton("播放 / 暂停", action: { [weak self] in self?.paused.toggle() }), speed, idle, slider]); stack.addArrangedSubview(controls); controls.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(status)
         search.placeholderString = "在选定记录内搜索命令、输出或任务 ID"; search.target = self; search.action = #selector(searchRecord)
         stack.addArrangedSubview(search); search.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true

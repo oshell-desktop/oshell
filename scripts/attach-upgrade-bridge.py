@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Add only the audited one-time bridge assets to an unpublished 0.4.1 staging area."""
-import argparse,base64,gzip,hashlib,importlib.util,json,os,plistlib,shutil,subprocess,sys,xml.etree.ElementTree as ET
+import argparse, base64, gzip, hashlib, importlib.util, json, os, plistlib, shutil, subprocess, xml.etree.ElementTree as ET
 from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization

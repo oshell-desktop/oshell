@@ -56,7 +56,7 @@ enum UnicodeDisplayTest {
         view.preferColorEmoji = false
         checks["colorPreferenceDoesNotRewriteHistory"] = model.getBufferAsData() == before && model.buffer.x == column
         view.preferColorEmoji = true
-        BundledTerminalFonts.register()
+        UserTerminalFonts.register()
         if let dejavu = NSFont(name: "DejaVuSansMono", size: 24) {
             view.font = dejavu; view.preferColorEmoji = false; feed("😀")
             let automatic = coloredPixels()

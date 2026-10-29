@@ -13,6 +13,10 @@ with tempfile.TemporaryDirectory(prefix='oshell-clone-',dir='/tmp') as folder:
     (root/'fixture.json').write_text(json.dumps({'password':password}));(root/'fixture.json').chmod(0o600)
     listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]
     (root/'known_hosts').write_text(f'[127.0.0.1]:{port} {key.get_name()} {key.get_base64()}\n')
+    # Seed host trust before the external launcher can start SSH; its service
+    # may become ready before the main-loop fixture callback runs.
+    (root/'config').mkdir()
+    shutil.copy2(root/'known_hosts', root/'config/known_hosts')
     facts={'transports':0,'authenticated':0,'shells':0,'rejected':0,'execRequests':0,'terms':[],'localeRequests':0};lock=threading.Lock()
     def session(channel):
         try:
@@ -73,9 +77,27 @@ with tempfile.TemporaryDirectory(prefix='oshell-clone-',dir='/tmp') as folder:
             threading.Thread(target=client,args=(sock,),daemon=True).start()
     threading.Thread(target=serve,daemon=True).start()
     env=os.environ.copy();env.update(OSHELL_DATA_DIR=str(root/'config'),OSHELL_ZOC_CLONE_TEST_ROOT=folder,OSHELL_LAUNCH_NO_UI='1',LANG='en_US.UTF-8',LC_CTYPE='UTF-8',LC_ALL='C')
-    pid=None;endpoint=None
+    pid=None;endpoint=None;gui=None
     try:
+        # Key-equivalent checks need a LaunchServices-activated application,
+        # rather than a background Process launched by the CLI bridge.
+        command=['open','-n','-W']
+        for env_name in ['OSHELL_DATA_DIR','OSHELL_ZOC_CLONE_TEST_ROOT','OSHELL_LAUNCH_NO_UI','LANG','LC_CTYPE','LC_ALL']:
+            command += ['--env',env_name+'='+env[env_name]]
+        command += ['--stdout',str(root/'app.log'),'--stderr',str(root/'app.log'),str(project/'work/test-app/OShell.app'),'--args','--external-launch-service']
+        gui=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        readiness=time.monotonic()+12
+        while not (root/'app.pid').exists() and not (root/'app-result.json').exists() and gui.poll() is None and time.monotonic()<readiness:time.sleep(.05)
+        if (root/'app.pid').exists():pid=int((root/'app.pid').read_text())
         result=subprocess.run([str(launcher),'/DEV:SSH',f'/CONNECT:{user}:{password}@127.0.0.1:{port}','/EMU:Xterm','/TITLE:USM 克隆测试'],env=env,capture_output=True,timeout=25)
+        # The launch socket can accept before the main-loop test callback runs.
+        ready_deadline = time.monotonic()+5
+        while result.returncode == 0 and not (root/'app.pid').exists() and not (root/'app-result.json').exists() and time.monotonic() < ready_deadline:
+            time.sleep(.05)
+        if not (root/'app.pid').exists():
+            diagnostic = {'launcherExit': result.returncode, 'launcherError': result.stderr.decode(errors='replace').replace(password, '[redacted]')}
+            if (root/'app-result.json').exists(): diagnostic['fixture'] = json.loads((root/'app-result.json').read_text())
+            raise RuntimeError(json.dumps(diagnostic, ensure_ascii=False))
         pid=int((root/'app.pid').read_text());endpoint=pathlib.Path((root/'endpoint.txt').read_text())
         deadline=time.time()+65
         while not (root/'app-result.json').exists() and time.time()<deadline:time.sleep(.1)
@@ -97,4 +119,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-clone-',dir='/tmp') as folder:
             else:
                 try:os.kill(pid,signal.SIGTERM)
                 except ProcessLookupError:pass
+        if gui:
+            try:gui.wait(timeout=5)
+            except subprocess.TimeoutExpired:gui.terminate();gui.wait(timeout=5)
         if endpoint and endpoint.exists():shutil.rmtree(endpoint)

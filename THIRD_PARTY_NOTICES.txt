@@ -64,14 +64,16 @@ Sparkle 2.9.6 — https://github.com/sparkle-project/Sparkle (MIT and bundled co
 
 Public-source packaging changes: SwiftTerm debug buffer dumps use private temporary files instead of an upstream developer home path. Sparkle dSYM files are omitted from the public tree; the XCFramework manifest no longer references them. The framework executables are unchanged before architecture selection and local signing. Sparkle upstream source is included as Vendor/Sparkle-2.9.6-source.tar.gz; build instructions are in that archive.
 
+Unused Sparkle developer utilities (BinaryDelta, generate_appcast, generate_keys and the legacy DSA signer) are omitted. The Ed25519 signer remains available for integration tests. Runtime bundles omit build-only framework headers and module maps; these remain in the build-time XCFramework.
+
 OShell mouse-focus change: macOS Metal rendering surfaces pass hit testing to the parent terminal view, retaining native scrollbars and terminal selection/mouse reporting.
 
 Nerd Fonts Symbols Only v3.4.0 (unmodified SymbolsNerdFontMono-Regular.ttf).
 https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.4.0
 Nerd Fonts: Copyright (c) 2014 Ryan L McIntyre, MIT. Individual icon sets
 retain their own copyright and licenses. See Vendor/NerdFonts/README.md,
-LICENSE and licenses/ (also shipped in Resources/NerdFonts).
-OShell uses the font privately for missing PUA glyphs, without installing it.
+LICENSE and licenses/. Font binaries are development fixtures only and are not shipped in the application.
+Users can import a symbol font privately for missing PUA glyphs, without system installation.
 SwiftTerm changes: explicit private-use glyph fallback in shared row shaping
 and both cursor renderers; the selected font takes precedence when supported.
 
@@ -79,27 +81,27 @@ OShell arrangement scrolling: the macOS terminal wheel handler is overridable so
 
 SwiftTerm display buffer: expose the read-only displayBuffer accessor so host-side repeated word selection uses the same buffer as SwiftTerm's native mouse handlers.
 
+SwiftTerm proportional fonts: digit-based cell metrics and shared glyph/cluster fitting across CoreGraphics, Metal and block cursors preserve the terminal grid while reducing excess letter spacing.
+
 SwiftTerm package manifest and macOS API paths target macOS 15.0; pre-15 availability fallbacks and OShell's legacy-system rendering exclusions are removed.
 
 DejaVu Sans Mono 2.37
 --------------------
-OShell bundles the unmodified Book, Bold, Oblique and Bold Oblique faces.
+The source repository retains unmodified font faces for development tests; the application does not bundle these fonts.
 Fonts are copyright Bitstream; DejaVu changes are in the public domain.
 Upstream: https://dejavu-fonts.github.io/
-Full upstream notices: Vendor/DejaVuFonts/LICENSE, also distributed in
-Contents/Resources/DejaVuFonts. These font licenses remain in effect and
+Full upstream notices: Vendor/DejaVuFonts/LICENSE. These font licenses remain in effect and
 are not replaced by OShell's GPL license.
 
 Cascadia Code 2407.24
 ---------------------
 Copyright (c) 2019 - Present, Microsoft Corporation.
 Reserved Font Name: Cascadia Code.
-OShell bundles the unmodified static TrueType Regular, Bold, Italic and
-Bold Italic faces under the SIL Open Font License, Version 1.1.
+Development fixtures include the unmodified static TrueType Light, Light Italic, Regular, Bold,
+Italic and Bold Italic faces under the SIL Open Font License, Version 1.1.
 Upstream: https://github.com/microsoft/cascadia-code/releases/tag/v2407.24
-Full license: Vendor/CascadiaCode/LICENSE, also distributed in
-Contents/Resources/CascadiaCode. The font license is not replaced by
-OShell's GPL license. Fonts are registered for this process only.
+Full license: Vendor/CascadiaCode/LICENSE. Font binaries are not shipped in the app.
+The font license is not replaced by OShell's GPL license. Imported fonts are registered for this process only.
 
 Unicode 17.0.0 East Asian Ambiguous width data
 https://www.unicode.org/Public/17.0.0/ucd/EastAsianWidth.txt

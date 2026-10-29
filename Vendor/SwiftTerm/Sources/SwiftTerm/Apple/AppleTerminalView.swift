@@ -272,15 +272,47 @@ struct ViewLineInfo {
 /// is in the spirit of Ghostty's `size` constraint; it is not Ghostty's
 /// cap-height CJK down-scaling (#8709), which corrects an up-scaling we never do.
 /// `dx`/`dy` are point offsets applied to the glyph origin; `scale` is a uniform
-/// downscale (`<= 1`).
+/// downscale (`<= 1`). `horizontalScale` additionally fits proportional text
+/// without changing its height or baseline.
 struct GlyphSlotFit {
     var dx: CGFloat = 0
     var dy: CGFloat = 0
     var scale: CGFloat = 1
+    var horizontalScale: CGFloat = 1
+    var scaleX: CGFloat { scale * horizontalScale }
 
     static let identity = GlyphSlotFit()
 
-    var isIdentity: Bool { dx == 0 && dy == 0 && scale == 1 }
+    var isIdentity: Bool { dx == 0 && dy == 0 && scale == 1 && horizontalScale == 1 }
+
+    func draw(_ glyph: CGGlyph, font: CTFont, at position: CGPoint, in context: CGContext) {
+        context.saveGState()
+        context.translateBy(x: position.x, y: position.y)
+        context.scaleBy(x: scaleX, y: scale)
+        var glyph = glyph
+        var origin = CGPoint.zero
+        CTFontDrawGlyphs(font, &glyph, &origin, 1, context)
+        context.restoreGState()
+    }
+}
+
+/// Keep combining marks in the same transformed slot as their base, including
+/// when CoreText splits the cluster across fallback-font runs. Constant space.
+struct GlyphClusterPlacement {
+    private var ordinal = -1
+    private var anchorX: CGFloat = 0
+    private var fit = GlyphSlotFit.identity
+
+    mutating func place(ordinal next: Int, position: CGPoint, font: CTFont,
+                        glyph: CGGlyph, columns: Int, terminal: TerminalView) -> (offset: CGPoint, fit: GlyphSlotFit) {
+        if next != ordinal {
+            ordinal = next
+            anchorX = position.x
+            fit = terminal.glyphSlotFit(font: font, glyph: glyph, columnWidth: columns)
+        }
+        return (CGPoint(x: (position.x - anchorX) * fit.scaleX + fit.dx,
+                        y: position.y * fit.scale + fit.dy), fit)
+    }
 }
 
 extension TerminalView {
@@ -466,19 +498,8 @@ extension TerminalView {
         let lineLeading = CTFontGetLeading (fontSet.normal)
         let cellHeight = ceil((lineAscent + lineDescent + lineLeading) * _lineSpacing)
         #if os(macOS)
-        // The following is a more robust way of getting the largest ascii character width, but comes with a performance hit.
-        // See: https://github.com/migueldeicaza/SwiftTerm/issues/286
-        // var sizes = UnsafeMutablePointer<NSSize>.allocate(capacity: 95)
-        // let ctFont = (font as CTFont)
-        // var glyphs = (32..<127).map { CTFontGetGlyphWithName(ctFont, String(Unicode.Scalar($0)) as CFString) }
-        // withUnsafePointer(to: glyphs[0]) { glyphsPtr in
-        //     fontSet.normal.getAdvancements(NSSizeArray(sizes), forCGGlyphs: glyphsPtr, count: 95)
-        // }
-        // let cellWidth = (0..<95).reduce(into: 0) { partialResult, idx in
-        //     partialResult = max(partialResult, sizes[idx].width)
-        // }
         let glyph = fontSet.normal.glyph(withName: "W")
-        let cellWidth = fontSet.normal.advancement(forGlyph: glyph).width
+        let cellWidth = fontSet.proportionalCellWidth ?? fontSet.normal.advancement(forGlyph: glyph).width
         #else
         let fontAttributes = [NSAttributedString.Key.font: fontSet.normal]
         let cellWidth = "W".size(withAttributes: fontAttributes).width
@@ -490,6 +511,14 @@ extension TerminalView {
         return CellDimension(width: max(1, snappedWidth), height: max(min(snappedHeight, 8192), 1))
     }
 
+    var usesProportionalGrid: Bool {
+        #if os(macOS)
+        return fontSet.proportionalCellWidth != nil
+        #else
+        return false
+        #endif
+    }
+
     /// Computes how to center `glyph` within its `columnWidth`-cell slot (and
     /// scale it down if its ink overflows). Returns ``GlyphSlotFit/identity`` for
     /// ordinary single-cell glyphs, so Latin text in a monospace font is rendered
@@ -497,9 +526,8 @@ extension TerminalView {
     /// CoreGraphics and Metal glyph renderers so they stay pixel-consistent.
     func glyphSlotFit (font: CTFont, glyph: CGGlyph, columnWidth: Int) -> GlyphSlotFit
     {
-        // Only wide cells need adjusting: a single-width glyph in a monospace
-        // font already fills its cell, so we skip the metric lookups entirely.
-        guard columnWidth >= 2, cellDimension != nil else { return .identity }
+        // Monospace single-cell glyphs keep the fast path without metric lookups.
+        guard columnWidth >= 1, columnWidth >= 2 || usesProportionalGrid, cellDimension != nil else { return .identity }
 
         let cellWidth = cellDimension.width
         let cellHeight = cellDimension.height
@@ -512,6 +540,16 @@ extension TerminalView {
 
         var ink = CGRect.zero
         CTFontGetBoundingRectsForGlyphs(font, .horizontal, &g, &ink, 1)
+
+        if columnWidth == 1 {
+            // Preserve the selected font's height and baseline. Only compress a
+            // wide glyph horizontally; center narrow glyphs without stretching.
+            let extent = max(advance.width, ink.maxX) - min(0, ink.minX)
+            let sx = extent > 0 ? min(1, slotWidth / extent) : 1
+            let centered = (slotWidth - advance.width * sx) / 2
+            let dx = min(max(centered, -ink.minX * sx), slotWidth - ink.maxX * sx)
+            return GlyphSlotFit(dx: dx, horizontalScale: sx)
+        }
 
         // Scale down only when the ink would spill outside its slot (rare; this
         // protects oversized substitute glyphs). Never enlarge.
@@ -2115,6 +2153,7 @@ extension TerminalView {
             // Glyph drawing loop — reuses cached CTLines
             for prepared in preparedSegments {
                 var processedGlyphs = 0
+                var placement = GlyphClusterPlacement()
                 for preparedRun in prepared.runs {
                     let run = preparedRun.run
                     let runGlyphsCount = CTRunGetGlyphCount(run)
@@ -2132,81 +2171,35 @@ extension TerminalView {
                     CTRunGetPositions(run, CFRange(), &coreTextPositions)
 
                     var positions = [CGPoint](repeating: .zero, count: runGlyphsCount)
-                    if prepared.segment.utf16IsCellIdentity {
-                        // One UTF-16 unit per cell: glyph index arithmetic
-                        // yields each glyph's column directly.
-                        let startColumn = prepared.segment.column + (processedGlyphs * prepared.segment.columnWidth)
-                        for i in 0..<runGlyphsCount {
-                            let glyphColumn = startColumn + (i * prepared.segment.columnWidth)
-                            positions[i] = CGPoint(
-                                x: lineOrigin.x + CGFloat(glyphColumn) * cellDimension.width,
-                                y: lineOrigin.y + yOffset + coreTextPositions[i].y)
-                        }
-                    } else {
-                        var runIndices = [CFIndex](repeating: 0, count: runGlyphsCount)
+                    var glyphPositions = positions
+                    var fits = [GlyphSlotFit]()
+                    let needsFit = prepared.segment.columnWidth >= 2 || usesProportionalGrid
+                    if needsFit { fits.reserveCapacity(runGlyphsCount) }
+                    var anyScaled = false
+                    var runIndices = [CFIndex]()
+                    if !prepared.segment.utf16IsCellIdentity {
+                        runIndices = [CFIndex](repeating: 0, count: runGlyphsCount)
                         CTRunGetStringIndices(run, CFRange(), &runIndices)
-
-                        // Position each glyph at its source cell's column; glyphs
-                        // sharing a cell (base + combining marks) keep their
-                        // CoreText offsets relative to the cluster's first glyph,
-                        // so marks overlay the base instead of shifting columns.
-                        // Same-cell glyphs are adjacent in glyph order, so a pair
-                        // of locals replaces a per-run anchor dictionary.
-                        var anchorOrdinal = -1
-                        var anchorX: CGFloat = 0
-                        for i in 0..<runGlyphsCount {
-                            let ctPosition = coreTextPositions[i]
-                            let ordinal = prepared.segment.cellOrdinal(forUTF16: runIndices[i])
-                            let intraCluster: CGFloat
-                            if ordinal == anchorOrdinal {
-                                intraCluster = ctPosition.x - anchorX
-                            } else {
-                                anchorOrdinal = ordinal
-                                anchorX = ctPosition.x
-                                intraCluster = 0
-                            }
-                            let glyphColumn = prepared.segment.column + (ordinal * prepared.segment.columnWidth)
-                            positions[i] = CGPoint(
-                                x: lineOrigin.x + CGFloat(glyphColumn) * cellDimension.width + intraCluster,
-                                y: lineOrigin.y + yOffset + ctPosition.y)
+                    }
+                    for i in 0..<runGlyphsCount {
+                        let ordinal = prepared.segment.utf16IsCellIdentity
+                            ? processedGlyphs + i : prepared.segment.cellOrdinal(forUTF16: runIndices[i])
+                        let column = prepared.segment.column + ordinal * prepared.segment.columnWidth
+                        let placed = placement.place(ordinal: ordinal, position: coreTextPositions[i],
+                            font: runFont as CTFont, glyph: runGlyphs[i], columns: prepared.segment.columnWidth, terminal: self)
+                        let x = lineOrigin.x + CGFloat(column) * cellDimension.width
+                        positions[i] = CGPoint(x: x, y: lineOrigin.y + yOffset + coreTextPositions[i].y)
+                        glyphPositions[i] = CGPoint(x: x + placed.offset.x, y: lineOrigin.y + yOffset + placed.offset.y)
+                        if needsFit {
+                            fits.append(placed.fit)
+                            if placed.fit.scaleX != 1 || placed.fit.scale != 1 { anyScaled = true }
                         }
                     }
                     processedGlyphs += runGlyphsCount
-
-                    context.setFillColor(
-                        cachedCGColor(preparedRun.foregroundColor ?? effectiveNativeForegroundColor))
-
-                    // Center full-width (CJK) and substituted glyphs within their
-                    // multi-cell slot instead of pinning them to the cell's left
-                    // edge. `positions` stays grid-aligned for the decorations
-                    // below; only `glyphPositions` is shifted/scaled.
-                    let ctRunFont = runFont as CTFont
-                    var glyphPositions = positions
-                    var scaledFits: [GlyphSlotFit]? = nil
-                    if prepared.segment.columnWidth >= 2 {
-                        var computed = [GlyphSlotFit](repeating: .identity, count: runGlyphsCount)
-                        var anyScaled = false
+                    context.setFillColor(cachedCGColor(preparedRun.foregroundColor ?? effectiveNativeForegroundColor))
+                    if anyScaled {
                         for i in 0..<runGlyphsCount {
-                            let fit = glyphSlotFit(font: ctRunFont, glyph: runGlyphs[i], columnWidth: prepared.segment.columnWidth)
-                            computed[i] = fit
-                            glyphPositions[i].x += fit.dx
-                            glyphPositions[i].y += fit.dy
-                            if fit.scale != 1 { anyScaled = true }
-                        }
-                        if anyScaled { scaledFits = computed }
-                    }
-
-                    if let scaledFits {
-                        // Rare path: at least one glyph overflowed its slot and is
-                        // drawn individually at a reduced point size.
-                        for i in 0..<runGlyphsCount {
-                            let s = scaledFits[i].scale
-                            let drawFont: CTFont = s == 1
-                                ? ctRunFont
-                                : CTFontCreateCopyWithAttributes(ctRunFont, CTFontGetSize(ctRunFont) * s, nil, nil)
-                            var g = runGlyphs[i]
-                            var p = glyphPositions[i]
-                            CTFontDrawGlyphs(drawFont, &g, &p, 1, context)
+                            fits[i].draw(runGlyphs[i], font: runFont as CTFont, at: glyphPositions[i], in: context)
                         }
                     } else {
                         CTFontDrawGlyphs(runFont, runGlyphs, &glyphPositions, glyphPositions.count, context)

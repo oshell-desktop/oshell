@@ -39,6 +39,10 @@ enum SFTPReuseTest {
                 if condition() { checks[label] = true; then() }
                 else if Date() > deadline {
                     checks[label] = false
+                    if let files {
+                        let messages = files.sessions.map { session in descendants(session.view).compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "files.status" }?.stringValue ?? "no status" }
+                        NSLog("Synthetic SFTP timeout %@: %@", label, messages.joined(separator: " | "))
+                    }
                     if label == "sshAuthenticated" {
                         checks["diagnosticHasSelectedTab"] = workspace.selectedTab != nil
                         checks["diagnosticSessionReady"] = workspace.selectedTab?.activePane.sessionReady == true
@@ -88,9 +92,18 @@ enum SFTPReuseTest {
                 guard let files, let first = files.selectedSession else { checks["fileWindowCreated"] = false; finish(); return }
                 wait("toolbarSFTPOpensWithoutPassword", { first.connected && first.listedNames.contains("seed.txt") }) {
                     checks["fileSessionSharesExactTransport"] = first.connectionGroup === group && first.transientPassword == nil
+                    do {
+                        var settings = FileManagementSettings()
+                        for placement in [FileManagementSettings.Placement.left, .right, .bottom, .window] {
+                            settings.placement = placement; try settings.save()
+                            workspace.window?.contentView?.layoutSubtreeIfNeeded()
+                            checks["placementPreservesAuthenticatedSFTP-" + placement.rawValue] = files.selectedSession === first && first.connectionGroup === group && first.connected && group.isAvailable && files.isDocked == (placement != .window)
+                        }
+                    } catch { checks["placementSettings"] = false }
+
                     // Exercise SFTP writes/reads and SCP on that same authenticated transport.
                     DispatchQueue.global().async {
-                        var success = false
+                        var success = false, rsyncChecks = [String: Bool]()
                         do {
                             let backend = try SFTPBackend(profile: profile, knownHosts: known, connectionGroup: group)
                             defer { backend.cancel() }
@@ -105,36 +118,44 @@ enum SFTPReuseTest {
                             let expected = try Data(contentsOf: source)
                             let sftpBytes = try Data(contentsOf: downloaded), scpBytes = try Data(contentsOf: scpDownloaded)
                             success = sftpBytes == expected && scpBytes == expected
+                            rsyncChecks = RsyncTransferChecks.run(profile: profile, knownHosts: known, group: group, root: root)
                         } catch { success = false }
-                        let transferred = success
+                        let transferred = success, rsyncResult = rsyncChecks
                         DispatchQueue.main.async {
+                            checks.merge(rsyncResult) { _, new in new }
                             checks["sftpAndSCPShareTransport"] = transferred
                             guard transferred else { finish(); return }
-                            let strip = descendants(files.window!.contentView!).compactMap { $0 as? TabStripView }.first!
-                            strip.onDuplicate?(first.id)
-                            wait("duplicateFileTabConnected", { files.sessions.count == 2 && files.sessions.allSatisfy(\.connected) }) {
-                                let second = files.selectedSession!
-                                checks["duplicateKeepsTransport"] = second.connectionGroup === group
-                                terminal.shutdown(); workspace.closeTab()
-                                first.cancelFileOperation()
-                                let reconnect = descendants(first.view).compactMap { $0 as? NSButton }.first { $0.title == "重连" }!
-                                reconnect.performClick(nil)
-                                wait("reconnectAfterTerminalClosed", { first.connected && first.listedNames.contains("upload.txt") }) {
-                                    checks["fileLeaseKeepsTransportAlive"] = group.isAvailable && workspace.tabs.isEmpty && second.connected
-                                    try? Data().write(to: root.appendingPathComponent("deny-sftp"))
-                                    files.open(profile, directory: ".", connectionGroup: group)
-                                    let refused = files.selectedSession!
-                                    wait("refusedSFTPFinishes", { !refused.hasActiveOperation }) {
-                                        checks["refusalDoesNotCloseOtherChannels"] = !refused.connected && first.connected && second.connected && group.isAvailable
-                                        files.closeTab(refused.id); try? FileManager.default.removeItem(at: root.appendingPathComponent("deny-sftp"))
-                                        checks["noCredentialsWritten"] = (try? Data(contentsOf: workspace.store.url)) == before
-                                        files.sessions.forEach { $0.shutdown() }
-                                        wait("lastFileCloseReleasesMaster", { !FileManager.default.fileExists(atPath: group.directory.path) }) {
-                                            checks["expiredTransportRejected"] = (try? SFTPBackend(profile: profile, knownHosts: known, connectionGroup: group)) == nil
+                            func remainingChecks() {
+                                let strip = descendants(files.window!.contentView!).compactMap { $0 as? TabStripView }.first!
+                                strip.onDuplicate?(first.id)
+                                wait("duplicateFileTabConnected", { files.sessions.count == 2 && files.sessions.allSatisfy(\.connected) }) {
+                                    let second = files.selectedSession!
+                                    checks["duplicateKeepsTransport"] = second.connectionGroup === group
+                                    terminal.shutdown(); workspace.closeTab()
+                                    first.cancelFileOperation()
+                                    let reconnect = descendants(first.view).compactMap { $0 as? NSButton }.first { $0.title == "重连" }!
+                                    reconnect.performClick(nil)
+                                    wait("reconnectAfterTerminalClosed", { first.connected && first.listedNames.contains("upload.txt") }) {
+                                        checks["fileLeaseKeepsTransportAlive"] = group.isAvailable && workspace.tabs.isEmpty && second.connected
+                                        try? Data().write(to: root.appendingPathComponent("deny-sftp"))
+                                        files.open(profile, directory: ".", connectionGroup: group)
+                                        let refused = files.selectedSession!
+                                        wait("refusedSFTPFinishes", { !refused.hasActiveOperation }) {
+                                            checks["refusalDoesNotCloseOtherChannels"] = !refused.connected && first.connected && second.connected && group.isAvailable
+                                            files.closeTab(refused.id); try? FileManager.default.removeItem(at: root.appendingPathComponent("deny-sftp"))
+                                            checks["noCredentialsWritten"] = (try? Data(contentsOf: workspace.store.url)) == before
+                                            files.sessions.forEach { $0.shutdown() }
+                                            wait("lastFileCloseReleasesMaster", { !FileManager.default.fileExists(atPath: group.directory.path) }) {
+                                                checks["expiredTransportRejected"] = (try? SFTPBackend(profile: profile, knownHosts: known, connectionGroup: group)) == nil
+                                                checks["rsyncRejectsExpiredTransport"] = (try? RsyncTransfer(profile: profile, knownHosts: known, connectionGroup: group)) == nil
                                             finish()
+                                            }
                                         }
                                     }
                                 }
+                            }
+                            RsyncTransferChecks.runUI(first, root: root) { result in
+                                checks.merge(result) { _, new in new }; remainingChecks()
                             }
                         }
                     }

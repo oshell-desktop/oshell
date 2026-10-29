@@ -251,7 +251,7 @@ final class WebDAVFeatureTest {
             let page = StorageSettingsView(workspace: workspace)
             let controls = descendants(page)
             (controls.first { $0.identifier?.rawValue == "sync.policy.mode" } as? NSPopUpButton)?.selectItem(at: 1)
-            for (id, enabled) in [("sessions", false), ("client", true), ("commands", true), ("defaults", true)] {
+            for (id, enabled) in [("sessions", false), ("client", true), ("commands", true), ("defaults", true), ("fonts", true)] {
                 (controls.first { $0.identifier?.rawValue == "sync.policy." + id } as? NSButton)?.state = enabled ? .on : .off
             }
             try page.applySelection()
@@ -275,11 +275,26 @@ final class WebDAVFeatureTest {
                         var restored = workspace.configuration; restored.profiles[0].name = originalLocalName
                         checks["restoredEncryptedStartupFixture"] = workspace.saveConfiguration(restored)
                         var policy = try SyncPolicy.load(); policy.automatic = true; try policy.save()
-                        sync.directoryConfigurationChanged(); offline()
+                        sync.directoryConfigurationChanged(); fontOnlyChange()
                     } catch { checks["selectedUploadVerification"] = false; finish() }
                 }
             }
         } catch { checks["selectedSyncSetup"] = false; finish() }
+    }
+    private func fontOnlyChange() {
+        do {
+            let library = UserTerminalFonts.library, before = try library.manifest()
+            let transport = try client("engine")
+            checks["selectedFontsUploaded"] = try FontManifest.decode(transport.fetchFont("library.json")!.data) == before && !before.fonts.isEmpty
+            let remaining = FontManifest(fonts: Array(before.fonts.dropFirst()))
+            try library.commit(remaining, expecting: before); UserTerminalFonts.didChange(scheduleSync: false)
+            sync.sync(interactive: false)
+            wait("fontOnlyChangeCompletes", condition: { !self.sync.busy && self.sync.phase == .success }) { [self] in
+                do { checks["fontOnlyChangeTransferredWithUnchangedConfig"] = try FontManifest.decode(transport.fetchFont("library.json")!.data) == remaining }
+                catch { checks["fontOnlyChangeTransferredWithUnchangedConfig"] = false }
+                offline()
+            }
+        } catch { checks["fontOnlyChangeSetup"] = false; finish() }
     }
     private func offline() {
         let before = try? Data(contentsOf: workspace.store.url)

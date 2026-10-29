@@ -148,18 +148,30 @@ final class AgentCoordinator {
     func integration(_ pane: TerminalPane) throws {
         guard let grant = grants[pane.id], grant.generation == pane.agentGeneration, pane.agentCanInitialize, grant.audit.error == nil,
               grant.task?.current == nil else { throw ModelError.invalid("终端当前不能启用 Shell 集成。") }
-        grant.token = UUID().uuidString; grant.integrationPending = true
-        let input = Data(AgentCommandPolicy.integration(token: grant.token).utf8)
+        let token = UUID().uuidString
+        grant.token = token; grant.integrationPending = true
+        let input = Data(AgentCommandPolicy.integration(token: token).utf8)
         grant.audit.append(.init(kind: "integration_approval", fields: ["generation": .string(grant.generation.uuidString)], bytes: input)) { [weak self, weak pane, weak grant] ok in DispatchQueue.main.async {
-            guard ok, let self, let pane, let grant, self.grants[pane.id] === grant, grant.integrationPending, pane.agentEligible else { return }
+            guard ok, let self, let pane, let grant, self.grants[pane.id] === grant, grant.token == token, grant.integrationPending, pane.agentEligible else { return }
             pane.agentSend(input, kind: "integration")
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self, weak grant] in
-                guard let grant, grant.integrationPending else { return }; grant.integrationPending = false
-                self?.message = "Shell 未确认集成，请人工检查；未猜测命令成功。"; self?.notify()
+                guard let grant else { return }
+                self?.integrationTimedOut(grant, token: token)
             }
         } }
         notify()
     }
+    private func integrationTimedOut(_ grant: Grant, token: String) {
+        // A completed handshake's delayed timeout must never cancel a newer one.
+        guard grant.token == token, grant.integrationPending else { return }
+        grant.integrationPending = false
+        message = "Shell 未确认集成，请人工检查；未猜测命令成功。"; notify()
+    }
+    #if OSHELL_TEST_HARNESS
+    func expireIntegrationForTesting(_ pane: TerminalPane, token: String) {
+        if let grant = grants[pane.id] { integrationTimedOut(grant, token: token) }
+    }
+    #endif
     func shellEvent(_ text: String, pane: TerminalPane) {
         guard let grant = grants[pane.id], grant.generation == pane.agentGeneration else { return }
         let parts = text.split(separator: ";", omittingEmptySubsequences: false).map(String.init)

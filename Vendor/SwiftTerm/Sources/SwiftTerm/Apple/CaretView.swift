@@ -61,6 +61,7 @@ extension CaretView {
             context.restoreGState()
             return
         }
+        var placement = GlyphClusterPlacement()
         for run in CTLineGetGlyphRuns(ctline) as? [CTRun] ?? [] {
             let runGlyphsCount = CTRunGetGlyphCount(run)
             let runAttributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any] ?? [:]
@@ -72,25 +73,13 @@ extension CaretView {
                 count = runGlyphsCount
             }
 
-            // Center full-width (CJK) glyphs within the caret the same way as the
-            // surrounding text so the character doesn't shift under the cursor,
-            // and scale an oversized glyph down to match (drawTerminalContents
-            // does the same via CTFontCreateCopyWithAttributes). The caret bounds
-            // span `glyphColumnWidth` cells, so the centered glyph isn't clipped.
-            let fits = runGlyphs.map { terminal.glyphSlotFit(font: ctRunFont, glyph: $0, columnWidth: glyphColumnWidth) }
-            var positions = fits.map { CGPoint(x: $0.dx, y: yOffset + $0.dy) }
-            if fits.contains(where: { $0.scale != 1 }) {
-                for i in 0..<runGlyphsCount {
-                    let s = fits[i].scale
-                    let drawFont: CTFont = s == 1
-                        ? ctRunFont
-                        : CTFontCreateCopyWithAttributes(ctRunFont, CTFontGetSize(ctRunFont) * s, nil, nil)
-                    var g = runGlyphs[i]
-                    var p = positions[i]
-                    CTFontDrawGlyphs(drawFont, &g, &p, 1, context)
-                }
-            } else {
-                CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+            var coreTextPositions = [CGPoint](repeating: .zero, count: runGlyphsCount)
+            CTRunGetPositions(run, CFRange(), &coreTextPositions)
+            for i in 0..<runGlyphsCount {
+                let placed = placement.place(ordinal: 0, position: coreTextPositions[i], font: ctRunFont,
+                    glyph: runGlyphs[i], columns: glyphColumnWidth, terminal: terminal)
+                let position = CGPoint(x: placed.offset.x, y: yOffset + placed.offset.y)
+                placed.fit.draw(runGlyphs[i], font: ctRunFont, at: position, in: context)
             }
         }
         context.restoreGState()

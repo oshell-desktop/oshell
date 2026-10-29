@@ -50,9 +50,9 @@ final class AIWorkspaceHost: NSView {
 final class AIAssistantWindow: NSWindowController, NSWindowDelegate {
     var onClose: (() -> Void)?
     init(view: NSView) {
-        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 740), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        window.attachesToOwner = false; window.title = "OShell Agent 控制与审计"; window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 380, height: 660)
+        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 700), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+        window.attachesToOwner = false; window.title = "OShell MCP 控制中心"; window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 380, height: 580)
         super.init(window: window); window.delegate = self; window.contentView = view
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -75,13 +75,13 @@ extension WorkspaceController {
         else { getAIAssistant().show() }
     }
     @objc func showAISettings() { getAIAssistant().show() }
-    func showAI(for pane: TerminalPane, mode: Int, selection: String?) {
+    func showAI(for pane: TerminalPane) {
         pane.onFocus?(pane)
-        let view = getAIAssistant(); view.show(); view.bind(pane, force: true)
+        let view = getAIAssistant(); view.show(); view.bind(pane)
     }
     func refreshAIShortcut() {
         let shortcut = AgentShortcut.binding
-        aiButton.toolTip = "Agent 控制与审计" + (shortcut.map { " · " + $0.display } ?? "")
+        aiButton.toolTip = "MCP 控制中心" + (shortcut.map { " · " + $0.display } ?? "")
         ShortcutRuntime.install(ShortcutRuntime.current)
     }
 }

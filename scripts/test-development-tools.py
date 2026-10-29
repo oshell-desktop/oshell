@@ -13,6 +13,7 @@ def load(name):
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
 CLEAN = load('clean-local-builds')
 UI = load('run-ui-tests')
+EMBED = load('embed-sparkle')
 
 class DevelopmentToolsTests(unittest.TestCase):
     def setUp(self):
@@ -20,6 +21,19 @@ class DevelopmentToolsTests(unittest.TestCase):
     def tearDown(self): self.tmp.cleanup()
     def file(self, name):
         p = self.root/name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('fixture'); return p
+    def test_runtime_framework_omits_only_build_interfaces(self):
+        framework = self.root/'Sparkle.framework'
+        for name in ['Headers', 'PrivateHeaders', 'Modules']:
+            self.file('Sparkle.framework/Versions/B/'+name+'/fixture')
+            (framework/name).symlink_to('Versions/Current/'+name)
+        (framework/'Versions/Current').symlink_to('B')
+        keep = [self.file('Sparkle.framework/Versions/B/'+name) for name in ['Sparkle','Autoupdate','Resources/LICENSE','Resources/zh_CN.lproj/Localizable.strings']]
+        EMBED.remove_build_interfaces(framework)
+        for name in ['Headers', 'PrivateHeaders', 'Modules']:
+            self.assertFalse((framework/name).is_symlink())
+            self.assertFalse((framework/'Versions/B'/name).exists())
+        self.assertTrue((framework/'Versions/Current').is_symlink())
+        for path in keep: self.assertEqual(path.read_text(), 'fixture')
     def test_cleanup_keeps_app_sources_keys_and_dependency_environment(self):
         keep = [self.file(p) for p in ['dist/OShell.app/Contents/MacOS/OShell','Sources/example.swift','.release-private/key','work/test-tools/bin/python','validation/.gitkeep','validation/latest-checks.json']]
         self.file('work/size-review/probe.dSYM/Contents/Resources/DWARF/probe')
@@ -29,6 +43,15 @@ class DevelopmentToolsTests(unittest.TestCase):
         self.assertIn(self.root/'work/build', paths)
         self.assertIn(self.root/'work/release', paths)
         for p in keep: self.assertFalse(any(p == q or q in p.parents for q in paths))
+    def test_retired_agent_probes_do_not_remove_legacy_worktree(self):
+        for name in ['agent-build', 'mcp-sdk-inspect', 'memory-investigation', 'migration-old-source', 'migration-live-check', 'release-050-diagnostics']:
+            self.file('work/'+name+'/generated')
+        legacy = self.file('work/upgrade-bridge/Sources/fixture.swift')
+        paths = CLEAN.candidates(self.root)
+        self.assertIn(self.root/'work/agent-build', paths)
+        self.assertIn(self.root/'work/migration-old-source', paths)
+        self.assertIn(self.root/'work/migration-live-check', paths)
+        self.assertFalse(any(p == legacy or p in legacy.parents for p in paths))
     def retained_app(self, name):
         app = self.root/'work'/name/'OShell.app'
         (app/'Contents').mkdir(parents=True)
@@ -56,6 +79,10 @@ class DevelopmentToolsTests(unittest.TestCase):
         p = self.file('work/build/valuable.txt').parent
         with self.assertRaisesRegex(RuntimeError, 'tracked'):
             CLEAN.validate_targets(self.root, [p], ['work/build/valuable.txt'], [])
+    def test_cleanup_rejects_generated_name_reused_as_worktree(self):
+        path = self.file('work/migration-old-source/.git').parent
+        with self.assertRaisesRegex(RuntimeError, 'independent checkout'):
+            CLEAN.validate_targets(self.root, [path], [], [])
     def test_cleanup_keep_preserves_acceptance_and_only_current_test_app(self):
         kept = self.file('work/test-app/OShell.app/Contents/MacOS/OShell').parents[2]
         old = self.file('work/test-app/OShell-preview-old.app/Contents/MacOS/OShell').parents[2]

@@ -24,7 +24,7 @@ enum SessionSidebarPreferences {
     }
 }
 
-final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSSearchFieldDelegate {
+final class SessionSidebar: InterfaceSurfaceView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSSearchFieldDelegate {
     final class Node: NSObject {
         let key: String, title: String, metadata: String, directory: String?
         let profileID: UUID?, linkID: UUID?
@@ -86,13 +86,15 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         collapse.toolTip = "收缩所有目录；搜索时仅操作当前结果"
         let treeActions = NSStackView(views: [expand, collapse, NSView()]); treeActions.spacing = 6
         let column = NSTableColumn(identifier: .init("session")); column.width = 240
-        tree.addTableColumn(column); tree.outlineTableColumn = column; tree.headerView = nil; tree.rowHeight = 28; tree.allowsMultipleSelection = !selectionOnly
+        tree.addTableColumn(column); tree.outlineTableColumn = column; tree.headerView = nil; tree.rowHeight = 32; tree.allowsMultipleSelection = !selectionOnly
         tree.indentationPerLevel = 14; tree.dataSource = self; tree.delegate = self; tree.target = self; tree.doubleAction = #selector(activateClicked)
         tree.onReturn = { [weak self] in self?.activateSelected() }
         tree.makeContextMenu = { [weak self] row in self?.contextMenu(for: row) }
         tree.setAccessibilityLabel("会话目录树"); tree.identifier = .init(selectionOnly ? "session.link.sourceTree" : "sidebar.session.tree")
         tree.style = .plain
         let scroll = NSScrollView(); scroll.documentView = tree; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
+        AppUI.styleScrollSurface(scroll)
+        tree.usesAlternatingRowBackgroundColors = false
         status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabelColor
         let components: [NSView] = (selectionOnly ? [] : [header]) + [search, treeActions, scroll, status]
         for view in components { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
@@ -102,7 +104,7 @@ final class SessionSidebar: NSView, NSOutlineViewDataSource, NSOutlineViewDelega
         NSLayoutConstraint.activate([
             search.topAnchor.constraint(equalTo: selectionOnly ? topAnchor : header.bottomAnchor, constant: selectionOnly ? 8 : 6), search.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), search.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), search.heightAnchor.constraint(equalToConstant: 24),
             treeActions.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 6), treeActions.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), treeActions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), treeActions.heightAnchor.constraint(equalToConstant: 22),
-            scroll.topAnchor.constraint(equalTo: treeActions.bottomAnchor, constant: 6), scroll.leadingAnchor.constraint(equalTo: leadingAnchor), scroll.trailingAnchor.constraint(equalTo: trailingAnchor), scroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
+            scroll.topAnchor.constraint(equalTo: treeActions.bottomAnchor, constant: 6), scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), scroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -6),
             status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), status.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8), status.heightAnchor.constraint(equalToConstant: 18)
         ])
     }

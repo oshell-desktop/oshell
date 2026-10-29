@@ -139,7 +139,7 @@ public final class StorageLocation {
 
 public enum SharedDataFile {
     /// Do not treat an evicted iCloud placeholder as an empty/new configuration.
-    public static func readIfPresent(_ url: URL) throws -> Data? {
+    public static func readIfPresent(_ url: URL, maximumSize: Int = 64 * 1024 * 1024) throws -> Data? {
         let fm = FileManager.default
         let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
         if values?.isUbiquitousItem == true, let status = values?.ubiquitousItemDownloadingStatus, status == .notDownloaded {
@@ -157,8 +157,8 @@ public enum SharedDataFile {
         guard fd >= 0 else { throw ModelError.invalid("无法读取数据文件：\(url.lastPathComponent)") }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true); defer { try? handle.close() }
         var info = stat()
-        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size <= 64 * 1024 * 1024 else { throw ModelError.invalid("数据文件类型或大小不正确：\(url.lastPathComponent)") }
-        return try handle.read(upToCount: 64 * 1024 * 1024 + 1)
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size <= maximumSize else { throw ModelError.invalid("数据文件类型或大小不正确：\(url.lastPathComponent)") }
+        return try handle.read(upToCount: maximumSize + 1)
     }
     public static func create(_ data: Data, at url: URL) throws {
         let staging = url.deletingLastPathComponent().appendingPathComponent(".oshell-copy-" + UUID().uuidString)

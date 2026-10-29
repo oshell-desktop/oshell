@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Real CLI clients driven by a deterministic loopback model; no provider secrets or real data."""
-import base64, json, os, shutil, subprocess, threading, time, uuid
+import json, os, shutil, subprocess, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 

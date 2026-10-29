@@ -43,7 +43,12 @@ final class WebDAVSync {
     private func fingerprint() -> String? {
         guard let configuration = windows?.active?.configuration ?? windows?.workspaces.first?.configuration,
               let data = try? SessionSyncConfiguration.data(configuration, selection: policy.content) else { return nil }
-        return PlatformDigest.sha256(data).map { String(format: "%02x", $0) }.joined()
+        var fingerprintData = data
+        if policy.content.fontFiles {
+            guard let manifest = try? UserTerminalFonts.library.manifest().encoded() else { return nil }
+            fingerprintData.append(manifest)
+        }
+        return PlatformDigest.sha256(fingerprintData).map { String(format: "%02x", $0) }.joined()
     }
     private func restoreDiagnostics() {
         var identity = directory.map { Data($0.path.utf8) } ?? (try? SharedDataFile.readIfPresent(Self.settingsURL)) ?? Data("disabled".utf8)
@@ -275,7 +280,7 @@ final class WebDAVSync {
                                         if var baseline, Self.same(local, remote) {
                                             baseline.masterPasswordVerifier = local.masterPasswordVerifier
                                             if Self.same(baseline, remote) {
-                                                self.succeeded(unchanged: true)
+                                                self.completeFontSync(client: client, workspace: workspace, token: current, interactive: interactive, unchanged: true)
                                                 return
                                             }
                                         }
@@ -379,7 +384,31 @@ final class WebDAVSync {
                         self.pendingLocalChanges = true; self.phase = .queued; self.status = "本次传输结束，仍有新修改待同步"
                         self.record(.retryNeeded, always: true); self.summary.outcome = .retryNeeded; self.summary.durationMS = self.elapsed; self.diagnostics.saveSummary(self.summary)
                         self.finish(); self.schedule(localChanges: true)
-                    } else { self.succeeded() }
+                    } else { self.completeFontSync(client: client, workspace: workspace, token: token, interactive: interactive) }
+                } catch { self.fail(error, interactive: interactive) }
+            }
+        }
+    }
+    private func completeFontSync(client: SharedSyncTransport, workspace: WorkspaceController, token: UUID, interactive: Bool, unchanged: Bool = false) {
+        guard policy.content.fontFiles else { succeeded(unchanged: unchanged); return }
+        guard let transport = client as? FontSyncTransport else { fail(ModelError.invalid("当前同步通道不支持字体附件。"), interactive: interactive); return }
+        let revision = workspace.configurationRevision
+        let library = FontLibrary(configurationDirectory: store.url.deletingLastPathComponent())
+        let baseline = Self.root.appendingPathComponent("font-baselines").appendingPathComponent(summary.scope + ".json")
+        phase = .writing; status = "正在同步字体附件…"; notify()
+        DispatchQueue.global(qos: .utility).async { [weak self, weak workspace] in
+            let result = Result {
+                try FileManager.default.createDirectory(at: baseline.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try FontLibrarySync.synchronize(local: library, transport: transport, baseline: baseline, validate: UserTerminalFonts.validate)
+            }
+            DispatchQueue.main.async {
+                guard let self, self.token == token, let workspace else { return }
+                do {
+                    try result.get(); UserTerminalFonts.didChange(scheduleSync: false)
+                    if workspace.configurationRevision != revision {
+                        self.pendingLocalChanges = true; self.phase = .queued; self.status = "字体传输完成，仍有配置修改待同步"
+                        self.finish(); self.schedule(localChanges: true)
+                    } else { self.succeeded(unchanged: unchanged) }
                 } catch { self.fail(error, interactive: interactive) }
             }
         }

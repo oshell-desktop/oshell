@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Build and stage the explicitly pinned, one-time bridge from its separate checkout."""
-import argparse,json,os,plistlib,shutil,subprocess,sys
+import argparse, plistlib, subprocess, sys
 from pathlib import Path
 import update_migration as M
 

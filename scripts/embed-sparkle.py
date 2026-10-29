@@ -10,11 +10,22 @@ def run(args): subprocess.run([str(x) for x in args],check=True,stdout=subproces
 def macho(path):
     if not path.is_file() or path.is_symlink(): return False
     with path.open('rb') as f: return f.read(4) in [b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca']
+def remove_build_interfaces(framework):
+    # Headers/module maps are used from Vendor during compilation, not at runtime.
+    # Leave executable code, localization, licenses and the framework layout intact.
+    versions = framework/'Versions'
+    roots = [framework] + ([p for p in versions.iterdir() if p.is_dir() and not p.is_symlink()] if versions.is_dir() else [])
+    for root in roots:
+        for name in ('Headers', 'PrivateHeaders', 'Modules'):
+            path = root/name
+            if path.is_symlink(): path.unlink()
+            elif path.is_dir(): shutil.rmtree(path)
 def embed(app, arches):
     framework=app/'Contents/Frameworks/Sparkle.framework'
     if framework.exists(): shutil.rmtree(framework)
     framework.parent.mkdir(parents=True,exist_ok=True)
     shutil.copytree(SOURCE,framework,symlinks=True)
+    remove_build_interfaces(framework)
     for path in framework.rglob('*'):
         if not macho(path): continue
         actual=subprocess.check_output(['lipo','-archs',str(path)],text=True).split()

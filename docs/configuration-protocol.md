@@ -53,3 +53,21 @@ OShell 的 WebDAV 地址支持显式 HTTP 与 HTTPS；该地址及传输选项�
 ### 本机全局代理策略
 
 全局代理的开启状态及所选代理 UUID 只存入本机工作目录的 `global-proxy.json`，不加入共享配置。代理条目、上级引用和凭据继续沿用 v2 合同；运行时覆盖路线不修改会话原始代理字段，也不参与编码。Desktop 读取共享文档时仍按各会话配置连接，全局开关不会随同步传播。
+
+### 字体附件（独立于共享配置 v2）
+
+字体不增加 Configuration 或 SessionArchive 字段。Mac 本机 `sync-policy.json` 的 `content.fontFiles` 默认为 false，旧策略解码也为 false。启用后，目录同步在 `configuration.json` 旁使用 `fonts/`；WebDAV 在实际 `oshell-vault.json` 旁使用 `fonts/`；导出备份在 `<JSON 文件名>.assets/fonts/` 保存活动字体。
+
+`library.json` 的格式为 `{"format":"OShell.font-library","version":1,"fonts":[{"sha256":"<64 位小写十六进制>","extension":"ttf","size":1234}]}`。仅允许 ttf/otf/ttc/otc；未知版本和字段、重复路径、损坏文件拒绝应用。清单和字体为明文；单文件上限 20 MiB，活动库上限 64 文件、64 MiB。文件名由摘要和扩展名组成，禁止任意路径。敏感配置仍沿用既有加密信封，不进入字体目录。
+
+清单采用强 ETag/条件写入与本机 CAS；不可变字体对象先传输并验证，最后提交清单。无变化不重写远端。独立新增取并集，基准内被任一端删除的成员退出活动清单；清单异常消失不视作全部删除。每个同步目标保留独立本机基准，旧字体块保留用于恢复。下载或导入先验证摘要及 CoreText 格式，再激活清单。
+
+此附件扩展由 macOS OShell 实现；当前 Desktop 不加载字体附件，也不修改附件目录。核心共享 v2 合同和生成代码未变化。互通回归在真实 Desktop 配置写入前后检查附件字节不变，且继续验证双方配置、凭据及引用。
+
+### 0.6.0 发布互通验证
+
+- OShell：`v0.6.0`；Desktop：`28571b3a41d15777f79ae77f2658755d0abebaee`（工作区干净，未修改或发布）。
+- 字段合同 SHA-256：`9a82a335e40d315f9a54455c874f87bcaea0fe3551a69770d67955f439261657`。
+- Swift 核心源码 SHA-256：`8ccc0f63766d1eebfdb9fbbc5212c8c249796c2e9c4d03f69a86c7adcb3c8efe`。
+- Go 兼容样本、真实 Swift → Go → Swift / Go → Swift → Go、多节点目录与 WebDAV 同步验证通过；密码、代理及引用保留，无变化不重写。
+- 16 种同步类别组合及字体附件保留验证通过；Desktop 回写共享配置后，字体附件字节不变。发布检查确认核心源码与上述互通验证的摘要一致。

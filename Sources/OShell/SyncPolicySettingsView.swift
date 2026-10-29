@@ -8,8 +8,9 @@ final class SyncPolicySettingsView: NSStackView {
     private let changes = NSButton(checkboxWithTitle: "配置修改后同步", target: nil, action: nil)
     private let interval = NSTextField(), delay = NSTextField(), retry = NSTextField()
     private let sessions = NSButton(checkboxWithTitle: "会话资料（会话、目录、快捷链接、代理及加密密码）", target: nil, action: nil)
-    private let client = NSButton(checkboxWithTitle: "客户端设置（字体、主题、终端行为、通用快捷键及高亮规则）", target: nil, action: nil)
+    private let client = NSButton(checkboxWithTitle: "客户端设置（字体选择、主题、终端行为、通用快捷键及高亮规则）", target: nil, action: nil)
     private let commands = NSButton(checkboxWithTitle: "快速命令", target: nil, action: nil)
+    private let fonts = NSButton(checkboxWithTitle: "字体文件（可选，明文附件；默认不包含）", target: nil, action: nil)
     private let defaults = NSButton(checkboxWithTitle: "默认会话属性", target: nil, action: nil)
     private var original = SyncPolicy()
     var changed: Bool { (try? values()) != original }
@@ -22,7 +23,7 @@ final class SyncPolicySettingsView: NSStackView {
         mode.addItems(withTitles: ["自动同步", "仅手动同步"]); mode.identifier = .init("sync.policy.mode")
         mode.target = self; mode.action = #selector(updateEnabled)
         addArrangedSubview(NSStackView(views: [NSTextField(labelWithString: "同步模式"), mode]))
-        for (control, id) in [(sessions,"sessions"), (client,"client"), (commands,"commands"), (defaults,"defaults"), (startup,"startup"), (changes,"changes")] {
+        for (control, id) in [(sessions,"sessions"), (client,"client"), (commands,"commands"), (defaults,"defaults"), (fonts,"fonts"), (startup,"startup"), (changes,"changes")] {
             if id == "sessions" || id == "startup" {
                 let label = NSTextField(labelWithString: id == "sessions" ? "同步内容" : "触发与重试")
                 label.font = .systemFont(ofSize: 12, weight: .semibold); addArrangedSubview(label)
@@ -50,6 +51,7 @@ final class SyncPolicySettingsView: NSStackView {
         interval.stringValue = String(policy.checkInterval); delay.stringValue = String(policy.changeDelay); retry.stringValue = String(policy.retryInterval)
         sessions.state = policy.content.sessions ? .on : .off; client.state = policy.content.clientSettings ? .on : .off
         commands.state = policy.content.quickCommands ? .on : .off; defaults.state = policy.content.sessionDefaults ? .on : .off
+        fonts.state = policy.content.fontFiles ? .on : .off
         updateEnabled()
     }
     func values() throws -> SyncPolicy {
@@ -60,6 +62,7 @@ final class SyncPolicySettingsView: NSStackView {
         }
         value.content.sessions = sessions.state == .on; value.content.clientSettings = client.state == .on
         value.content.quickCommands = commands.state == .on; value.content.sessionDefaults = defaults.state == .on
+        value.content.fontFiles = fonts.state == .on
         try value.validate(); return value
     }
     @objc private func updateEnabled() {

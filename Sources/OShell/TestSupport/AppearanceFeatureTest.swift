@@ -121,6 +121,18 @@ enum AppearanceFeatureTest {
         controller.showPreferences()
         checks["cascadiaSavedAcrossReload"] = (try? controller.store.load().preferences.fontName) == "CascadiaCode-Regular"
         checks["cascadiaAppliesAllOpenTerminals"] = panes.allSatisfy { $0.terminal.font.fontName == "CascadiaCode-Regular" }
+        modal { root in
+            let tabs = descendants(root).compactMap { $0 as? NSTabView }.first
+            tabs?.selectTabViewItem(at: 0)
+            let fonts = descendants(root).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "settings.terminal.font" }
+            let item = fonts?.itemArray.first { ($0.representedObject as? String) == "CascadiaCode-Light" }
+            checks["cascadiaLightInSettings"] = item != nil
+            if let fonts, let item { fonts.select(item) }
+            descendants(root).compactMap { $0 as? NSButton }.first { $0.title == "应用" }?.performClick(nil)
+        }
+        controller.showPreferences()
+        checks["cascadiaLightSavedAcrossReload"] = (try? controller.store.load().preferences.fontName) == "CascadiaCode-Light"
+        checks["cascadiaLightAppliesAllOpenTerminals"] = panes.allSatisfy { $0.terminal.font.fontName == "CascadiaCode-Light" }
         checks["savedAcrossReload"] = (try? controller.store.load().preferences.colorSchemeID) == "nord"
         checks["appliesAllOpenTerminals"] = panes.allSatisfy { $0.terminal.nativeBackgroundColor.rgbHex == "#2E3440" }
         checks["doesNotRecreateConnections"] = panes.map { $0.terminal.process.shellPid } == pids

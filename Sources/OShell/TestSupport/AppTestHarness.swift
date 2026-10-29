@@ -11,10 +11,22 @@ enum AppTestHarness {
     && CommandLine.arguments.contains(where: { ["--agent-control-test", "--auth-concurrency-test", "--login-password-save-test", "--third-party-import-test", "--keyboard-shortcuts-test", "--toolbar-actions-test", "--quicksend-groups-test", "--tab-behavior-test", "--layout-test", "--zmodem-progress-test", "--zmodem-regression-test", "--file-feature-test", "--search-test", "--host-identity-test", "--session-links-test", "--session-defaults-test", "--shell-integration-test", "--live-keepalive-test", "--appearance-test", "--quicksend-persistence-test", "--local-password-test", "--management-test", "--startup-protection-test", "--tab-drag-test", "--tab-actions-test", "--master-removal-test", "--update-feature-test", "--update-integration-test", "--terminal-focus-test", "--terminal-symbols-test", "--session-directory-test", "--quicksend-focus-test", "--arrangement-scroll-test", "--tab-number-test", "--links-catalog-test", "--named-tab-groups-test"].contains($0) })
 
     static func prepare() {
+        // Test fonts are imported from development fixtures into isolated data;
+        // neither the production app nor the test app bundles font binaries.
+        if !CommandLine.arguments.contains("--font-library-test"), let root = ProcessInfo.processInfo.environment["OSHELL_TEST_FONT_ROOT"], ProcessInfo.processInfo.environment["OSHELL_DATA_DIR"] != nil {
+            let fonts = ["NerdFonts", "DejaVuFonts", "CascadiaCode"].flatMap { directory in
+                (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: root).appendingPathComponent(directory), includingPropertiesForKeys: nil))?.filter { $0.pathExtension == "ttf" } ?? []
+            }
+            do { try UserTerminalFonts.importFiles(fonts); UserTerminalFonts.register() } catch { NSLog("Synthetic fonts: %@", error.localizedDescription) }
+        }
         if CommandLine.arguments.contains("--terminal-interrupt-test") { TerminalInterruptTest.prepare() }
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.install() }
     }
     static func run(_ controller: WorkspaceController) {
+        if CommandLine.arguments.contains("--font-library-test") { FontLibraryTest.run(controller); return }
+        if CommandLine.arguments.contains("--interface-design-test") { InterfaceDesignTest.run(controller); return }
+        if CommandLine.arguments.contains("--file-presentation-test") { FilePresentationTest.run(controller); return }
+        if CommandLine.arguments.contains("--agent-panel-test") { AgentPanelTest.run(controller); return }
         if CommandLine.arguments.contains("--agent-resources-test") { AgentResourceTest.run(controller); return }
         if CommandLine.arguments.contains("--agent-replay-test") { AgentReplayTest.run(controller); return }
         if CommandLine.arguments.contains("--agent-control-test") { AgentControlTest.run(controller); return }

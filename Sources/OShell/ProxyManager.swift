@@ -16,7 +16,7 @@ final class ProxyManager: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             let column = NSTableColumn(identifier: .init(id)); column.title = title; column.width = width; table.addTableColumn(column)
         }
         table.rowHeight = 26; table.delegate = self; table.dataSource = self; table.target = self; table.doubleAction = #selector(edit)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 42, width: 760, height: 308)); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 42, width: 760, height: 308)); scroll.documentView = table; scroll.hasVerticalScroller = true; AppUI.styleScrollSurface(scroll)
         root.addSubview(scroll)
         for (index, item) in [("新增",#selector(add)),("编辑",#selector(edit)),("删除",#selector(remove))].enumerated() {
             let button = NSButton(title: item.0, target: self, action: item.1); button.bezelStyle = .rounded

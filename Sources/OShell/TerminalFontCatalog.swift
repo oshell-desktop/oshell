@@ -27,20 +27,21 @@ enum TerminalFontCatalog {
         return CTFontGetGlyphsForCharacters(font as CTFont, units, &glyphs, units.count)
     }
     static func available() -> [Entry] {
-        BundledTerminalFonts.register()
+        UserTerminalFonts.register()
         let manager = NSFontManager.shared
+        let imported = Set(UserTerminalFonts.faces.map(\.name))
         var seen = Set<String>()
         return manager.availableFontFamilies.compactMap { family -> Entry? in
             guard !family.hasPrefix("."), family != "LastResort",
                   let font = manager.font(withFamily: family, traits: [], weight: 5, size: 13),
-                  supportsTerminalText(font), seen.insert(font.fontName).inserted,
-                  !font.fontName.hasPrefix("DejaVuSansMono"), font.familyName != "Cascadia Code" else { return nil }
+                  supportsTerminalText(font), seen.insert(font.fontName).inserted, !imported.contains(font.fontName) else { return nil }
             let path = (CTFontCopyAttribute(font as CTFont, kCTFontURLAttribute) as? URL)?.path ?? ""
             let system = path.hasPrefix("/System/Library/") || path.hasPrefix("/Library/Apple/System/")
             return Entry(name: font.fontName, title: font.familyName ?? family, monospaced: isMonospaced(font), system: system)
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
     static func populate(_ popup: NSPopUpButton, selected: String) {
+        popup.removeAllItems()
         popup.identifier = .init("settings.terminal.font")
         popup.setAccessibilityLabel("终端字体")
         popup.menu?.autoenablesItems = false
@@ -54,8 +55,14 @@ enum TerminalFontCatalog {
             popup.menu?.addItem(heading)
         }
         add("系统等宽（自动）", name: "")
-        add("DejaVu Sans Mono（内置）", name: "DejaVuSansMono")
-        add("Cascadia Code（内置）", name: "CascadiaCode-Regular")
+        UserTerminalFonts.register()
+        if !UserTerminalFonts.faces.isEmpty {
+            section("已导入字体")
+            var seen = Set<String>()
+            for face in UserTerminalFonts.faces where seen.insert(face.name).inserted {
+                if let font = NSFont(name: face.name, size: 13), supportsTerminalText(font) { add(face.title + "（已导入）", name: face.name) }
+            }
+        }
         let entries = available()
         for (monospaced, title) in [(true, "本机等宽字体（推荐）"), (false, "其他本机字体（非等宽）")] {
             let group = entries.filter { $0.monospaced == monospaced }
@@ -67,13 +74,13 @@ enum TerminalFontCatalog {
         // or the font was removed. Merely opening settings must not overwrite it.
         if !selected.isEmpty, !popup.itemArray.contains(where: { ($0.representedObject as? String) == selected }) {
             section("当前配置")
-            let font = NSFont(name: selected, size: 13)
-            add((font?.displayName ?? selected) + (font == nil ? "（未安装，暂用系统等宽）" : "（当前字形）"), name: selected)
+            let font = UserTerminalFonts.resolve(selected, size: 13)
+            add((font?.displayName ?? selected) + (font == nil ? "（未安装或未导入，暂用系统等宽）" : "（当前字形）"), name: selected)
         }
         if let item = popup.itemArray.first(where: { ($0.representedObject as? String) == selected }) { popup.select(item) }
     }
     static func previewFont(_ popup: NSPopUpButton) -> NSFont {
         let name = popup.selectedItem?.representedObject as? String ?? ""
-        return (name.isEmpty ? nil : NSFont(name: name, size: 13)) ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
+        return (name.isEmpty ? nil : UserTerminalFonts.resolve(name, size: 13)) ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
     }
 }

@@ -62,20 +62,21 @@ final class HighlightManager: NSWindowController, NSTableViewDataSource, NSTable
     private var selectedID: UUID?
     init(workspace: WorkspaceController) {
         self.workspace = workspace
-        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 460), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 530), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "突出显示集"; window.minSize = NSSize(width: 740, height: 380); window.isReleasedWhenClosed = false
         super.init(window: window); window.center()
         sets.target = self; sets.action = #selector(selectSet); sets.widthAnchor.constraint(equalToConstant: 230).isActive = true
         let bar = NSStackView(views: [sets, operatorButton("新建集", target: self, action: #selector(addSet)), operatorButton("重命名", target: self, action: #selector(renameSet)), operatorButton("删除集", target: self, action: #selector(removeSet)), NSView(), operatorButton("启用此集", target: self, action: #selector(activate)), operatorButton("关闭高亮", target: self, action: #selector(disable))]); bar.spacing = 8
         for (id, title, width) in [("enabled", "启用", 45.0), ("pattern", "关键字 / 正则", 380.0), ("type", "类型", 100.0), ("color", "颜色", 100.0)] { let c = NSTableColumn(identifier: .init(id)); c.title = title; c.width = width; table.addTableColumn(c) }
         table.delegate = self; table.dataSource = self; table.rowHeight = 28; table.target = self; table.doubleAction = #selector(editRule)
-        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; AppUI.styleScrollSurface(scroll)
         let bottom = NSStackView(views: [operatorButton("添加规则", target: self, action: #selector(addRule)), operatorButton("编辑", target: self, action: #selector(editRule)), operatorButton("删除规则", target: self, action: #selector(removeRule)), NSView()]); bottom.spacing = 8
         let hint = NSTextField(wrappingLabelWithString: "规则按列表顺序优先匹配；${hostname} 表示当前标签的主机名。颜色仅影响显示，不改变日志。每集最多 32 条规则，正则按终端显示行匹配。")
         hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
         let content = window.contentView!
-        [bar, scroll, bottom, hint].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
-        NSLayoutConstraint.activate([bar.topAnchor.constraint(equalTo: content.topAnchor, constant: 12), bar.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), bar.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), scroll.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 12), scroll.leadingAnchor.constraint(equalTo: bar.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: bar.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -10), bottom.leadingAnchor.constraint(equalTo: bar.leadingAnchor), bottom.trailingAnchor.constraint(equalTo: bar.trailingAnchor), bottom.bottomAnchor.constraint(equalTo: hint.topAnchor, constant: -10), hint.leadingAnchor.constraint(equalTo: bar.leadingAnchor), hint.trailingAnchor.constraint(equalTo: bar.trailingAnchor), hint.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
+        let heading = AppUI.pageHeading("突出显示", subtitle: "管理规则集合，让终端中的关键信息更易识别。")
+        [heading, bar, scroll, bottom, hint].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
+        NSLayoutConstraint.activate([heading.topAnchor.constraint(equalTo: content.topAnchor, constant: 20), heading.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20), heading.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20), bar.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 18), bar.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), bar.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), scroll.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 12), scroll.leadingAnchor.constraint(equalTo: bar.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: bar.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -10), bottom.leadingAnchor.constraint(equalTo: bar.leadingAnchor), bottom.trailingAnchor.constraint(equalTo: bar.trailingAnchor), bottom.bottomAnchor.constraint(equalTo: hint.topAnchor, constant: -10), hint.leadingAnchor.constraint(equalTo: bar.leadingAnchor), hint.trailingAnchor.constraint(equalTo: bar.trailingAnchor), hint.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private var current: HighlightSet? { workspace?.configuration.highlightSets.first { $0.id == selectedID } }

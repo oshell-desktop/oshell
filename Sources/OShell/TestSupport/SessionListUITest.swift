@@ -10,8 +10,12 @@ enum SessionListUITest {
         guard let output = ProcessInfo.processInfo.environment["OSHELL_SESSION_LIST_ROOT"] else { return }
         let destination = URL(fileURLWithPath: output)
         var checks = [String: Bool]()
-        var profiles = (0..<40).map { index in
-            SessionProfile(name: index == 0 ? "服务器 00 · 生产环境数据库 · production-database-primary-long-name" : String(format: "服务器 %02d · develop", index), group: "生产环境/华东机房", host: index == 0 ? "database-primary.internal.example.test" : "192.0.2.\(index + 1)", port: index == 0 ? 65535 : 22, username: index == 0 ? "administrator-long-name" : "ops")
+        var profiles: [SessionProfile] = (0..<40).map { index in
+            let name = index == 0 ? "服务器 00 · 生产环境数据库 · production-database-primary-long-name" : String(format: "服务器 %02d · develop", index)
+            let host = index == 0 ? "database-primary.internal.example.test" : "192.0.2.\(index + 1)"
+            let port = index == 0 ? 65535 : 22
+            let username = index == 0 ? "administrator-long-name" : "ops"
+            return SessionProfile(name: name, group: "生产环境/华东机房", host: host, port: port, username: username)
         }
         profiles[1].kind = .sftp; profiles[2].kind = .ftp; profiles[3].kind = .local
         controller.configuration.profiles = profiles

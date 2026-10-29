@@ -36,9 +36,14 @@ final class AgentControlTest {
     private func begin() {
         do {
             checks["serviceDefaultsOff"] = !coordinator.enabled
+            let panel = workspace.getAIAssistant(); panel.detach()
             try coordinator.enable(); token = try coordinator.pair(name: "synthetic-client")
             try coordinator.grant(pane: pane, client: coordinator.clients.last!.id, permission: .assist)
             try coordinator.integration(pane)
+            let oldToken = coordinator.grants[pane.id]!.token
+            try coordinator.integration(pane)
+            coordinator.expireIntegrationForTesting(pane, token: oldToken)
+            checks["staleIntegrationTimeoutPreservesNewHandshake"] = coordinator.grants[pane.id]?.integrationPending == true && coordinator.grants[pane.id]?.token != oldToken
             let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/OShell-MCP").path
             try PrivateFile.write(Data(AgentClientConfiguration.codex(helper: helper, socket: coordinator.socketPath, token: token).utf8), to: root.appendingPathComponent("codex-mcp.toml"))
             try PrivateFile.write(Data(AgentClientConfiguration.opencode(helper: helper, socket: coordinator.socketPath, token: token).utf8), to: root.appendingPathComponent("opencode-mcp.json"))
@@ -62,7 +67,23 @@ final class AgentControlTest {
         lastAction = id
         do {
             switch action["action"] {
-            case "approve": if let value = action["operation"], let id = UUID(uuidString: value) { coordinator.approve(id, allow: true) }
+            case "approve": if let value = action["operation"], let id = UUID(uuidString: value) {
+                let panel = workspace.getAIAssistant()
+                func views(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(views) }
+                if let tabs = views(panel).first(where: { $0.identifier?.rawValue == "mcp.sections" }) as? NSSegmentedControl {
+                    checks["pendingApprovalVisibleInTab"] = tabs.label(forSegment: 1)?.hasPrefix("待审批") == true
+                    tabs.selectedSegment = 1; NSApp.sendAction(tabs.action!, to: tabs.target, from: tabs)
+                }
+                panel.layoutSubtreeIfNeeded()
+                if let button = views(panel).compactMap({ $0 as? NSButton }).first(where: { $0.title == "批准此命令" }), coordinator.operations[id]?.state == "pending_approval" {
+                    button.scrollToVisible(button.bounds); panel.layoutSubtreeIfNeeded()
+                    if let bitmap = panel.bitmapImageRepForCachingDisplay(in: panel.bounds) {
+                        panel.cacheDisplay(in: panel.bounds, to: bitmap)
+                        try? bitmap.representation(using: .png, properties: [:])?.write(to: output.deletingPathExtension().appendingPathExtension("approval.png"))
+                    }
+                    button.performClick(nil); checks["approvalThroughPanel"] = true
+                } else { checks["approvalThroughPanel"] = false; coordinator.approve(id, allow: true) }
+            }
             case "permission": coordinator.setPermission(AgentPermission(rawValue: action["value"] ?? "") ?? .ask, pane: pane.id)
             case "integrate": try coordinator.integration(pane)
             case "human": pane.sendManaged(Array((action["value"] ?? "").utf8))

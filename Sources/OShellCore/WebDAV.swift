@@ -115,7 +115,7 @@ private final class DAVCollectionResponse: NSObject, XMLParserDelegate {
         return parser.parse() && delegate.matches == 1 && delegate.isCollection
     }
 }
-public final class WebDAVClient {
+public final class WebDAVClient: FontSyncTransport {
     private let settings: WebDAVSettings, directory: URL
     private let lock = NSLock()
     private var active: URLSession?, cancelled = false
@@ -202,4 +202,33 @@ public final class WebDAVClient {
         if response.statusCode == 412 { throw WebDAVFailure.conflict }
         guard [200, 201, 204].contains(response.statusCode) else { throw WebDAVFailure.status(response.statusCode) }
     }
+    public func checkFontSyncActive() throws {
+        lock.lock(); let stopped = cancelled; lock.unlock()
+        guard !stopped else { throw ModelError.invalid("字体同步已取消。") }
+    }
+    private func fontURL(_ name: String, create: Bool) throws -> URL {
+        guard FontLibrary.validAttachmentName(name) else { throw ModelError.invalid("字体附件路径无效。") }
+        let folder = try syncDirectory().appendingPathComponent("fonts", isDirectory: true)
+        if create, try !collectionExists(folder) {
+            let (response, _) = try request("MKCOL", url: folder)
+            guard [201, 405].contains(response.statusCode), try collectionExists(folder) else { throw WebDAVFailure.status(response.statusCode) }
+        }
+        return folder.appendingPathComponent(name)
+    }
+    public func fetchFont(_ name: String) throws -> WebDAVObject? {
+        let (response, data) = try request("GET", url: fontURL(name, create: false))
+        if response.statusCode == 404 { return nil }
+        guard response.statusCode == 200 else { throw WebDAVFailure.status(response.statusCode) }
+        guard let tag = response.allHeaderFields.first(where: { String(describing: $0.key).lowercased() == "etag" }).map({ String(describing: $0.value) }), Self.validETag(tag) else { throw WebDAVFailure.unsafeVersion }
+        return WebDAVObject(data: data, etag: tag)
+    }
+    public func putFont(_ data: Data, name: String, matching etag: String?) throws {
+        guard data.count <= FontLibrary.maximumFileSize else { throw WebDAVFailure.tooLarge }
+        if let etag, !Self.validETag(etag) { throw WebDAVFailure.unsafeVersion }
+        let headers = ["Content-Type": name == "library.json" ? "application/json" : "application/octet-stream", etag == nil ? "If-None-Match" : "If-Match": etag ?? "*"]
+        let (response, _) = try request("PUT", url: fontURL(name, create: true), data: data, headers: headers)
+        if response.statusCode == 412 { throw WebDAVFailure.conflict }
+        guard [200, 201, 204].contains(response.statusCode) else { throw WebDAVFailure.status(response.statusCode) }
+    }
+
 }

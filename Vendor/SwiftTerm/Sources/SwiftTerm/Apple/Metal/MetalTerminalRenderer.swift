@@ -1328,6 +1328,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
 
         for shaped in shapedSegments {
+            var placement = GlyphClusterPlacement()
             for run in shaped.runs {
                 let runGlyphsCount = run.shaperRun.glyphCount
                 if runGlyphsCount == 0 {
@@ -1340,11 +1341,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 let textColor = runAttributes[.foregroundColor] as? TTColor ?? terminalView.effectiveNativeForegroundColor
                 let textColorSIMD = colorToSIMD(textColor)
 
-                // Same-cell glyphs (base + combining marks) are adjacent in
-                // glyph order, so a pair of locals replaces a per-run anchor
-                // dictionary.
-                var anchorOrdinal = -1
-                var anchorX: CGFloat = 0
+                // Share the cluster transform with the CPU and cursor paths.
                 for glyphRun in run.shaperRun.glyphRuns {
                     let scaledFont = scaledFontFor(font: glyphRun.font, scale: scale)
                     for i in 0..<glyphRun.glyphs.count {
@@ -1358,33 +1355,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                         let ctPos = glyphRun.positions[i]
                         let stringIndex = run.utf16Offset + glyphRun.stringIndices[i]
                         let ordinal = shaped.segment.cellOrdinal(forUTF16: stringIndex)
-                        let intraCluster: CGFloat
-                        if ordinal == anchorOrdinal {
-                            intraCluster = ctPos.x - anchorX
-                        } else {
-                            anchorOrdinal = ordinal
-                            anchorX = ctPos.x
-                            intraCluster = 0
-                        }
                         let glyphColumn = shaped.segment.column + (ordinal * shaped.segment.columnWidth)
-                        // Center full-width (CJK) and substituted glyphs within
-                        // their multi-cell slot instead of pinning them to the
-                        // cell's left edge, mirroring the CoreGraphics path. The
-                        // decoration loops below keep using the grid column, so
-                        // underlines/strikethroughs stay cell-aligned.
-                        let fit = shaped.segment.columnWidth >= 2
-                            ? terminalView.glyphSlotFit(font: glyphRun.font,
-                                                        glyph: glyph,
-                                                        columnWidth: shaped.segment.columnWidth)
-                            : GlyphSlotFit.identity
-                        let basePos = CGPoint(x: lineOrigin.x + (cellWidth * CGFloat(glyphColumn)) + intraCluster + fit.dx,
-                                              y: lineOrigin.y + yOffset + ctPos.y + fit.dy)
-                        let pxX = basePos.x * scale + entry.bearing.x * fit.scale
+                        let placed = placement.place(ordinal: ordinal, position: ctPos, font: glyphRun.font,
+                            glyph: glyph, columns: shaped.segment.columnWidth, terminal: terminalView)
+                        let fit = placed.fit
+                        let basePos = CGPoint(x: lineOrigin.x + cellWidth * CGFloat(glyphColumn) + placed.offset.x,
+                                              y: lineOrigin.y + yOffset + placed.offset.y)
+                        let pxX = basePos.x * scale + entry.bearing.x * fit.scaleX
                         let pxY = basePos.y * scale + entry.bearing.y * fit.scale
 
                         let x0 = pxX
                         let y0 = pxY
-                        let x1 = pxX + entry.size.width * fit.scale
+                        let x1 = pxX + entry.size.width * fit.scaleX
                         let y1 = pxY + entry.size.height * fit.scale
                         let (tx0, ty0, tx1, ty1) = transformRect(x0: x0, y0: y0, x1: x1, y1: y1)
 
@@ -2482,6 +2464,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let yOffset = ceil(lineDescent + lineLeading)
         let textColorSIMD = colorToSIMD(caretTextColor)
 
+        var placement = GlyphClusterPlacement()
         for run in runs {
             let runGlyphsCount = CTRunGetGlyphCount(run)
             if runGlyphsCount == 0 {
@@ -2510,14 +2493,16 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 let ctPos = coreTextPositions[i]
                 // Center the glyph under the cursor the same way as normal text so
                 // a full-width (CJK) character doesn't shift when the caret lands on it.
-                let fit = terminalView.glyphSlotFit(font: ctFont, glyph: glyph, columnWidth: max(1, Int(charData.width)))
-                let basePos = CGPoint(x: lineOrigin.x + cellWidth * doublePosition * CGFloat(buffer.x) + fit.dx * doublePosition,
-                                      y: lineOrigin.y + yOffset + ctPos.y + fit.dy)
-                let pxX = basePos.x * scale + entry.bearing.x * fit.scale
+                let placed = placement.place(ordinal: 0, position: ctPos, font: ctFont, glyph: glyph,
+                    columns: max(1, Int(charData.width)), terminal: terminalView)
+                let fit = placed.fit
+                let basePos = CGPoint(x: lineOrigin.x + cellWidth * doublePosition * CGFloat(buffer.x) + placed.offset.x * doublePosition,
+                                      y: lineOrigin.y + yOffset + placed.offset.y)
+                let pxX = basePos.x * scale + entry.bearing.x * fit.scaleX
                 let pxY = basePos.y * scale + entry.bearing.y * fit.scale
                 let x0 = Float(pxX)
                 let y0 = Float(pxY)
-                let x1 = x0 + Float(entry.size.width * fit.scale)
+                let x1 = x0 + Float(entry.size.width * fit.scaleX)
                 let y1 = y0 + Float(entry.size.height * fit.scale)
 
                 let atlasSize = entry.atlasKind == .color ? colorAtlas.size : grayscaleAtlas.size

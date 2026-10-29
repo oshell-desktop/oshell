@@ -6,11 +6,21 @@ import CoreText
 
 /// App-private fallback: no font installation or changes to the user's shell.
 enum TerminalSymbolFont {
-    private static let source: CTFont? = {
-        guard let url = Bundle.main.url(forResource: "SymbolsNerdFontMono-Regular", withExtension: "ttf", subdirectory: "NerdFonts"),
-              let provider = CGDataProvider(url: url as CFURL), let font = CGFont(provider) else { return nil }
-        return CTFontCreateWithGraphicsFont(font, 1, nil, nil)
-    }()
+    private static var cachedGeneration = -1
+    private static var cachedSource: CTFont?
+    private static var source: CTFont? {
+        UserTerminalFonts.register()
+        if cachedGeneration != UserTerminalFonts.generation {
+            cachedGeneration = UserTerminalFonts.generation; cachedSource = nil
+            let names = ["SymbolsNFM", "SymbolsNerdFontMono-Regular", "SymbolsNerdFontMono"] + UserTerminalFonts.faces.map(\.name)
+            for name in names {
+                guard let font = UserTerminalFonts.resolve(name, size: 1) else { continue }
+                var units: [UniChar] = [0xe0a0, 0xf07b], glyphs = [CGGlyph](repeating: 0, count: 2)
+                if CTFontGetGlyphsForCharacters(font as CTFont, &units, &glyphs, 2) { cachedSource = font as CTFont; break }
+            }
+        }
+        return cachedSource
+    }
 
     static func matching(_ base: NSFont) -> NSFont? {
         guard let source else { return nil }

@@ -2,6 +2,7 @@
 """Compilation recipes only; packaging, version and signing changes do not invalidate them."""
 import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 from compilation_cache import CompilationCache, swift_source_inputs, swift_configuration_inputs
@@ -54,7 +55,9 @@ def build_swift(root, logs, run, flavor, arch, minimum, tests=False):
                 for product in selected:
                     subprocess.run(list(map(str, [*args, '--product', product])), cwd=root, env=env,
                                    stdout=stream, stderr=subprocess.STDOUT, check=True)
-    binaries = base/'swift'/f'{arch}-apple-macosx'/'release'
+    # SwiftBuild and older SwiftPM use different product directories. Never
+    # guess: a previous toolchain may have left valid but stale binaries there.
+    binaries = Path(subprocess.check_output(list(map(str, [*args, '--show-bin-path'])), cwd=root, env=env, text=True).strip())
     cache.store(binaries, products + [p.name for p in binaries.glob('*.bundle')])
     return binaries
 

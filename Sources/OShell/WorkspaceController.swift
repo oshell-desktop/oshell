@@ -19,10 +19,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     var sessionLinkHeight: NSLayoutConstraint!
     let syncStatusButton = SyncStatusButton()
     let globalProxyButton = NSButton()
-    let aiButton = NSButton(title: "AI", target: nil, action: nil)
+    let aiButton = NSButton(title: "MCP", target: nil, action: nil)
     var aiHost: AIWorkspaceHost?
     var loadedAI: AgentControlView?
-    var selectedPaneForAI: TerminalPane? { selectedTab?.activePane }
     let currentPropertiesButton = NSButton(), defaultPropertiesButton = NSButton(), updateButton = NSButton()
     let splitButton = NSPopUpButton(frame: .zero, pullsDown: true)
     let tabGroupButton = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -77,6 +76,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     private var quickSendVisibilityObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
     private var updateStateObserver: NSObjectProtocol?
+    private var fontsObserver: NSObjectProtocol?
     private var syncStateObserver: NSObjectProtocol?
     private var quickSendRefreshPending = false
     let syncIndicator = NSTextField(labelWithString: "")
@@ -84,6 +84,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     var commandManager: QuickCommandManager?
     var highlightManager: HighlightManager?
     var fileWindows = [RemoteFileWindow]()
+    var fileHost: FileWorkspaceHost?
     var commandMenu: NSMenu? { didSet { rebuildCommandMenu() } }
     private let welcome = InterfaceSurfaceView()
     private let recordButton = NSButton()
@@ -159,9 +160,15 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         }
         globalProxyObserver = NotificationCenter.default.addObserver(forName: GlobalProxySettings.didChange, object: nil, queue: .main) { [weak self] _ in self?.refreshGlobalProxyButton() }
         titleSettingsObserver = NotificationCenter.default.addObserver(forName: SessionTitleSettings.didChange, object: nil, queue: .main) { [weak self] _ in self?.refreshSessionTitleDisplays() }
+        fontsObserver = NotificationCenter.default.addObserver(forName: UserTerminalFonts.changed, object: nil, queue: .main) { [weak self] note in
+            guard let self else { return }
+            self.inputPanes.forEach { $0.apply(self.configuration.preferences) }
+            if note.object as? Bool == true { self.windowCoordinator?.webDAV.schedule(localChanges: true) }
+        }
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: NSApp, queue: .main) { [weak self] _ in self?.markSelectedOutputRead() }
     }
     deinit {
+        if let fontsObserver { NotificationCenter.default.removeObserver(fontsObserver) }
         if let pinsObserver { NotificationCenter.default.removeObserver(pinsObserver) }
         if let globalProxyObserver { NotificationCenter.default.removeObserver(globalProxyObserver) }
         if let titleSettingsObserver { NotificationCenter.default.removeObserver(titleSettingsObserver) }
@@ -233,9 +240,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         configurePropertyButtons(); configureSyncStatusButton()
         configureGlobalProxyButton()
         aiButton.bezelStyle = .texturedRounded; aiButton.setButtonType(.toggle)
-        aiButton.identifier = .init("toolbar.ai"); aiButton.setAccessibilityLabel("Agent 控制与审计")
+        aiButton.identifier = .init("toolbar.ai"); aiButton.setAccessibilityLabel("MCP 控制中心")
         aiButton.target = self; aiButton.action = #selector(toggleAIAssistant)
-        aiButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        aiButton.widthAnchor.constraint(equalToConstant: 46).isActive = true
         refreshAIShortcut()
         updateButton.identifier = .init("toolbar.checkUpdates")
         updateButton.target = self; updateButton.action = #selector(checkForUpdates)
@@ -246,18 +253,22 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         sessionSidebarButton.target = self; sessionSidebarButton.action = #selector(toggleSessionSidebar)
         sessionSidebarButton.identifier = .init("toolbar.sessionSidebar"); sessionSidebarButton.setAccessibilityLabel("显示 / 隐藏会话列表")
         sessionSidebarButton.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        let toolbar = WorkspaceToolbar(views: [sessionSidebarButton, connect, quickButton, new, local, files, currentPropertiesButton, defaultPropertiesButton, tools, tabGroupButton, splitButton, arrangementButton, splitArrangementButton, syncIndicator, stopSyncButton, NSView(), globalProxyButton, aiButton, syncStatusButton, updateButton, find, recordButton, settings])
+        let toolbar = WorkspaceToolbar(views: [sessionSidebarButton, connect, quickButton, new, local, files, AppUI.separator(), currentPropertiesButton, defaultPropertiesButton, tools, AppUI.separator(), tabGroupButton, splitButton, arrangementButton, splitArrangementButton, syncIndicator, stopSyncButton, NSView(), globalProxyButton, aiButton, syncStatusButton, updateButton, AppUI.separator(), find, recordButton, settings])
+        for case let button as NSButton in toolbar.arrangedSubviews {
+            button.font = .systemFont(ofSize: 12)
+            if !(button is NSPopUpButton) { button.bezelStyle = .texturedRounded }
+        }
         topToolbar = toolbar
         toolbar.identifier = .init("workspace.toolbar")
         toolbar.compactButtons = [connect, new, local, files, updateButton, find, recordButton]
         for (button, label) in [(new, "新建会话"), (local, "本地终端"), (find, "搜索终端"), (recordButton, "记录终端日志")] {
             button.toolTip = label; button.setAccessibilityLabel(label)
         }
-        toolbar.orientation = .horizontal; toolbar.spacing = 6
+        toolbar.orientation = .horizontal; toolbar.spacing = 8
         toolbar.detachesHiddenViews = true
         toolbar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
         let toolbarHost = WorkspaceToolbarHost(toolbar)
-        let workspace = wrapWithAI(wrapWithSessionSidebar(makeWorkspace()))
+        let workspace = wrapWithFileManager(wrapWithAI(wrapWithSessionSidebar(makeWorkspace())))
         syncIndicator.textColor = .systemOrange; syncIndicator.font = .systemFont(ofSize: 11, weight: .semibold)
         stopSyncButton.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "停止同步输入"); stopSyncButton.isBordered = false; stopSyncButton.contentTintColor = .systemOrange; stopSyncButton.toolTip = "停止同步输入"; stopSyncButton.setAccessibilityLabel("停止同步输入"); stopSyncButton.target = self; stopSyncButton.action = #selector(stopSyncInput)
         syncIndicator.isHidden = true; stopSyncButton.isHidden = true
@@ -368,7 +379,10 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let title = NSTextField(labelWithString: "OShell"); title.font = .systemFont(ofSize: 28, weight: .semibold)
         let subtitle = NSTextField(labelWithString: "连接你的服务器，专注每一条命令。")
         subtitle.textColor = .secondaryLabelColor; subtitle.font = .systemFont(ofSize: 14)
-        let buttons = NSStackView(views: [iconButton("新建 SSH 会话", "plus", #selector(newSession)), iconButton("打开本地终端", "terminal", #selector(newLocal))]); buttons.spacing = 12
+        let buttons = AppUI.row([
+            AppUI.button("新建 SSH 会话", primary: true) { [weak self] in self?.newSession() },
+            AppUI.button("打开本地终端", symbol: "terminal") { [weak self] in self?.newLocal() }
+        ]); buttons.spacing = 12
         let shortcuts = NSTextField(labelWithString: "工具栏可新建终端、排列多个会话和搜索；快捷键可在设置中自定义。")
         shortcuts.font = .systemFont(ofSize: 11); shortcuts.textColor = .tertiaryLabelColor
         let center = NSStackView(views: [icon, title, subtitle, buttons, shortcuts]); center.orientation = .vertical; center.spacing = 18; center.alignment = .centerX
@@ -642,9 +656,14 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             if pane.terminal.window === self.window, pane.terminal.isDescendant(of: self.terminalHost), !pane.terminal.isHiddenOrHasHiddenAncestor {
                 // This callback also runs inside AppKit's responder transition.
                 // Never detach/rebuild views while becomeFirstResponder is active.
+                let changedTab = self.selectedTab !== tab
                 self.selectedTab = tab
                 if let group = self.customTabLayout?.group(containing: tab.id) { group.active = tab.id; self.activeTabGroupID = group.id }
                 self.refreshSelection()
+                if changedTab {
+                    self.tabStrip.revealSelection()
+                    self.groupStrips.first { $0.0.tabs.contains(tab.id) }?.1.revealSelection()
+                }
             } else { self.select(tab, focus: false) }
         }
         pane.onState = { [weak self] in self?.refreshSelection() }
@@ -655,7 +674,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         pane.onUserInput = { [weak self] pane, bytes in self?.routeKeyboard(pane, bytes: bytes) ?? false }
         pane.onPaste = { [weak self] pane, text in self?.pasteText(text, from: pane) }
         pane.onPasteImage = { [weak self] pane, image in self?.pasteImage(image, from: pane) }
-        pane.onAI = { [weak self] pane, mode, text in self?.showAI(for: pane, mode: mode, selection: text) }
+        pane.onAI = { [weak self] pane in self?.showAI(for: pane) }
         pane.onFilesDropped = { [weak self] pane, urls in self?.openFiles(from: pane, uploading: urls) }
         pane.applyHighlights(configuration.highlightSets.first { $0.id == configuration.preferences.highlightSetID })
         pane.onError = { message in Dialogs.message(message) }
@@ -887,8 +906,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         if let selectedTab { select(selectedTab, focus: focusRemainingTerminal) }
         if tabs.isEmpty { idleMemoryReclaimer.schedule { [weak self] in self?.tabs.isEmpty == true } }
     }
-    @objc func closeTab() { if let tab = selectedTab { close(tab) } }
+    @objc func closeTab() { if fileHost?.hideIfFocused() == true { return }; if let tab = selectedTab { close(tab) } }
     @objc func closePane() {
+        if fileHost?.hideIfFocused() == true { return }
         guard let tab = selectedTab else { window?.performClose(nil); return }
         closeSessionPane(tab.activePane)
     }
@@ -972,9 +992,10 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let securityView = SecuritySettingsView(workspace: self)
         let titleView = SessionTitleSettingsView()
         let imagePasteView = ImagePasteSettingsControl()
+        let fileManagementView = FileManagementSettingsView()
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
-        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, selectionView: { autoCopy, trim in
+        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, fileManagementView: fileManagementView, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
         }, localShortcutSelection: { localShortcut = $0 }) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
@@ -984,6 +1005,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             let openProfiles = (windowCoordinator?.workspaces ?? [self]).flatMap { $0.inputPanes.filter { !$0.isBlank }.map(\.profile) }
             try titleView.apply(profiles: configuration.profiles + openProfiles)
         } catch { Dialogs.message("标题设置未保存：" + error.localizedDescription) }
+        do { try fileManagementView.apply() } catch { Dialogs.message("文件管理设置未保存：" + error.localizedDescription) }
         do { try imagePasteView.apply() } catch { Dialogs.message("图片粘贴设置未保存：" + error.localizedDescription) }
         if let selection = try? selectionView?.values() { selection.save() }
         SessionSidebarPreferences.saveShortcut(localShortcut)

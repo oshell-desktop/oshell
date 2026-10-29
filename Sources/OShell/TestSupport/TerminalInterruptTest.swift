@@ -22,7 +22,7 @@ final class TerminalInterruptTest {
             let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OSHELL_DATA_DIR"]!)
             try Data("unsetopt GLOBAL_RCS\n".utf8).write(to: root.appendingPathComponent(".zshenv"))
             try Data("unset HISTFILE\nPROMPT='oshell-latency%# '\n".utf8).write(to: root.appendingPathComponent(".zshrc"))
-            workspace.newLocal(); test.pane = workspace.selectedPaneForAI
+            workspace.newLocal(); test.pane = workspace.selectedTab?.activePane
             test.wait("localPromptReady", { test.pane.terminal.getTerminal().getCursorLineText().contains("oshell-latency") }) { test.startReceiver() }
         } catch { test.checks["setup"] = false; test.finish() }
     }

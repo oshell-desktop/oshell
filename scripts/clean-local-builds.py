@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 KEEP_REPORTS = {'.gitkeep', 'latest-build.log', 'latest-checks.json', 'latest-cleanup.json'}
 BUILD_NAME = re.compile(r'build(?:-amd64|-arm64|-tests|-legacy|-compat-(?:arm64|x86_64)|-modern-(?:arm64|x86|x86_64)|-test-[a-z]+-(?:arm64|x86_64))?')
 OLD_WORK = {
+    'agent-build', 'memory-investigation', 'migration-old-source', 'migration-live-check', 'release-050-diagnostics',
     'legacy-validation', 'presentation-flush', 'fullscreen-chrome',
     'release','test-release','test-app','command-editor-modules','public-source-checkout',
     'size-review','brand-preview','deep-memory-baseline','memory-baseline','settings-preview','link-drag-native',
@@ -71,6 +72,8 @@ def validate_targets(root, paths, tracked, processes):
         relative = p.relative_to(root).as_posix()
         if any(f == relative or f.startswith(relative+'/') for f in tracked):
             raise RuntimeError('Cleanup would remove tracked files: '+relative)
+        if p.is_dir() and (p/'.git').exists():
+            raise RuntimeError('Cleanup would remove an independent checkout: '+relative)
         if any(exe == p or p in exe.parents for exe in processes):
             raise RuntimeError('A cleanup target is in use: '+relative)
         if not p.is_symlink() and not p.resolve().is_relative_to(root):
