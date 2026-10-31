@@ -23,6 +23,8 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.install() }
     }
     static func run(_ controller: WorkspaceController) {
+        if CommandLine.arguments.contains("--focus-repaint-test") { FocusRepaintTest.run(controller); return }
+        if CommandLine.arguments.contains("--host-key-test") { SSHHostKeyChangeTest.run(controller); return }
         if CommandLine.arguments.contains("--font-library-test") { FontLibraryTest.run(controller); return }
         if CommandLine.arguments.contains("--interface-design-test") { InterfaceDesignTest.run(controller); return }
         if CommandLine.arguments.contains("--file-presentation-test") { FilePresentationTest.run(controller); return }
@@ -45,6 +47,7 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--tab-close-confirmation-test") { TabCloseConfirmationTest.run(controller) }
         if CommandLine.arguments.contains("--session-catalog-presentation-test") { SessionCatalogPresentationTest.run(controller) }
         if CommandLine.arguments.contains("--marked-text-test") { MarkedTextOverlayTest.run(controller) }
+        if CommandLine.arguments.contains("--metal-cursor-test") { MetalCursorTest.run(controller); return }
         if CommandLine.arguments.contains("--tab-session-info-test") { TabSessionInfoTest.run(controller) }
         if CommandLine.arguments.contains("--image-paste-test") { ImagePasteTest.run(controller) }
         if CommandLine.arguments.contains("--session-pins-test") { SessionPinsTest.run(controller) }

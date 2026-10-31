@@ -25,15 +25,7 @@ struct GlobalProxySettings: Codable, Equatable {
         guard source.kind.usesSSH else { return source }
         guard enabled else { return try configuration.resolvingProxy(source) }
         guard let proxyID else { throw ModelError.invalid("全局代理已开启但未选择代理，未建立直连。请打开全局代理设置。") }
-        let route = try ProxyCatalog.route(proxyID, in: configuration.proxies)
-        for hop in route {
-            guard hop.settings.kind != .none else { throw ModelError.invalid("全局代理配置无效，未建立直连。") }
-            try hop.settings.validate()
-        }
-        var result = source
-        // Preserve original session fields so disabling the policy restores them.
-        result.runtimeProxyRoute = route.map(\.settings)
-        return result
+        return try configuration.resolvingProxy(source, globalProxyID: proxyID)
     }
 }
 
@@ -91,7 +83,7 @@ extension WorkspaceController {
             while true {
                 let catalog = configuration.proxies
                 let alert = PopupAlert(); alert.messageText = "全局代理"
-                alert.informativeText = "开启后，OShell 新建的 SSH、SFTP 及 SCP 连接统一使用所选代理或代理链，覆盖会话原有代理/跳板设置；关闭后恢复各会话设置。\n已有连接及其复用通道保持原路线，需重连才能切换。不会修改系统代理，也不接管本地 Shell 中手动运行的命令。\n代理条目与凭据沿用共享配置；此开关和选择仅本机保存。代理失败不会回退直连。"
+                alert.informativeText = "开启后，OShell 新建的 SSH、SFTP 及 SCP 连接先经过所选代理或代理链，再经过会话原有代理及多层跳板；重叠的前置代理仅经过一次，顺序冲突或超过 8 级时阻止连接。关闭后使用会话原路线。\n已有连接及其复用通道保持原路线，需重连才能切换。不会修改系统代理，也不接管本地 Shell 中手动运行的命令。\n代理条目与凭据沿用共享配置；此开关和选择仅本机保存。代理失败不会回退直连。"
                 let apply = alert.addButton(withTitle: "应用"); apply.identifier = .init("globalProxy.apply")
                 alert.addButton(withTitle: "取消")
                 alert.addButton(withTitle: "新增 / 管理代理…").identifier = .init("globalProxy.manage")

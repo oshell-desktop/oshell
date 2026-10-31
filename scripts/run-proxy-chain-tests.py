@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 OShell contributors
 """Loopback-only mixed proxy chains with ephemeral SSH keys and fictional credentials."""
-import argparse, base64, json, os, select, signal, socket, struct, subprocess, tempfile, threading, uuid
+import argparse, base64, collections, json, os, select, signal, socket, struct, subprocess, tempfile, threading, uuid
 from pathlib import Path
 import paramiko
 ROOT=Path(__file__).resolve().parents[1]
@@ -42,11 +42,13 @@ def safe(handler,c):
 def main():
  parser=argparse.ArgumentParser();parser.add_argument('--flavor',choices=['arm64','amd64'],default='arm64');args=parser.parse_args()
  app=ROOT/('work/test-app/OShell.app' if args.flavor=='arm64' else 'work/test-release/amd64/OShell.app')
+ binary_dir=Path(subprocess.check_output(['swift','build','--scratch-path',str(ROOT/'work/build-tests/swift'),'-c','release','--show-bin-path'],text=True).strip())
+ resolver=binary_dir/'OShellCoreChecks'
  helper=app/'Contents/Helpers/OShellProxy';askpass=app/'Contents/Helpers/OShellAskpass'
  with tempfile.TemporaryDirectory(prefix='oshell-proxy-chain-',dir='/tmp') as raw:
   root=Path(raw);hostkey=paramiko.RSAKey.generate(2048);clientkey=paramiko.RSAKey.generate(2048)
   key=root/'private key';clientkey.write_private_key_file(str(key));key.chmod(0o600)
-  facts={'password':0,'key':0,'socks':0,'http':0};listeners=[]
+  facts={'password':0,'key':0,'socks':0,'http':0,'socks4':0,'socks4a':0};listeners=[]
   def echo(c):
    while True:
     data=c.recv(32768)
@@ -90,9 +92,24 @@ def main():
    host,port=data.split(b' ')[1].decode().rsplit(':',1);remote=socket.create_connection((host.strip('[]'),int(port)),timeout=10)
    c.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n');bridge(c,remote)
   listeners+=[listen(socks),listen(http)]
+  def socks4(c):
+   version,command,port,address=struct.unpack('!BBH4s',exact(c,8));assert version==4 and command==1
+   def terminated():
+    value=b''
+    while True:
+     byte=exact(c,1)
+     if byte==b'\0':return value
+     value+=byte
+   terminated()
+   v4a=address[:3]==b'\0\0\0' and address[3]!=0
+   host=terminated().decode() if v4a else socket.inet_ntoa(address)
+   assert host=='127.0.0.1';facts['socks4a' if v4a else 'socks4']+=1
+   remote=socket.create_connection((host,port),timeout=10)
+   c.sendall(b'\x00\x5a'+struct.pack('!H',port)+socket.inet_aton('127.0.0.1'));bridge(c,remote)
+  listeners += [listen(socks4),listen(socks4)]
   known=root/'known_hosts';known.write_text(''.join(f'[127.0.0.1]:{s.getsockname()[1]} {hostkey.get_name()} {hostkey.get_base64()}\n' for s in listeners[1:3]))
   nodes={}
-  for label,index,kind,mode in [('ssh-password',1,'jump','password'),('ssh-key',2,'jump','privateKey'),('socks',3,'socks5','automatic'),('http',4,'http','automatic')]:
+  for label,index,kind,mode in [('ssh-password',1,'jump','password'),('ssh-key',2,'jump','privateKey'),('socks',3,'socks5','automatic'),('http',4,'http','automatic'),('socks4',5,'socks4','automatic'),('socks4a',6,'socks4a','automatic')]:
    nodes[label]=dict(id=str(uuid.uuid4()).upper(),kind=kind,host='127.0.0.1',port=listeners[index].getsockname()[1],username='jump-user' if kind=='jump' else 'proxy-user',identityFile=str(key) if mode=='privateKey' else '',sshAuthentication=mode)
   auth=root/'a';server=socket.socket(socket.AF_UNIX);server.bind(str(auth));os.chmod(auth,0o600);server.listen(20)
   state={'route':[],'token':str(uuid.uuid4()),'requests':[]}
@@ -112,14 +129,26 @@ def main():
   threading.Thread(target=accept,daemon=True).start()
   checks={}
   try:
-   for chain in [['socks'],['http'],['ssh-password'],['ssh-key'],['ssh-password','ssh-key'],['socks','ssh-password','http'],['http','ssh-key','socks']]:
-    state['route']=[nodes[n] for n in chain];state['requests']=[]
+   kinds=['socks4','socks4a','socks','http','ssh-password','ssh-key']
+   cases=[([kind],[]) for kind in kinds]
+   cases += [([first],[second]) for first in kinds for second in kinds if first!=second]
+   cases += [([first],['ssh-password','ssh-key']) for first in ['socks4','socks4a','socks','http']]
+   cases += [(['socks','ssh-password'],['http','ssh-key'])]
+   for global_chain,session_chain in cases:
+    fixture=root/'route.json'
+    fixture.write_text(json.dumps({'global':[nodes[n] for n in global_chain],'session':[nodes[n] for n in session_chain]}))
+    state['route']=json.loads(subprocess.check_output([str(resolver),'--global-proxy-fixture',str(fixture)]));state['requests']=[]
+    chain=global_chain+session_chain
+    assert [hop['id'] for hop in state['route']]==[nodes[n]['id'] for n in chain]
     env=dict(os.environ,OSHELL_AUTH_SOCKET=str(auth),OSHELL_AUTH_TOKEN=state['token'],SSH_ASKPASS=str(askpass),SSH_ASKPASS_REQUIRE='force',DISPLAY='oshell:0')
     payload=b'OSHELL-PROXY-FIXTURE\n'*16
+    before=facts.copy()
     process=subprocess.Popen([str(helper),'--route-index',str(len(chain)-1),'--target-host','127.0.0.1','--target-port',str(target.getsockname()[1]),'--known-hosts',str(known),'--tcp-keepalive','yes'],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
     try:out,err=process.communicate(payload,timeout=30)
     except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL);out,err=process.communicate();checks['timeout-'+str(chain)]=False
     label=' -> '.join(chain);checks[label]=out==payload and process.returncode==0
+    expected=collections.Counter({'password' if item=='ssh-password' else 'key' if item=='ssh-key' else item:chain.count(item) for item in chain})
+    checks[label+' all-hops-used']=all(facts[name]-before[name]==expected[name] for name in facts)
     checks[label+' credential-scope']=all(ident in {nodes[n]['id'] for n in chain} for ident,hint in state['requests'])
     if not checks[label]:(ROOT/'validation/proxy-chain-error.log').write_bytes(err)
    checks['all-authentication-types-used']=all(facts.values())

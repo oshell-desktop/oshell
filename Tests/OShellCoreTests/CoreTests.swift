@@ -1919,6 +1919,79 @@ extension CoreTests {
         var corrupted = decoded; corrupted.profiles[0].proxy.host = "changed.example.test"
         XCTAssertThrowsError(try corrupted.merging(into: destination, includePasswords: true, sourceMaster: "old-master-123", destinationMaster: "local-master-789"))
     }
+    func testGlobalProxyComposition() throws {
+        func hop(_ kind: ProxyKind, _ host: String) -> ProxySettings {
+            var value = ProxySettings(); value.kind = kind; value.host = host
+            value.port = kind == .jump ? 22 : 1080; return value
+        }
+        let kinds: [ProxyKind] = [.socks4, .socks4a, .socks5, .http, .jump]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        for first in kinds { for second in kinds {
+            let exit = hop(first, "exit.example.test"), middle = hop(second, "middle.example.test"), last = hop(.jump, "last.example.test")
+            var session = SessionProfile(name: "Target", host: "target.example.test", username: "target-user"); session.proxyID = last.id
+            var config = Configuration(profiles: [session])
+            config.proxies = [ProxyProfile(name: "Exit", settings: exit), ProxyProfile(name: "Middle", settings: middle), ProxyProfile(name: "Last", settings: last, upstreamID: middle.id)]
+            let saved = try encoder.encode(config)
+            let resolved = try config.resolvingProxy(session, globalProxyID: exit.id)
+            XCTAssertEqual(resolved.runtimeProxyRoute, [exit, middle, last])
+            XCTAssertEqual(try encoder.encode(resolved), try encoder.encode(session))
+            XCTAssertEqual(try encoder.encode(config), saved)
+            XCTAssertEqual(try config.resolvingProxy(resolved).runtimeProxyRoute, [middle, last])
+            XCTAssertEqual(try config.resolvingProxy(resolved, globalProxyID: exit.id).runtimeProxyRoute, resolved.runtimeProxyRoute)
+            XCTAssertEqual(try resolved.sshArguments(proxyHelper: URL(fileURLWithPath: "/tmp/helper")).joined().contains("--route-index' '2"), true)
+            var inline = session; inline.proxyID = nil; inline.proxy = middle
+            XCTAssertEqual(try config.resolvingProxy(inline, globalProxyID: exit.id).runtimeProxyRoute, [exit, middle])
+            var sftp = session; sftp.kind = .sftp
+            XCTAssertEqual(try config.resolvingProxy(sftp, globalProxyID: exit.id).runtimeProxyRoute, [exit, middle, last])
+        } }
+        let a = hop(.socks5, "a.example.test"), b = hop(.jump, "b.example.test"), c = hop(.http, "c.example.test")
+        XCTAssertEqual(try ProxyCatalog.prepending([a], to: [a,b,c]), [a,b,c])
+        XCTAssertEqual(try ProxyCatalog.prepending([a,b], to: [b,c]), [a,b,c])
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a,b], to: [a,c]))
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a,b], to: [a]))
+        XCTAssertEqual(try ProxyCatalog.prepending([a,b], to: [a,b]), [a,b])
+        XCTAssertEqual(try ProxyCatalog.prepending([a,b], to: []), [a,b])
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a,b], to: [b,a]))
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a,b], to: [c,a]))
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a,b], to: [a,c,b]))
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a,a], to: [b]))
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a], to: [b,b]))
+        var duplicate = a; duplicate.id = UUID()
+        XCTAssertEqual(try ProxyCatalog.prepending([a], to: [duplicate,b]), [a,b])
+        var differentAccount = duplicate; differentAccount.username = "another-user"
+        XCTAssertEqual(try ProxyCatalog.prepending([a], to: [differentAccount,b]), [a,differentAccount,b])
+        var conflict = a; conflict.port += 1
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a], to: [conflict]))
+        let eight = (0..<8).map { hop(.jump, "hop\($0).example.test") }
+        XCTAssertEqual(try ProxyCatalog.prepending(eight, to: eight), eight)
+        XCTAssertThrowsError(try ProxyCatalog.prepending([a], to: eight))
+        var session = SessionProfile(name: "Legacy", host: "target.example.test", username: "fixture")
+        var config = Configuration(profiles: []); config.proxies = [ProxyProfile(name: "Exit", settings: a)]
+        session.jumpHost = "first@jump1.example.test:2222,second@[::1]:2200"
+        let legacy = try config.resolvingProxy(session, globalProxyID: a.id)
+        XCTAssertEqual(legacy.runtimeProxyRoute.map(\.port), [1080,2222,2200])
+        XCTAssertEqual(legacy.runtimeProxyRoute.map(\.username), ["","first","second"])
+        XCTAssertEqual(try encoder.encode(legacy), try encoder.encode(session))
+        XCTAssertEqual(try config.resolvingProxy(legacy).sshArguments().contains("-J"), true)
+        session.jumpHost = "first@jump1.example.test:2222,first@jump1.example.test:2222"
+        XCTAssertThrowsError(try config.resolvingProxy(session, globalProxyID: a.id))
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("proxy-alias-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("Host fixture-alias\n HostName 127.0.0.1\n Port 2229\n User alias-user\n IdentityFile /tmp/fixture-key\n".utf8).write(to: file)
+        let alias = try ProxyCatalog.legacyJumpRoute("fixture-alias", sshConfig: file)
+        XCTAssertEqual(alias[0].host, "fixture-alias"); XCTAssertEqual(alias[0].port, 2229)
+        // Leaving these unset preserves the alias's User and all IdentityFile rules.
+        XCTAssertEqual(alias[0].username, ""); XCTAssertEqual(alias[0].identityFile, "")
+        var secured = b; secured.username = "jump-user"; secured.sshAuthentication = .password
+        secured.encryptedPassword = try SessionCipher.encrypt("fixture-password", master: "global-fixture-master", profile: secured.credentialProfile, identity: SSHIdentity(host: secured.host, user: secured.username, port: secured.port))
+        let combined = try ProxyCatalog.prepending([a], to: [secured])
+        XCTAssertEqual(try SessionCipher.decrypt(combined[1].encryptedPassword!, master: "global-fixture-master", profile: combined[1].credentialProfile), "fixture-password")
+        session.jumpHost = ""; session.proxyID = b.id
+        config.proxies.append(ProxyProfile(name: "Broken", settings: b, upstreamID: UUID()))
+        XCTAssertThrowsError(try config.resolvingProxy(session, globalProxyID: a.id))
+        config.proxies[1].upstreamID = b.id
+        XCTAssertThrowsError(try config.resolvingProxy(session, globalProxyID: a.id))
+    }
     func testSharedProxyCatalogAndCredentials() throws {
         let master = "proxy-catalog-master", nextMaster = "proxy-catalog-next"
         var proxy = ProxySettings(); proxy.kind = .jump; proxy.host = "127.0.0.1"; proxy.port = 2222; proxy.username = "jump-user"; proxy.sshAuthentication = .password
@@ -2257,6 +2330,21 @@ extension CoreTests {
 
 @main struct CheckRunner {
     static func main() throws {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--global-proxy-fixture" {
+            struct Fixture: Decodable { let global: [ProxySettings]; let session: [ProxySettings] }
+            let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2])))
+            var config = Configuration(profiles: [])
+            for path in [fixture.global, fixture.session] {
+                for (index, hop) in path.enumerated() where !config.proxies.contains(where: { $0.id == hop.id }) {
+                    config.proxies.append(ProxyProfile(name: "Fixture", settings: hop, upstreamID: index == 0 ? nil : path[index - 1].id))
+                }
+            }
+            var profile = SessionProfile(name: "Fixture", host: "127.0.0.1")
+            profile.proxyID = fixture.session.last?.id
+            let resolved = try config.resolvingProxy(profile, globalProxyID: fixture.global.last!.id)
+            try FileHandle.standardOutput.write(contentsOf: JSONEncoder().encode(resolved.runtimeProxyRoute))
+            return
+        }
         signal(SIGPIPE, SIG_IGN)
         if CommandLine.arguments.count == 3, CommandLine.arguments[1].hasPrefix("--crypto-fixture-") {
             let url = URL(fileURLWithPath: CommandLine.arguments[2])
@@ -2312,6 +2400,7 @@ extension CoreTests {
         try tests.testRotationFailureAndCancellation()
         try tests.testArchiveWithoutPasswordsAndMergeCopies()
         try tests.testEncryptedArchiveRebindingAndFailures()
+        try tests.testGlobalProxyComposition()
         try tests.testSharedProxyCatalogAndCredentials()
         try tests.testArchiveValidationLimits()
         try tests.testPrivateAtomicFileAndFailedWrite()
@@ -2346,7 +2435,7 @@ extension CoreTests {
         tests.testInvalidZmodemHeadersRemainOrdinaryOutput()
         try tests.testLoggerFlushesEveryAcceptedChunk()
         tests.testCancellationDropsInFlightBytesAcrossEveryBoundary()
-        if failures.isEmpty { print("PASS: 73 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
+        if failures.isEmpty { print("PASS: 74 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
         else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
     }
 }

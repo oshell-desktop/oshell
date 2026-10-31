@@ -18,6 +18,10 @@ final class LocalToolProcess: LocalProcessDelegate {
     private var size = winsize()
     var onData: ((Data) -> Void)?
     var onExit: ((Int32?) -> Void)?
+    var deliveryPaused: Bool {
+        get { process.deliveryPaused }
+        set { process.deliveryPaused = newValue }
+    }
     var pid: pid_t { process?.shellPid ?? 0 }
     // Interactive tools and tools that can prompt for secrets stay in this pane.
     var permitsManagedInput: Bool { command.permitsManagedInput }

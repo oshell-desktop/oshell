@@ -56,6 +56,7 @@ python3 -m venv work/test-tools
 work/test-tools/bin/pip install -r scripts/requirements-test.txt
 work/test-tools/bin/python scripts/run-tab-actions-tests.py
 work/test-tools/bin/python scripts/run-session-tests.py
+work/test-tools/bin/python scripts/run-host-key-tests.py
 work/test-tools/bin/python scripts/run-sftp-reuse-tests.py
 work/test-tools/bin/python scripts/run-ssh-clone-tests.py
 work/test-tools/bin/python scripts/run-local-tool-tests.py --connection-status-only
@@ -154,3 +155,27 @@ OSHELL_TEST_GLOBAL_PROXY=1 work/file-tests-venv/bin/python scripts/run-sftp-reus
 `bash scripts/build.sh --tests` 后运行 `python3 scripts/run-ui-tests.py agent-control`。测试通过随应用分发的 SDK STDIO 服务和真实本地 PTY 验证授权隔离、幂等、审批失效、接管及加密审计，使用一次性配置与合成凭据。模拟客户端标识不等于真实 Codex/OpenCode 端到端验收，真实客户端联调应独立记录。核心检查增加了认证分块损坏、截断、密钥隔离、未封口、查询策略与跨字节脱敏回归。
 
 参见 [协议与存储](agent-control.md)。共享配置协议未加入 Agent 设置；所有配对与审计数据留在各应用独立的本机目录。
+
+`run-host-key-tests.py` 使用一次性主机密钥和本机 Paramiko SSH 服务，验证真实 OpenSSH 密钥变化诊断、新旧指纹弹窗、取消不写盘、确认后重连及新密钥信任确认；同时检查散列记录、同一行多个主机、其他 IP/端口、默认端口、IPv6、吊销规则和确认期间文件变化。仅操作临时 known_hosts。
+
+后台标签内存对比：`OSHELL_MEMORY_PANEL=1 work/file-tests-venv/bin/python scripts/run-memory-cycles.py <label> --sessions 4 --lines 3200 --visible --background-tabs`。先保存修改前测试应用，通过 `OSHELL_MEMORY_BINARY` 指定其可执行文件，再与新测试应用运行相同参数。测试含三轮真实 SSH、逐标签显示、后台日志与输入回显、重显及平铺；记录物理内存、Metal 显示表面数量和关闭后资源释放。优化版可加 `OSHELL_MEMORY_EXPECT_RELEASE=1` 检查后台仅保留可见表面，且连接仍运行时完成回收。此面板测试不是原生系统全屏验收，锁屏或未呈现 Metal 帧时不能作为显示内存结果。
+
+排版缓存检查：`python3 scripts/test-text-shaping-cache.py` 直接编译 SwiftTerm 实际缓存实现，不依赖可见窗口。四份缓存分别接收三轮不同文本，再进行共 40 万次重复访问，检查容量上限、Unicode 字形位置/索引的一致性及暖机后的堆增长；可用 `--source` 指向保存的旧实现做同负载比较。这是 CoreText 缓存测试，不替代真实 Metal 显示和长时间运行验收。
+
+长时间静置测试在上述固定标签场景增加 `--idle-seconds 3600`，每轮保留原会话且不发送测试命令一小时（三轮共三小时），每 30 秒记录堆、物理占用与渲染对象数量。长测将外部进程采样频率降为每秒一次，避免诊断记录自身无限膨胀；测试窗口需保持可见，不能用锁屏数据推断前台绘制无泄漏。
+
+双会话全屏内存对照：`work/file-tests-venv/bin/python scripts/run-memory-cycles.py two-ssh-fullscreen --rounds 1 --sessions 2 --lines 0 --background-tabs --idle-seconds 60 --fullscreen --capture-vm`。全屏测试默认保留测试窗口所在显示器，也可用 `--display-index N` 指定 NSScreen 索引并核验目标屏幕；报告包含窗口尺寸、缩放、交换表面像素尺寸及缓冲数量。`OSHELL_MEMORY_DRAWABLE_COUNT=3` 仅在测试构建中恢复三缓冲进行同二进制对照，正式实现默认双缓冲。比较时要求显示器、分辨率、可见性和负载一致，分别记录静置占用与切换峰值；遮挡或未成功重绘的运行不能作为可见绘制验收。初次访问和恢复后的呈现检查使用独立名称，后一次通过不能覆盖先前失败；可见测试的每个静置采样也必须可见。`--capture-vm` 在静置 30 秒阶段另采集分类摘要，使用至少 60 秒静置以留出采样时间。
+
+最小化资源回归：`work/file-tests-venv/bin/python scripts/run-memory-cycles.py minimized-ssh --rounds 1 --sessions 2 --lines 3200 --background-tabs --minimize --visible`。仅用于普通窗口，验证最小化后显示表面释放、SSH 保持连接，恢复时呈现新帧且输入、历史和日志完整。排版缓存每个渲染器保留至多 2048 条，并对文本、字形数组和条目开销采用 4 MiB 计账预算；该预算不代表 CoreText 或整个进程的内存硬上限。`test-text-shaping-cache.py` 验证计账上限、超预算长行仍可排版、淘汰与清空后的 Unicode 一致性及实际堆占用。
+
+光标空闲回归：`python3 scripts/run-ui-tests.py metal-cursor` 验证实际原生光标像素、六种样式、动画透明度变化、宽字符移动、隐藏/恢复和失焦外框，并要求闪烁期间 Metal 帧数不增加。macOS Metal 使用独立光标层；空闲 SSH 测试默认启用闪烁光标，可加 `--steady-cursor` 做常亮对照。内存比较应等待静置 30 秒后采样，并确认窗口持续可见、有焦点；整个 60 秒静置测试连同建连、恢复检查约需 90 秒，测试窗口关闭前不要切换 Space。
+
+大屏切换对照：`work/file-tests-venv/bin/python scripts/run-memory-cycles.py large-screen --rounds 1 --sessions 2 --lines 3200 --background-tabs --geometry-cycles 3 --switch-count 20 --visible --capture-vm`。默认保留测试窗口所在显示器；如需指定，先确认当前 NSScreen 索引再加 `--display-index N`。普通窗口起步，重复原生全屏、快速标签切换和退出全屏；每阶段静置 8 秒，记录物理内存、堆、CPU 时间、Metal 设备分配量、回收次数及请求切换到呈现新帧的延迟。基线用 `OSHELL_MEMORY_BINARY` 指向保存的旧测试应用。两次运行必须使用同一显示器、分辨率和负载，并保持测试窗口前台可见。锁屏时脚本拒绝启动；全屏动画未完成、窗口遮挡或失焦的运行不能替代此验收。呈现时间包含应用调用和轮询开销，不等于物理屏幕响应时间；Metal 分配量也不能直接从进程物理占用中相减来推算系统合成器的开销。
+
+无窗口回收检查：构建测试版后运行 `python3 scripts/test-idle-reclaimer.py`。它链接实际 SwiftTerm 和空闲回收实现，验证忙碌延后、突发请求合并、取消、生命周期及主循环响应；可在锁屏时执行，但不证明全屏内存收益或 GPU/切换性能。
+
+Metal 行缓存检查：`python3 scripts/test-metal-row-cache.py --expect-trim --output validation/row-cache.json`。脚本在临时包中编译实际 SwiftTerm 源码，检查持久行缓存释放 CPU 中间数组后，命中时仍复用相同 GPU 缓冲，且重建前后的缓冲数据一致；覆盖 1×/2× 栅格化、Unicode、内联图片、滚动、备用屏幕、尺寸变化、渲染模式往返及表面恢复。可用 `--renderer-source` 指定保存的旧渲染器文件做同负载对照，并省略旧版本不支持的 `--expect-trim`。结果记录双会话 CPU 数组有效载荷、堆使用量和暖缓存构建耗时；该组件测试不呈现窗口，不代表原生全屏或整个进程的内存节省。
+
+专注模式静置重绘检查：测试版构建后运行 `python3 scripts/run-ui-tests.py focus-repaint`。使用临时本地 PTY 和仅响应 SIGWINCH 的备用屏幕程序，切换专注全屏、全心专注及退出，不发送交互输入；核对程序收到的行列数、最终 drawable 像素尺寸及新帧呈现。同步输出检查在 BSU 与 ESU 之间主动请求 Metal 绘制，要求不提交半帧，且 ESU 和既有超时均可恢复呈现。此项需要前台可见窗口；合成程序通过不代表特定版本的远程 OpenCode 已完成视觉验收。
+
+全局代理前置回归：`run-ui-tests.py global-proxy proxy-catalog` 验证全局开关、原配置不变及每跳凭据归属；核心检查覆盖五种协议的 25 种组合、重叠前缀、逆序/回绕、8 级限制及旧跳板字段。`work/file-tests-venv/bin/python scripts/run-proxy-chain-tests.py` 使用实际核心解析器组合全局与会话链，再通过正式 OShellProxy 执行本机 SOCKS4/4A/5、HTTP CONNECT、SSH 密码/私钥混合链。相同 UUID，或无保存密码且除 UUID 外完全相同的连接/认证定义，视为同一跳；同地址不同账号或凭据不会自动合并。测试不连接真实服务器。

@@ -6,6 +6,7 @@ import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASES = {
+ 'focus-repaint':'OSHELL_FOCUS_REPAINT_OUTPUT',
  'font-library':'OSHELL_FONT_LIBRARY_OUTPUT',
  'interface-design':'OSHELL_INTERFACE_DESIGN_OUTPUT',
  'file-presentation':'OSHELL_FILE_PRESENTATION_OUTPUT',
@@ -22,6 +23,7 @@ CASES = {
  'terminal-interrupt':'OSHELL_INTERRUPT_OUTPUT',
  'tab-session-info':'OSHELL_TAB_SESSION_INFO_OUTPUT',
  'marked-text':'OSHELL_MARKED_TEXT_OUTPUT',
+ 'metal-cursor':'OSHELL_METAL_CURSOR_OUTPUT',
  'image-paste':'OSHELL_IMAGE_PASTE_OUTPUT',
  'session-catalog-presentation':'OSHELL_CATALOG_PRESENTATION_OUTPUT',
  'tab-close-confirmation':'OSHELL_TAB_CLOSE_CONFIRMATION_OUTPUT',
@@ -109,7 +111,7 @@ CASES.update({
 })
 GROUPS = {
     'tabs': ['tab-behavior', 'layout', 'tab-number', 'tab-bar-menu', 'idle-tab-reuse'],
-    'memory': ['idle-memory', 'layout', 'ended-broadcast', 'stress'],
+    'memory': ['idle-memory', 'metal-cursor', 'layout', 'ended-broadcast', 'stress'],
     'sessions': ['session-list', 'management', 'popup-keyboard', 'filetabs', 'session-directory', 'directory-picker-stress'],
 }
 
@@ -127,7 +129,7 @@ def run_case(source, case, timeout):
     info = plistlib.loads((source/'Contents/Info.plist').read_bytes())
     if info.get('OShellTestHarness') is not True:
         raise RuntimeError('Build the test app first: bash scripts/build.sh --tests')
-    if case in ('fullscreen-activation', 'focus-fullscreen', 'session-fullscreen'): require_unlocked_desktop()
+    if case in ('fullscreen-activation', 'focus-fullscreen', 'session-fullscreen', 'focus-repaint'): require_unlocked_desktop()
     (ROOT/'work').mkdir(exist_ok=True); (ROOT/'validation').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='ui-check-', dir=ROOT/'work') as raw:
         base = Path(raw); app = base/'OShell UI Test.app'; data = base/'data'; data.mkdir()

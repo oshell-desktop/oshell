@@ -236,6 +236,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     let userInputLock = NSLock()
     let interactiveInputDisplayWindowNs: UInt64 = 150_000_000
 #if canImport(MetalKit)
+    private var suspendedMetalDevice: MTLDevice?
     var metalView: MTKView?
     var metalRenderer: MetalTerminalRenderer?
     private var retiredMetalRenderers: [MetalTerminalRenderer] = []
@@ -474,6 +475,32 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// Releases only the detached/hidden view's display surfaces. The emulator,
+    /// font atlas and compiled pipelines remain available for a fast return.
+    @discardableResult public func releaseInactiveMetalSurface() -> Bool {
+        guard useMetalRenderer, window == nil || isHiddenOrHasHiddenAncestor || window?.isMiniaturized == true,
+              let surface = metalView, let renderer = metalRenderer, renderer.isIdle else { return false }
+        suspendedMetalDevice = surface.device
+        renderer.attachSurface(nil)
+        caretView?.disableAnimations()
+        surface.delegate = nil
+        surface.removeFromSuperview()
+        metalView = nil
+        metalBoundWindow = nil
+        return true
+    }
+
+    private func restoreMetalSurfaceIfNeeded() {
+        guard useMetalRenderer, metalView == nil, let renderer = metalRenderer,
+              let device = suspendedMetalDevice, let window, !window.isMiniaturized,
+              !isHiddenOrHasHiddenAncestor else { return }
+        let surface = makeMetalView(frame: bounds, device: device)
+        renderer.attachSurface(surface); surface.delegate = renderer
+        metalView = surface; metalBoundWindow = window; suspendedMetalDevice = nil
+        insertMetalView(surface, replacing: nil)
+        surface.setNeedsDisplay(surface.bounds)
+    }
+
     private func updateMetalRenderer(enabled: Bool) throws {
         if enabled {
             if metalView != nil {
@@ -500,6 +527,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             metalView?.removeFromSuperview()
             metalView = nil
             metalRenderer = nil
+            suspendedMetalDevice = nil
             metalBoundWindow = nil
             layer?.backgroundColor = effectiveNativeBackgroundColor.cgColor
             if let caretView = caretView {
@@ -536,6 +564,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         // so this is the colorspace they actually live in.
         if let metalLayer = mtkView.layer as? CAMetalLayer {
             metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+            // The renderer submits one frame at a time. Two drawables cover
+            // rendering and presentation without retaining a third full-size surface.
+            metalLayer.maximumDrawableCount = 2
             // Composite through the layer when the background is translucent
             metalLayer.isOpaque = backgroundOpacity >= 1.0
         }
@@ -543,8 +574,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
 
     /// Inserts the Metal view into the view hierarchy with the correct
-    /// z-order: below the caret (which is hidden while Metal owns the
-    /// cursor), with the scroller above it. When there is no caret view
+    /// z-order: below the independently animated caret, with the scroller
+    /// above it. When there is no caret view
     /// and `replacing` is non-nil, the new view takes the old one's
     /// z-position instead. Actually removing the old view is the caller's
     /// responsibility — the rebind path defers removal until after the new
@@ -552,8 +583,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     private func insertMetalView(_ newView: MTKView, replacing oldView: MTKView?) {
         if let caretView = caretView {
             addSubview(newView, positioned: .below, relativeTo: caretView)
-            caretView.disableAnimations()
-            caretView.isHidden = true
+            caretView.isHidden = false
+            caretView.updateCursorStyle()
         } else if let oldView = oldView {
             addSubview(newView, positioned: .above, relativeTo: oldView)
         } else {
@@ -637,6 +668,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         metalView?.removeFromSuperview()
         metalView = nil
         metalRenderer = nil
+        suspendedMetalDevice = nil
         metalBoundWindow = nil
         useMetalRenderer = false
         if let caretView = caretView {
@@ -798,7 +830,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                guard let self, self.isMetalRendererEligibleForRetry else { return }
+                guard let self else { return }
+                self.restoreMetalSurfaceIfNeeded()
+                guard self.isMetalRendererEligibleForRetry else { return }
                 self.requestMetalDisplay()
             }
             metalWindowRecoveryObservers.append(observer)
@@ -813,6 +847,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         updateTextBlinkLifecycle()
 #if canImport(MetalKit)
         updateMetalWindowRecoveryObservers()
+        restoreMetalSurfaceIfNeeded()
         guard useMetalRenderer, let currentWindow = window else { return }
         if currentWindow !== metalBoundWindow {
             rebindMetalRendererToWindow(currentWindow)
@@ -824,6 +859,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     open override func viewDidUnhide() {
         super.viewDidUnhide()
 #if canImport(MetalKit)
+        restoreMetalSurfaceIfNeeded()
         if isMetalRendererEligibleForRetry {
             requestMetalDisplay()
         }
@@ -1360,7 +1396,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         return response
     }
     
-    public override func resignFirstResponder() -> Bool {
+    open override func resignFirstResponder() -> Bool {
         let response = super.resignFirstResponder()
         if response {
             caretView.disableAnimations()
@@ -3362,20 +3398,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func showCursor(source: Terminal) {
-        if useMetalRenderer {
-            queueMetalDisplay()
-            return
-        }
         if caretView.superview == nil {
             addSubview(caretView)
         }
     }
 
     open func hideCursor(source: Terminal) {
-        if useMetalRenderer {
-            queueMetalDisplay()
-            return
-        }
         caretView.removeFromSuperview()
     }
     

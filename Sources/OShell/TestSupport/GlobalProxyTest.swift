@@ -44,7 +44,7 @@ enum GlobalProxyTest {
             let enabled = GlobalProxySettings(enabled: true, proxyID: newProxy.id)
             try enabled.save()
             let resolved = try workspace.resolvedConnectionProfile(source)
-            checks["globalOverridesSession"] = resolved.runtimeProxyRoute == [global]
+            checks["globalPrecedesSession"] = resolved.runtimeProxyRoute == [global, original]
             checks["sessionReferencePreserved"] = resolved.proxyID == oldProxy.id
             checks["sessionSerializationUnchanged"] = try encoder.encode(source) == encoder.encode(resolved)
             checks["configurationUnchanged"] = try encoder.encode(workspace.configuration) == before
@@ -52,24 +52,26 @@ enum GlobalProxyTest {
             workspace.globalProxyButton.performClick(nil)
             checks["toggleOffRestoresOriginal"] = try workspace.resolvedConnectionProfile(resolved).runtimeProxyRoute == [original]
             workspace.globalProxyButton.performClick(nil)
-            checks["toggleOnRestoresGlobal"] = try workspace.resolvedConnectionProfile(source).runtimeProxyRoute == [global]
+            checks["toggleOnRestoresGlobal"] = try workspace.resolvedConnectionProfile(source).runtimeProxyRoute == [global, original]
             var legacy = source; legacy.proxyID = nil; legacy.jumpHost = "jump@old.fixture:22"
             let routedLegacy = try workspace.resolvedConnectionProfile(legacy)
             let helper = URL(fileURLWithPath: "/tmp/fixture-proxy")
             let args = try routedLegacy.sshArguments(proxyHelper: helper)
-            checks["globalSuppressesLegacyJump"] = !args.contains("-J") && args.contains { $0.hasPrefix("ProxyCommand=") }
+            checks["globalPreservesLegacyJump"] = !args.contains("-J") && args.contains { $0.hasPrefix("ProxyCommand=") } && routedLegacy.runtimeProxyRoute.map(\.host) == [global.host, "old.fixture"]
             let off = GlobalProxySettings(enabled: false, proxyID: newProxy.id)
             checks["offRestoresLegacyJump"] = try off.resolve(routedLegacy, configuration: workspace.configuration).sshArguments(proxyHelper: helper).contains("-J")
             var inline = legacy; inline.jumpHost = ""; inline.proxy = original
             checks["inlineProxyPreserved"] = try off.resolve(enabled.resolve(inline, configuration: workspace.configuration), configuration: workspace.configuration).proxy == original
             var sftp = source; sftp.kind = .sftp
-            checks["sftpRouted"] = try workspace.resolvedConnectionProfile(sftp).runtimeProxyRoute == [global]
+            checks["sftpRouted"] = try workspace.resolvedConnectionProfile(sftp).runtimeProxyRoute == [global, original]
             checks["localUnaffected"] = try workspace.resolvedConnectionProfile(.local).runtimeProxyRoute.isEmpty
             var ftp = source; ftp.kind = .ftp
             checks["ftpUnaffected"] = try workspace.resolvedConnectionProfile(ftp).runtimeProxyRoute.isEmpty
             var chained = newProxy; chained.upstreamID = oldProxy.id
             workspace.configuration.proxies = [oldProxy, chained]
-            checks["fullChainApplied"] = try workspace.resolvedConnectionProfile(source).runtimeProxyRoute == [original, global]
+            checks["returnToEarlierHopBlocked"] = rejects { _ = try workspace.resolvedConnectionProfile(source) }
+            var sameChain = source; sameChain.proxyID = chained.id
+            checks["fullChainAppliedOnce"] = try workspace.resolvedConnectionProfile(sameChain).runtimeProxyRoute == [original, global]
             workspace.configuration.proxies = [oldProxy]
             checks["missingProxyBlocks"] = rejects { _ = try workspace.resolvedConnectionProfile(source) }
             // A real terminal startup must stop before spawning ssh on a broken route.

@@ -50,6 +50,65 @@ public enum ProxyCatalog {
         for session in sessions { if let id = session.proxyID { for proxy in try route(id, in: profiles) { ids.insert(proxy.id) } } }
         return profiles.filter { ids.contains($0.id) }
     }
+    /// Join only a shared suffix/prefix, keeping both paths and the final hop.
+    /// Removing a repeated hop elsewhere would silently reroute the connection.
+    public static func prepending(_ prefix: [ProxySettings], to route: [ProxySettings]) throws -> [ProxySettings] {
+        func sameHop(_ lhs: ProxySettings, _ rhs: ProxySettings) -> Bool {
+            if lhs.id == rhs.id { return true }
+            // Saved credentials are bound to their original proxy UUID.
+            guard lhs.encryptedPassword == nil, rhs.encryptedPassword == nil else { return false }
+            var copy = rhs; copy.id = lhs.id
+            return lhs == copy
+        }
+        for path in [prefix, route] {
+            for (index, hop) in path.enumerated() {
+                guard !path.prefix(index).contains(where: { sameHop($0, hop) }) else {
+                    throw ModelError.invalid("代理链存在重复或循环，请检查上级代理。")
+                }
+            }
+        }
+        var overlap = min(prefix.count, route.count)
+        while overlap > 0 && !zip(prefix.suffix(overlap), route.prefix(overlap)).allSatisfy({ sameHop($0.0, $0.1) }) { overlap -= 1 }
+        for (first, second) in zip(prefix.suffix(overlap), route.prefix(overlap)) {
+            if first.id == second.id, first != second {
+                throw ModelError.invalid("同一代理 ID 的连接或认证配置不一致，未建立连接。")
+            }
+        }
+        let result = prefix + route.dropFirst(overlap)
+        for (index, hop) in result.enumerated() {
+            guard !result.prefix(index).contains(where: { sameHop($0, hop) }) else {
+                throw ModelError.invalid("全局代理与会话代理的顺序冲突，会重复经过同一代理；请调整代理链。")
+            }
+        }
+        guard result.count <= maximumHops else { throw ModelError.invalid("组合后的代理链最多支持 8 级。") }
+        return result
+    }
+    public static func legacyJumpRoute(_ value: String, sshConfig: URL? = nil) throws -> [ProxySettings] {
+        let tokens = value.split(separator: ",", omittingEmptySubsequences: false)
+        guard tokens.count <= maximumHops else { throw ModelError.invalid("代理链最多支持 8 级。") }
+        return try tokens.map { token in
+            guard let uri = URLComponents(string: "ssh://" + token), let host = uri.host, !host.isEmpty,
+                  uri.password == nil, uri.path.isEmpty, uri.query == nil, uri.fragment == nil else {
+                throw ModelError.invalid("旧跳板机格式无效，请检查代理设置。")
+            }
+            var hop = ProxySettings(); hop.kind = .jump; hop.host = host; hop.username = uri.user ?? ""
+            if let port = uri.port { hop.port = port }
+            else {
+                // Keep Host-alias port defaults from OpenSSH instead of forcing 22.
+                let task = Process(), output = Pipe()
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+                task.arguments = ["-G"] + (sshConfig.map { ["-F", $0.path] } ?? []) + ["--", "ssh://" + token]
+                task.standardOutput = output; task.standardError = FileHandle.nullDevice
+                try task.run()
+                let data = output.fileHandleForReading.readDataToEndOfFile(); task.waitUntilExit()
+                guard task.terminationStatus == 0,
+                      let line = String(decoding: data, as: UTF8.self).split(separator: "\n").first(where: { $0.hasPrefix("port ") }),
+                      let port = Int(line.dropFirst(5)) else { throw ModelError.invalid("无法解析旧跳板机的 SSH 配置。") }
+                hop.port = port
+            }
+            try hop.validate(); return hop
+        }
+    }
     public static func helperCommand(helper: URL, index: Int, knownHosts: URL?, tcpKeepAlive: Bool) -> String {
         var args = [helper.path, "--route-index", String(index), "--tcp-keepalive", tcpKeepAlive ? "yes" : "no"]
         if let knownHosts { args += ["--known-hosts", knownHosts.path] }
@@ -71,6 +130,21 @@ extension Configuration {
         var result = source; result.runtimeProxyRoute = []
         if let id = source.proxyID { result.runtimeProxyRoute = try ProxyCatalog.route(id, in: proxies).map(\.settings) }
         else if source.proxy.kind == .jump { result.runtimeProxyRoute = [source.proxy] }
+        return result
+    }
+    public func resolvingProxy(_ source: SessionProfile, globalProxyID: UUID) throws -> SessionProfile {
+        try source.validate()
+        let prefix = try ProxyCatalog.route(globalProxyID, in: proxies).map(\.settings)
+        var result = try resolvingProxy(source)
+        if result.runtimeProxyRoute.isEmpty {
+            if source.proxy.kind != .none { result.runtimeProxyRoute = [source.proxy] }
+            else if !source.jumpHost.isEmpty { result.runtimeProxyRoute = try ProxyCatalog.legacyJumpRoute(source.jumpHost) }
+        }
+        result.runtimeProxyRoute = try ProxyCatalog.prepending(prefix, to: result.runtimeProxyRoute)
+        for hop in result.runtimeProxyRoute {
+            guard hop.kind != .none else { throw ModelError.invalid("代理链包含无效代理，未建立连接。") }
+            try hop.validate()
+        }
         return result
     }
 }

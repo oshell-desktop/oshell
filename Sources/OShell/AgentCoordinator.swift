@@ -81,12 +81,12 @@ final class AgentCoordinator {
         let grant = Grant(client: client, pane: pane, audit: audit); grant.permission = permission
         audit.onFailure = { [weak self, weak pane] text in DispatchQueue.main.async {
             guard let self else { return }; self.message = text
-            pane?.terminal.process.deliveryPaused = false
+            pane?.outputPausedForAudit = false
             if let pane { self.takeover(pane.id, reason: text, interrupt: false) }; self.notify()
         } }
         audit.onDrain = { [weak pane, weak audit] in DispatchQueue.main.async {
             guard let pane, let audit, pane.agentAudit === audit, audit.pendingBytes < 131_072 else { return }
-            pane.terminal.process.deliveryPaused = false
+            pane.outputPausedForAudit = false
         } }
         pane.agentAudit = audit; grants[pane.id] = grant
         audit.append(.init(kind: "grant", fields: ["permission": .string(permission.rawValue)])); notify()
@@ -104,7 +104,7 @@ final class AgentCoordinator {
         disk.async { self.outputReaders.removeAll { ids.contains($0.0) } }
     }
     func endRecording(_ pane: TerminalPane) {
-        revoke(pane.id, reason: "用户结束存档"); pane.terminal.process.deliveryPaused = false; pane.agentAudit?.finish(reason: "用户明确结束存档"); pane.agentAudit = nil; notify()
+        revoke(pane.id, reason: "用户结束存档"); pane.outputPausedForAudit = false; pane.agentAudit?.finish(reason: "用户明确结束存档"); pane.agentAudit = nil; notify()
     }
     func refreshConnections() {
         for (id, grant) in grants where grant.pane?.agentEligible != true || grant.pane?.agentGeneration != grant.generation {

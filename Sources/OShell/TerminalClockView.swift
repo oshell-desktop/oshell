@@ -72,7 +72,7 @@ final class TerminalClockView: NSView {
     private weak var terminalArea: NSView?
     private var placement = [NSLayoutConstraint]()
     var needsClockUpdates: Bool { enabled && alphaValue > 0 && !disposed && window != nil }
-    var needsVisibleClockUpdates: Bool { needsClockUpdates && window?.isVisible == true && window?.isMiniaturized == false && !isHiddenOrHasHiddenAncestor }
+    var needsVisibleClockUpdates: Bool { needsClockUpdates && window?.isVisible == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true && !isHiddenOrHasHiddenAncestor }
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override var acceptsFirstResponder: Bool { false }

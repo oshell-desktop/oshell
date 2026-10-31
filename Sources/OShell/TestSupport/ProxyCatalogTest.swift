@@ -39,10 +39,16 @@ final class ProxyCatalogTest {
             var value = workspace.configuration; value.profiles = [target]; value.proxies = hops; value.masterPasswordVerifier = try MasterPasswordProtection.createVerifier(master)
             PasswordVault.shared.unlockForTesting(master)
             checks["saveSharedCatalog"] = workspace.saveConfiguration(value)
-            let resolved = try workspace.configuration.resolvingProxy(target)
+            var exit = ProxySettings(); exit.kind = .jump; exit.host = "127.0.0.1"; exit.port = 2202; exit.username = "jump-user"; exit.sshAuthentication = .password
+            exit.encryptedPassword = try SessionCipher.encrypt("exit-secret", master: master, profile: exit.credentialProfile, identity: SSHIdentity(host: exit.host, user: exit.username, port: exit.port))
+            workspace.configuration.proxies.append(ProxyProfile(name: "Global exit", settings: exit))
+            let catalog = workspace.configuration.proxies
+            let resolved = try GlobalProxySettings(enabled: true, proxyID: exit.id).resolve(target, configuration: workspace.configuration)
+            checks["globalRetainsCredentialIdentities"] = resolved.runtimeProxyRoute.map(\.id) == [exit.id, hops[0].id, hops[1].id]
             broker = try AuthBroker(profile: resolved)
             broker?.manualPrompt = { [weak self] _, completion in self?.manual += 1; completion(AuthResponse(success: true, answer: "manual-fixture")) }
             let prompt = "jump-user@127.0.0.1's password:"
+            steps.append { [self] in request(exit.id, prompt: prompt) { self.checks["globalExitGetsOnlyOwnPassword"] = $0.answer == "exit-secret" } }
             steps.append { [self] in request(hops[0].id, prompt: prompt) { self.checks["firstHopGetsOnlyOwnPassword"] = $0.answer == "hop-secret-0" } }
             steps.append { [self] in request(hops[1].id, prompt: prompt) { self.checks["sameHostSecondHopGetsOwnPassword"] = $0.answer == "hop-secret-1" } }
             steps.append { [self] in request(nil, prompt: "target-user@192.0.2.44's password:") { self.checks["targetGetsOnlyTargetPassword"] = $0.answer == "target-fixture-password" } }
@@ -51,23 +57,23 @@ final class ProxyCatalogTest {
             steps.append { [self] in request(UUID(), prompt: prompt) { self.checks["unknownScopeRejected"] = !$0.success } }
             steps.append { [self] in request(nil, prompt: "", hint: "oshell-proxy-route") { response in
                 let route = try? JSONDecoder().decode([ProxySettings].self, from: Data(response.answer.utf8))
-                self.checks["routeIPCContainsNoCredentials"] = response.success && route?.count == 2 && route?.allSatisfy { $0.encryptedPassword == nil } == true && !response.answer.contains("hop-secret")
+                self.checks["routeIPCContainsNoCredentials"] = response.success && route?.count == 3 && route?.allSatisfy { $0.encryptedPassword == nil } == true && !response.answer.contains("hop-secret")
             } }
             steps.append { [self] in
-                let editor = SessionEditor(target, profiles: workspace.credentialProfiles, directories: [], initialDirectory: "", proxies: hops)
+                let editor = SessionEditor(target, profiles: workspace.credentialProfiles, directories: [], initialDirectory: "", proxies: catalog)
                 later {
                     guard let root = NSApp.modalWindow?.contentView else { return }
                     let tabs = self.views(root).compactMap { $0 as? NSTabView }.first; tabs?.selectTabViewItem(withIdentifier: "代理")
                     let picker = self.views(root).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "session.sharedProxy" }
-                    self.checks["sameNameProxiesRemainDistinct"] = picker?.itemArray.compactMap { ($0.representedObject as? String).flatMap(UUID.init(uuidString:)) }.count == 2
+                    self.checks["sameNameProxiesRemainDistinct"] = picker?.itemArray.compactMap { ($0.representedObject as? String).flatMap(UUID.init(uuidString:)) }.count == 3
                     self.checks["sessionSelectsSharedProxy"] = picker?.selectedItem?.representedObject as? String == hops.last!.id.uuidString
                     self.checks["sessionShowsFullChain"] = self.views(root).compactMap { ($0 as? NSTextField)?.stringValue }.contains { $0.contains("jump → jump") }
                     _ = PopupKeyboard.dismiss(window: NSApp.modalWindow!)
                 }
-                checks["cancelSessionPreservesCatalog"] = editor.run() == nil && workspace.configuration.proxies == hops
+                checks["cancelSessionPreservesCatalog"] = editor.run() == nil && workspace.configuration.proxies == catalog
                 later {
                     guard let root = NSApp.modalWindow?.contentView else { return }
-                    self.checks["managerListsSharedProxies"] = self.views(root).compactMap { $0 as? NSTableView }.first?.numberOfRows == 2
+                    self.checks["managerListsSharedProxies"] = self.views(root).compactMap { $0 as? NSTableView }.first?.numberOfRows == 3
                     _ = PopupKeyboard.dismiss(window: NSApp.modalWindow!)
                 }
                 workspace.showProxyManager()
@@ -82,7 +88,7 @@ final class ProxyCatalogTest {
                     self.checks["proxyEditorControlsFit"] = self.views(root).filter { $0 is NSTextField || $0 is NSButton }.allSatisfy { root.bounds.contains($0.convert($0.bounds, to: root)) }
                     _ = PopupKeyboard.dismiss(window: NSApp.modalWindow!)
                 }
-                checks["cancelProxyEditKeepsCatalog"] = ProxyEditor(unusual, workspace: workspace).run() == nil && workspace.configuration.proxies == hops
+                checks["cancelProxyEditKeepsCatalog"] = ProxyEditor(unusual, workspace: workspace).run() == nil && workspace.configuration.proxies == catalog
                 advance()
             }
             advance()

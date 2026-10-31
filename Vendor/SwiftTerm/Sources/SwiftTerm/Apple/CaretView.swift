@@ -17,6 +17,7 @@ extension CaretView {
             return
         }
         context.saveGState()
+        defer { context.restoreGState() }
         context.clip(to: [bounds])
         context.setFillColor(TTColor.clear.cgColor)
         context.fill ([bounds])
@@ -58,7 +59,6 @@ extension CaretView {
                                    scaleX: terminal.backingScaleFactor(),
                                    scaleY: terminal.backingScaleFactor(),
                                    color: caretFG.cgColor)
-            context.restoreGState()
             return
         }
         var placement = GlyphClusterPlacement()
@@ -82,6 +82,5 @@ extension CaretView {
                 placed.fit.draw(runGlyphs[i], font: ctRunFont, at: position, in: context)
             }
         }
-        context.restoreGState()
     }
 }

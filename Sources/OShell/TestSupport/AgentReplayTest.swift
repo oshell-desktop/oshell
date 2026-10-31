@@ -11,6 +11,7 @@ enum AgentReplayTest {
         source.getTerminal().resize(cols: 80, rows: 24)
         source.feed(text: "one\r\n\u{1b}[31m中文\u{1b}[4;5H红色")
         let window = AgentArchiveWindow(), target = window.replayTerminalForTesting
+        checks["idleReplayHasNoTimer"] = window.timerForTesting == nil
         let baseline = source.getTerminal().auditBaselineANSI()
         window.applyForTesting(.init(kind: "baseline", fields: ["cols": .number(80), "rows": .number(24), "screen": .string(baseline)]))
         func visible(_ char: Character) -> Character { char == "\0" ? " " : char }
@@ -48,8 +49,54 @@ enum AgentReplayTest {
             checks["controlPanelHasVisibleLayout"] = panel.subviews.first?.frame.width ?? 0 > 300
             preview.close()
         } catch { checks["controlPanelSnapshot"] = false }
-        window.close()
-        try? JSONSerialization.data(withJSONObject: ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "mismatches": mismatches], options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
-        workspace.shutdown(); NSApp.terminate(nil)
+        checkPlaybackLifecycle(window) { lifecycle in
+            checks.merge(lifecycle) { _, new in new }
+            window.close()
+            try? JSONSerialization.data(withJSONObject: ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "mismatches": mismatches], options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
+            workspace.shutdown(); NSApp.terminate(nil)
+        }
+    }
+    private static func waitUntil(_ condition: @escaping () -> Bool, completion: @escaping (Bool) -> Void) {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { timer in
+            let ready = condition()
+            if ready || ProcessInfo.processInfo.systemUptime >= deadline { timer.invalidate(); completion(ready) }
+        }
+    }
+    private static func checkPlaybackLifecycle(_ window: AgentArchiveWindow, completion: @escaping ([String: Bool]) -> Void) {
+        var checks = [String: Bool]()
+        do {
+            let audit = try AgentAudit(directory: AgentPrivateStore.root, metadata: ["title": .string("synthetic timer fixture")])
+            audit.append(.init(time: Date().addingTimeInterval(10), kind: "display", bytes: Data("timer-fixture".utf8)))
+            audit.finish(reason: "synthetic timer fixture"); audit.flush()
+            window.skipIdleForTesting(false)
+            window.selectForTesting(audit.url)
+            let playing = window.timerForTesting
+            checks["selectionStartsPlaybackTimer"] = playing?.isValid == true
+            window.togglePlaybackForTesting()
+            let pausedAt = window.playbackClockForTesting
+            checks["pauseInvalidatesTimer"] = playing?.isValid == false && window.timerForTesting == nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                checks["pausedClockDoesNotAdvance"] = window.playbackClockForTesting == pausedAt
+                window.togglePlaybackForTesting()
+                checks["resumeStartsTimer"] = window.timerForTesting?.isValid == true
+                window.timerForTesting?.fire()
+                checks["resumeDoesNotCountPausedTime"] = window.playbackClockForTesting - pausedAt < 0.1
+                window.seekForTesting(0)
+                checks["pausedSeekStartsTimer"] = window.timerForTesting?.isValid == true
+                waitUntil({ window.timerForTesting == nil }) { positioned in
+                    checks["seekCompletionStopsTimer"] = positioned && window.playbackClockForTesting == 0
+                    window.skipIdleForTesting(true)
+                    window.togglePlaybackForTesting()
+                    let resumed = window.timerForTesting
+                    checks["seekedPlaybackResumes"] = resumed?.isValid == true
+                    waitUntil({ window.timerForTesting == nil }) { finished in
+                        checks["endOfArchiveStopsTimer"] = finished && resumed?.isValid == false
+                        checks["replayPreservesFinalOutput"] = window.replayTerminalForTesting.getTerminal().getLine(row: 0)?.translateToString().contains("timer-fixture") == true
+                        completion(checks)
+                    }
+                }
+            }
+        } catch { checks["playbackFixture"] = false; completion(checks) }
     }
 }

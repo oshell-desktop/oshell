@@ -29,11 +29,14 @@ final class FileTransferHistory {
     init(limit: Int = 500) { self.limit = max(1, limit) }
     var snapshot: [Record] { lock.lock(); defer { lock.unlock() }; return records }
     func observe(_ callback: (() -> Void)?) { lock.lock(); observer = callback; lock.unlock() }
-    private func change(notify: Bool = true, trim: Bool = true, _ body: (inout [Record]) -> Void) {
+    // Only transitions into a finished state can exceed the completed-history limit.
+    private func change(notify: Bool = true, trim: Bool = false, _ body: (inout [Record]) -> Void) {
         lock.lock(); body(&records)
         if trim {
-            var excess = max(0, records.filter { $0.state.finished }.count - limit)
-            records.removeAll { record in if excess > 0 && record.state.finished { excess -= 1; return true }; return false }
+            var excess = records.reduce(0) { $0 + ($1.state.finished ? 1 : 0) } - limit
+            if excess > 0 {
+                records.removeAll { record in if excess > 0 && record.state.finished { excess -= 1; return true }; return false }
+            }
         }
         let schedule = notify && !notificationPending
         if schedule { notificationPending = true }; lock.unlock()
@@ -69,13 +72,13 @@ final class FileTransferHistory {
         change { records in guard let i = records.firstIndex(where: { $0.id == id && $0.state == .running }) else { return }; records[i].local = local }
     }
     func succeed(_ id: UUID) {
-        change { records in
+        change(trim: true) { records in
             guard let i = records.firstIndex(where: { $0.id == id && $0.state == .running }) else { return }
             records[i].state = .succeeded; records[i].ended = Date()
         }
     }
     func finishBatch(_ batch: UUID, error: Error?) {
-        change { records in
+        change(trim: true) { records in
             var preparationFailed = error != nil && !records.contains { $0.batch == batch && $0.started != nil }
             for i in records.indices where records[i].batch == batch && [State.queued, .running].contains(records[i].state) {
                 records[i].state = records[i].state == .running || preparationFailed ? .failed : .skipped
@@ -85,12 +88,12 @@ final class FileTransferHistory {
         }
     }
     func cancel(_ batch: UUID) {
-        change { records in for i in records.indices where records[i].batch == batch && [State.queued, .running].contains(records[i].state) {
+        change(trim: true) { records in for i in records.indices where records[i].batch == batch && [State.queued, .running].contains(records[i].state) {
             records[i].state = .cancelled; records[i].ended = Date(); records[i].error = "用户取消；已传输的部分内容可能保留。"
         } }
     }
     func pause(_ batch: UUID) {
-        change { records in for i in records.indices where records[i].batch == batch {
+        change(trim: true) { records in for i in records.indices where records[i].batch == batch {
             if records[i].state == .running { records[i].state = .paused; records[i].error = "已保留临时文件；选中记录后点击继续。" }
             else if records[i].state == .queued { records[i].state = .skipped; records[i].ended = Date(); records[i].error = "本批次已暂停，此项目尚未开始，请重新选择传输。" }
         } }

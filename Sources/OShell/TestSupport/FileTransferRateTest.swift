@@ -8,6 +8,11 @@ enum FileTransferRateTest {
             var checks = [String:Bool]()
             let data = Data(repeating:0x41,count:65536)
             do {
+                checks.merge(try FileProcessChecks.run()) { _, new in new }
+                let sliced = data.dropFirst(7)
+                var copied = Data()
+                try FileTransferRateLimiter().paced(sliced) { copied.append($0) }
+                checks["slicedDataPreservesBytes"] = copied == sliced
                 let limiter = FileTransferRateLimiter(); limiter.setLimit(65536)
                 let start = ProcessInfo.processInfo.systemUptime; var count = 0
                 try limiter.paced(data) { count += $0.count }

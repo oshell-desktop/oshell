@@ -17,7 +17,6 @@ enum TerminalSelectionTest {
             return copy
         }
         let prior = TerminalSelectionSettings.load()
-        defer { prior.save(); clipboard.clearContents(); clipboard.writeObjects(saved) }
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
         let sharedBefore = try? encoder.encode(workspace.configuration.preferences)
         TerminalSelectionSettings(delimiters: ":", shiftUsesDelimiters: false).save()
@@ -185,10 +184,85 @@ enum TerminalSelectionTest {
         let page = TerminalSelectionSettingsView(autoCopy: NSButton(), trimOptions: NSView())
         page.delimiters.stringValue = "\n"; checks["controlDelimiterRejected"] = (try? page.values()) == nil
         page.delimiters.stringValue = String(repeating: "x", count: 257); checks["oversizeDelimiterRejected"] = (try? page.values()) == nil
-        let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
-        if let path = ProcessInfo.processInfo.environment["OSHELL_SELECTION_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path)) }
-        // Restore before NSApp termination, which does not unwind deferred work.
-        prior.save(); clipboard.clearContents(); clipboard.writeObjects(saved)
-        workspace.shutdown(); NSApp.terminate(nil)
+        verifyPausedOutput(workspace, pane: pane) { outputChecks in
+            checks.merge(outputChecks) { _, new in new }
+            let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
+            if let path = ProcessInfo.processInfo.environment["OSHELL_SELECTION_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path)) }
+            prior.save(); clipboard.clearContents(); clipboard.writeObjects(saved)
+            DispatchQueue.main.async {
+                workspace.shutdown()
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    private static func verifyPausedOutput(_ workspace: WorkspaceController, pane: TerminalPane, completion: @escaping ([String: Bool]) -> Void) {
+        let terminal = pane.terminal, model = terminal.getTerminal()
+        var checks = [String: Bool](), tail = Data(), received = 0, payloadBytes = 0
+        pane.terminalOutputForTesting = { bytes in
+            received += bytes.count; payloadBytes += bytes.filter { $0 == 88 }.count
+            tail.append(bytes); tail = Data(tail.suffix(128))
+        }
+        func finish() { pane.terminalOutputForTesting = nil; completion(checks) }
+        func wait(_ name: String, until condition: @escaping () -> Bool, then next: @escaping () -> Void) {
+            let deadline = Date().addingTimeInterval(15)
+            let timer = Timer(timeInterval: 0.02, repeats: true) { timer in
+                if condition() { timer.invalidate(); checks[name] = true; next() }
+                else if Date() >= deadline { timer.invalidate(); checks[name] = false; finish() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+        }
+        func pointer(_ type: NSEvent.EventType, col: Int, shift: Bool = false) {
+            let cell = terminal.bounds.width / CGFloat(model.cols)
+            let point = terminal.convert(NSPoint(x: (CGFloat(col) + 0.25) * cell, y: terminal.bounds.height - 8), to: nil)
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: shift ? [.shift] : [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: workspace.window!.windowNumber, context: nil, eventNumber: 3, clickCount: 1, pressure: 1)!
+            switch type {
+            case .leftMouseDown: terminal.mouseDown(with: event)
+            case .leftMouseDragged: terminal.mouseDragged(with: event)
+            default: terminal.mouseUp(with: event)
+            }
+        }
+        terminal.process.startProcess(executable: "/bin/sh", args: ["-c", #"stty -echo; printf '\033cFROZEN ready\r\n'; read line; head -c 2097152 /dev/zero | tr '\000' X; printf '\r\nOUTPUT_DONE\r\n'; sleep 20"#])
+        wait("ptySelectionFixtureReady", until: { String(decoding: tail, as: UTF8.self).contains("FROZEN ready") }) {
+            // TUI mouse reporting remains live; Shift uses the local selection path.
+            terminal.feed(text: "\u{1b}[?1000h\u{1b}[?1006h")
+            pointer(.leftMouseDown, col: 0)
+            checks["tuiMouseDoesNotPauseOutput"] = !terminal.process.deliveryPaused
+            pointer(.leftMouseUp, col: 0)
+            pointer(.leftMouseDown, col: 0, shift: true)
+            checks["shiftLocalSelectionPausesOutput"] = terminal.process.deliveryPaused
+            pointer(.leftMouseUp, col: 0, shift: true)
+            terminal.feed(text: "\u{1b}cFROZEN ready\r\n")
+            workspace.configuration.preferences.copyOnSelect = true
+            pane.apply(workspace.configuration.preferences)
+            pointer(.leftMouseDown, col: 0); pointer(.leftMouseDragged, col: 0); pointer(.leftMouseDragged, col: 6)
+            let frozen = model.getBufferAsData(), baseline = received, selected = terminal.selection.getSelectedText()
+            checks["selectionHoldsPTYDelivery"] = terminal.process.deliveryPaused && !selected.isEmpty
+            terminal.process.send(data: Array("\n".utf8)[...])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                checks["heldSelectionFreezesActualPTYOutput"] = model.getBufferAsData() == frozen && received == baseline
+                checks["heldSelectionTextStaysExact"] = terminal.selection.getSelectedText() == selected
+                pane.outputPausedForAudit = true
+                pointer(.leftMouseUp, col: 6)
+                checks["autoCopyPrecedesOutputResume"] = NSPasteboard.general.string(forType: .string) == selected
+                checks["releasePreservesAuditBackpressure"] = terminal.process.deliveryPaused && !pane.outputPausedForSelection
+                pane.outputPausedForAudit = false
+                wait("releasedSelectionDrainsOutput", until: { String(decoding: tail, as: UTF8.self).contains("OUTPUT_DONE") }) {
+                    checks["largeOutputDeliveredWithoutLoss"] = payloadBytes == 2_097_152
+                    checks["releasedSelectionRendersNewOutput"] = String(decoding: model.getBufferAsData(), as: UTF8.self).contains("OUTPUT_DONE")
+                    pointer(.leftMouseDown, col: 0)
+                    pane.outputPausedForAudit = true; pane.outputPausedForAudit = false
+                    checks["auditDrainCannotUnfreezeSelection"] = terminal.process.deliveryPaused
+                    _ = terminal.resignFirstResponder()
+                    checks["focusLossResumesOutput"] = !terminal.process.deliveryPaused
+                    pointer(.leftMouseDown, col: 0)
+                    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: workspace.window)
+                    checks["windowDeactivationResumesOutput"] = !terminal.process.deliveryPaused
+                    pointer(.leftMouseUp, col: 0)
+                    finish()
+                }
+            }
+        }
     }
 }

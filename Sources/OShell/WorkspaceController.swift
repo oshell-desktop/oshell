@@ -182,7 +182,11 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     func windowWillClose(_ notification: Notification) {
         shutdown(); window?.contentView = nil; windowCoordinator?.remove(self)
     }
-    func windowDidDeminiaturize(_ notification: Notification) { markSelectedOutputRead() }
+    func windowDidMiniaturize(_ notification: Notification) { inputPanes.forEach { $0.updateDisplayResourceLifecycle() } }
+    func windowDidDeminiaturize(_ notification: Notification) {
+        inputPanes.forEach { $0.updateDisplayResourceLifecycle() }
+        markSelectedOutputRead()
+    }
     var isObservingSelectedTab: Bool { NSApp.isActive && window?.isKeyWindow == true && window?.isVisible == true && window?.isMiniaturized == false }
     func markSelectedOutputRead() {
         guard isObservingSelectedTab, let selectedTab, selectedTab.hasUnreadOutput else { return }
@@ -666,6 +670,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
                 }
             } else { self.select(tab, focus: false) }
         }
+        pane.onDisplayResourcesReleased = { [weak self] in self?.scheduleIdleMemoryReclaim() }
         pane.onState = { [weak self] in self?.refreshSelection() }
         pane.onOutput = { [weak self] pane in self?.recordTerminalOutput(pane) }
         pane.onCloseRequested = { [weak self] pane in
@@ -678,6 +683,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         pane.onFilesDropped = { [weak self] pane, urls in self?.openFiles(from: pane, uploading: urls) }
         pane.applyHighlights(configuration.highlightSets.first { $0.id == configuration.preferences.highlightSetID })
         pane.onError = { message in Dialogs.message(message) }
+        pane.onHostKeyChange = { [weak self] pane, change in self?.confirmHostKeyChange(pane, change: change) }
     }
     /// Reuse only the selected idle leaf, keeping its tab identity and group.
     /// A tool launched from OShell > still owns the leaf until it exits.
@@ -904,7 +910,12 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         }
         rebuildWorkspace()
         if let selectedTab { select(selectedTab, focus: focusRemainingTerminal) }
-        if tabs.isEmpty { idleMemoryReclaimer.schedule { [weak self] in self?.tabs.isEmpty == true } }
+        scheduleIdleMemoryReclaim()
+    }
+    private func scheduleIdleMemoryReclaim() {
+        idleMemoryReclaimer.schedule(isIdle: { [weak self] in
+            self?.inputPanes.allSatisfy { $0.isIdleForMemoryReclaim } == true
+        }, clearSharedCaches: { [weak self] in self?.tabs.isEmpty == true })
     }
     @objc func closeTab() { if fileHost?.hideIfFocused() == true { return }; if let tab = selectedTab { close(tab) } }
     @objc func closePane() {
@@ -925,6 +936,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         tab.layout.releaseInputFocus()
         guard let layout = tab.layout.removing(pane.id) else { return }
         pane.shutdown()
+        scheduleIdleMemoryReclaim()
         tab.layout = layout
         if tab.activePane === pane { tab.activePane = layout.panes[min(index, layout.panes.count - 1)] }
         rebuildWorkspace()
@@ -955,6 +967,22 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let extent = vertical ? splitter.bounds.width : splitter.bounds.height
         splitter.setPosition(extent / 2, ofDividerAt: 0)
         pane.activate()
+    }
+    private func confirmHostKeyChange(_ old: TerminalPane, change: SSHHostKeyChange) {
+        guard isSecurityUnlocked, let tab = tabs.first(where: { $0.layout.panes.contains(where: { $0 === old }) }), old.ended, !old.isRunningLocalTool else { return }
+        let alert = PopupAlert(); alert.messageText = "SSH 主机密钥已变化"
+        alert.informativeText = "目标：\(change.target)\n\n旧指纹：\n\(change.oldFingerprints.joined(separator: "\n"))\n\n本次服务器提供的新指纹：\n\(change.newFingerprint)\n\n服务器可能已更换或重装，也可能连接到了其他设备。请核对新指纹。确认后只清理该地址和端口的旧记录，并重新连接；新密钥仍需通过正常的 SSH 信任确认。"
+        alert.addButton(withTitle: "清理旧记录并重新连接"); alert.addButton(withTitle: "取消")
+        alert.buttons[0].keyEquivalent = ""; alert.buttons[1].keyEquivalent = "\r"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard !old.isShutdown, old.ended, !old.isRunningLocalTool, tabs.contains(where: { $0 === tab }), tab.layout.panes.contains(where: { $0 === old }) else { return }
+        do {
+            let pane = makePane(old.profile, terminalType: old.externalTerminalType)
+            try change.removeConfirmedRecords()
+            if tab.restoreZoom() { rebuildWorkspace() }
+            old.shutdown(); tab.layout = tab.layout.replacing(old.id, with: .pane(pane)); tab.activePane = pane
+            rebuildWorkspace(); select(tab)
+        } catch { Dialogs.message(error.localizedDescription) }
     }
     @objc func reconnect() {
         guard let tab = selectedTab else { return }

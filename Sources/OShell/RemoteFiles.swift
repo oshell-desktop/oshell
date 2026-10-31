@@ -93,28 +93,29 @@ final class FileProcess {
     }
     func read(_ count: Int, timeout: TimeInterval = 60) throws -> Data {
         let deadline = ProcessInfo.processInfo.systemUptime + timeout, fd = output.fileHandleForReading.fileDescriptor
-        var result = Data(); result.reserveCapacity(count)
-        while result.count < count {
+        var result = Data(count: count), offset = 0
+        while offset < count {
             try checkCancelled()
             guard ProcessInfo.processInfo.systemUptime < deadline else { throw ModelError.invalid("文件服务器响应超时。") }
             var pollFD = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             if poll(&pollFD, 1, 100) <= 0 { continue }
-            var bytes = [UInt8](repeating: 0, count: min(32768, count - result.count))
-            let size = Darwin.read(fd, &bytes, bytes.count)
+            let size = result.withUnsafeMutableBytes { raw in
+                Darwin.read(fd, raw.baseAddress!.advanced(by: offset), min(32768, count - offset))
+            }
             if size < 0 && (errno == EAGAIN || errno == EINTR) { continue }
-            guard size > 0 else { throw ModelError.invalid("文件连接已关闭。\n" + errorText) }; result.append(contentsOf: bytes.prefix(size))
+            guard size > 0 else { throw ModelError.invalid("文件连接已关闭。\n" + errorText) }; offset += size
         }
         return result
     }
     func outputToEnd(limit: Int = 4 * 1024 * 1024, sink: FileHandle? = nil, progress: ((UInt64) -> Void)? = nil, limiter: FileTransferRateLimiter? = nil, consume: ((Data) -> Void)? = nil) throws -> Data {
         let fd = output.fileHandleForReading.fileDescriptor
         var result = Data(), total: UInt64 = 0
+        var bytes = [UInt8](repeating: 0, count: 32768)
         while true {
             try checkCancelled()
             var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             if poll(&descriptor, 1, 100) <= 0 { continue }
-            var bytes = [UInt8](repeating: 0, count: limiter?.readChunkSize ?? 32768)
-            let size = Darwin.read(fd, &bytes, bytes.count)
+            let size = Darwin.read(fd, &bytes, limiter?.readChunkSize ?? bytes.count)
             if size < 0 && (errno == EAGAIN || errno == EINTR) { continue }
             if size == 0 { break }
             guard size > 0, sink != nil || consume != nil || result.count + size <= limit else { cancel(); throw ModelError.invalid("目录输出过大或连接读取失败。") }

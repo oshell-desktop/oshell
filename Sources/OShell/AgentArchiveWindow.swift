@@ -80,13 +80,12 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
         stack.addArrangedSubview(list); list.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         speed.addItems(withTitles: ["0.5×", "1×", "2×", "4×", "8×"]); speed.selectItem(at: 1); idle.state = .on
         slider.target = self; slider.action = #selector(seek(_:)); slider.isContinuous = false
-        let controls = NSStackView(views: [ActionButton("播放 / 暂停", action: { [weak self] in self?.paused.toggle() }), speed, idle, slider]); stack.addArrangedSubview(controls); controls.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let controls = NSStackView(views: [ActionButton("播放 / 暂停", action: { [weak self] in self?.togglePlayback() }), speed, idle, slider]); stack.addArrangedSubview(controls); controls.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(status)
         search.placeholderString = "在选定记录内搜索命令、输出或任务 ID"; search.target = self; search.action = #selector(searchRecord)
         stack.addArrangedSubview(search); search.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         let viewport = NSScrollView(); viewport.hasHorizontalScroller = true; viewport.hasVerticalScroller = true; viewport.documentView = terminal
         stack.addArrangedSubview(viewport); viewport.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; viewport.heightAnchor.constraint(greaterThanOrEqualToConstant: 250).isActive = true
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
         reload()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -134,6 +133,20 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
         stream?.cancel(); guard let selected else { return }
         stream = AgentReplayStream(url: selected, root: AgentPrivateStore.root, queue: replayQueue)
         terminal.feed(text: "\u{1b}c"); start = nil; clock = 0; lastTick = ProcessInfo.processInfo.systemUptime; seekTarget = seek; paused = seek != nil
+        updatePlaybackTimer()
+    }
+    private func togglePlayback() {
+        guard stream != nil else { return }
+        paused.toggle(); updatePlaybackTimer()
+    }
+    private func updatePlaybackTimer() {
+        guard stream != nil, !paused || seekTarget != nil else {
+            timer?.invalidate(); timer = nil; return
+        }
+        guard timer == nil else { return }
+        // A pause must not advance the playback clock when its timer restarts.
+        lastTick = ProcessInfo.processInfo.systemUptime
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
     }
     private func scanTimeline() {
         timelineWork?.cancel(); searchWork?.cancel()
@@ -157,7 +170,7 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
     }
     @objc private func seek(_ sender: NSSlider) { startPlayback(seek: sender.doubleValue) }
     private func tick() {
-        let now = ProcessInfo.processInfo.systemUptime; defer { lastTick = now }
+        let now = ProcessInfo.processInfo.systemUptime; defer { lastTick = now; updatePlaybackTimer() }
         guard let stream, !paused || seekTarget != nil else { return }
         if seekTarget == nil { clock += min(0.25, now - lastTick) * [0.5, 1, 2, 4, 8][speed.indexOfSelectedItem] }
         let deadline = now + 0.006
@@ -174,13 +187,17 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
             if seekTarget == nil { slider.doubleValue = clock }
         }
         let state = stream.state()
-        if state.0 { paused = true; seekTarget = nil; if let failure = state.1 { status.stringValue = failure } }
+        if state.0 { paused = true; seekTarget = nil; self.stream = nil; if let failure = state.1 { status.stringValue = failure } }
     }
     #if OSHELL_TEST_HARNESS
     func applyForTesting(_ event: AgentAuditEvent) { apply(event) }
     var replayTerminalForTesting: TerminalView { terminal }
     var workForTesting: [Operation] { workQueue.operations }
     var timerForTesting: Timer? { timer }
+    var playbackClockForTesting: TimeInterval { clock }
+    func skipIdleForTesting(_ enabled: Bool) { idle.state = enabled ? .on : .off }
+    func togglePlaybackForTesting() { togglePlayback() }
+    func seekForTesting(_ time: TimeInterval) { startPlayback(seek: time) }
     func selectForTesting(_ url: URL) { selected = url; startPlayback(); scanTimeline() }
     #endif
     private func apply(_ event: AgentAuditEvent) {
@@ -225,7 +242,7 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
         guard let selected else { return }
         guard !active(selected) else { Dialogs.message("请先结束此会话存档，再删除。"); return }
         guard Dialogs.confirm("删除这份存档？", text: "仅删除选中的加密记录，无法撤销。", action: "删除") else { return }
-        do { timelineWork?.cancel(); searchWork?.cancel(); selectionGeneration = UUID(); stream?.cancel(); stream = nil; try FileManager.default.removeItem(at: selected); try? FileManager.default.removeItem(at: selected.appendingPathExtension("index")); self.selected = nil; reload() } catch { Dialogs.message(error.localizedDescription) }
+        do { timelineWork?.cancel(); searchWork?.cancel(); selectionGeneration = UUID(); stream?.cancel(); stream = nil; updatePlaybackTimer(); try FileManager.default.removeItem(at: selected); try? FileManager.default.removeItem(at: selected.appendingPathExtension("index")); self.selected = nil; reload() } catch { Dialogs.message(error.localizedDescription) }
     }
     private func export() {
         guard exportWork == nil || exportWork?.isFinished == true else { status.stringValue = "已有导出正在进行。"; return }

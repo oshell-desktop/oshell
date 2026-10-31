@@ -106,6 +106,9 @@ final class OShellTerminal: LocalProcessTerminalView {
         let remoteMouse = allowMouseReporting && model.mouseMode != .off
             && (!event.modifierFlags.contains(.shift) || model.mouseShiftCapture)
         if remoteMouse { wordClickSeed = nil; super.mouseDown(with: event); return }
+        owner?.outputPausedForSelection = true
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(endOutputSelection), name: NSWindow.didResignKeyNotification, object: window)
         let continuing = continuesWordClick(event)
         let plain = event.modifierFlags.intersection([.shift, .command, .control, .option]).isEmpty
         if event.clickCount == 2 || (event.clickCount == 4 && continuing && plain) {
@@ -148,7 +151,29 @@ final class OShellTerminal: LocalProcessTerminalView {
         wordClickSeed = nil
         super.mouseDragged(with: event)
     }
+    @objc private func endOutputSelection() {
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        owner?.outputPausedForSelection = false
+    }
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { endOutputSelection() }
+        return resigned
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        endOutputSelection()
+        owner?.updateDisplayResourceLifecycle()
+    }
+    override func viewDidHide() {
+        super.viewDidHide(); owner?.updateDisplayResourceLifecycle()
+    }
+    override func viewDidUnhide() {
+        super.viewDidUnhide(); owner?.updateDisplayResourceLifecycle()
+    }
     override func mouseUp(with event: NSEvent) {
+        // Copy against the frozen buffer before queued output can scroll it.
+        defer { endOutputSelection() }
         userInputDepth += 1; defer { userInputDepth -= 1 }
         super.mouseUp(with: event)
         owner?.searchPanel.selectionChanged()
@@ -296,6 +321,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var fontZoomOffset: CGFloat = 0 // Local to this pane; never persisted or synced.
     private var sshClientLocale: SSHClientLocale?
     private let knownHostsFile: URL?
+    private var hostKeyDiagnostic = Data()
+    private var hostKeyLoginFailed = false
+    private var hostKeyChangeReported = false
+    var onHostKeyChange: ((TerminalPane, SSHHostKeyChange) -> Void)?
     private var authBroker: AuthBroker?
     private var oneTimePassword: String?
     let externalTerminalType: String?
@@ -348,7 +377,16 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         terminal.foregroundHighlightProvider = { text in matcher.matches(in: text).compactMap { match in NSColor(hex: match.color).map { (match.range, $0) } } }
     }
     private var endedInput: EndedSessionInput?
-    private var localTool: LocalToolProcess?
+    var outputPausedForSelection = false { didSet { updateOutputDelivery() } }
+    var outputPausedForAudit = false { didSet { updateOutputDelivery() } }
+    private func updateOutputDelivery() {
+        // Independent consumers must not clear each other's pause. LocalProcess
+        // bounds the backlog and applies PTY backpressure instead of dropping output.
+        let paused = outputPausedForSelection || outputPausedForAudit
+        terminal.process.deliveryPaused = paused
+        localTool?.deliveryPaused = paused
+    }
+    private var localTool: LocalToolProcess? { didSet { updateOutputDelivery() } }
     private var pendingLocalInput = [UInt8]()
     var localToolName: String? { localTool?.command.name }
     var localToolPID: pid_t { localTool?.pid ?? 0 }
@@ -399,6 +437,20 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var lastPromptText = ""
     private var promptScan: DispatchWorkItem?
     private var idleTimer: DispatchSourceTimer?
+    private var displayReleaseWork: DispatchWorkItem?
+    var onDisplayResourcesReleased: (() -> Void)?
+    var isIdleForMemoryReclaim: Bool { ProcessInfo.processInfo.systemUptime - lastActivity >= 1 }
+    func updateDisplayResourceLifecycle() {
+        displayReleaseWork?.cancel(); displayReleaseWork = nil
+        guard !isShutdown, terminal.window == nil || terminal.isHiddenOrHasHiddenAncestor || terminal.window?.isMiniaturized == true else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isShutdown else { return }
+            self.displayReleaseWork = nil
+            if self.terminal.releaseInactiveMetalSurface() { self.onDisplayResourcesReleased?() }
+        }
+        displayReleaseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
     private var lastActivity = ProcessInfo.processInfo.systemUptime
     private var connectionNoticeShown = false
     static let localShellShortcut = KeyboardShortcut(30, KeyboardShortcut.control | KeyboardShortcut.option)
@@ -707,6 +759,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 broker.onAuthenticated = { [weak self] in
                     self?.sshConnectionGroup?.authenticatedConnectionReady()
                     self?.showConnectionEstablished()
+                    self?.hostKeyDiagnostic = Data()
                     self?.sessionReady = true; self?.noteActivity(); self?.startIdleTimer(); self?.observeTransportPeer(); self?.refreshHeader(); self?.onState?()
                     self?.schedulePromptScan()
                 }
@@ -805,6 +858,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         terminalOutputForTesting?(incoming)
         #endif
         guard !ignoreOutput, !isShutdown else { return }
+        if profile.kind == .ssh, !sessionReady, !reusesSSHConnection, !hostKeyChangeReported, !ended || hostKeyLoginFailed {
+            hostKeyDiagnostic.append(incoming)
+            if hostKeyDiagnostic.count > 65_536 { hostKeyDiagnostic = Data(hostKeyDiagnostic.suffix(65_536)) }
+            offerHostKeyReplacement()
+        }
         if let audit = agentAudit {
             audit.append(.init(kind: "output", fields: AgentCoordinator.shared.outputFields(self), bytes: agentOutputRedactor.consume(incoming)))
         }
@@ -845,7 +903,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         guard !bytes.isEmpty else { return }
         let recorded = agentDisplayRedactor.consume(bytes)
         agentAudit?.append(.init(kind: "display", bytes: recorded))
-        if let audit = agentAudit, audit.pendingBytes >= 524_288, audit.error == nil { terminal.process.deliveryPaused = true }
+        if let audit = agentAudit, audit.pendingBytes >= 524_288, audit.error == nil { outputPausedForAudit = true }
         terminal.feed(byteArray: Array(bytes)[...]); logger?.append(recorded)
         AgentCoordinator.shared.observeTerminal(self)
         searchPanel.bufferDidChange()
@@ -974,6 +1032,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         agentConnectionEnded("终端关闭")
         guard !isShutdown else { return }
         isShutdown = true; onAI = nil
+        displayReleaseWork?.cancel(); displayReleaseWork = nil; onDisplayResourcesReleased = nil
         searchPanel.dispose()
         if let window = terminal.window, let responder = window.firstResponder as? NSView,
            responder === terminal || responder.isDescendant(of: view) {
@@ -988,6 +1047,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         idleTimer?.cancel(); idleTimer = nil; sessionReady = false
         ended = true; onState = nil; cancelTransfer(); stopLogging()
         authBroker?.stop(); authBroker = nil
+        onHostKeyChange = nil; hostKeyDiagnostic = Data()
         terminal.processDelegate = nil; terminal.terminate(); terminal.owner = nil
         sshConnectionGroup?.detach(id); sshConnectionGroup = nil
         // Release rendering resources immediately, even if AppKit temporarily
@@ -1142,7 +1202,19 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
            [profile.host, initialRemoteHostname ?? ""].contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }), !url.path.isEmpty,
            (try? RemotePath.validate(url.path)) != nil { remoteDirectory = url.path }
     }
+    private func offerHostKeyReplacement() {
+        guard hostKeyLoginFailed, !hostKeyChangeReported, let file = knownHostsFile else { return }
+        do {
+            guard let change = try SSHHostKeyChange.inspect(hostKeyDiagnostic, host: profile.host, port: profile.port, file: file) else { return }
+            hostKeyChangeReported = true; hostKeyDiagnostic = Data()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isShutdown, self.ended, !self.isRunningLocalTool else { return }
+                self.onHostKeyChange?(self, change)
+            }
+        } catch { hostKeyChangeReported = true; onError?(error.localizedDescription) }
+    }
     func processTerminated(source: TerminalView, exitCode: Int32?) {
+        hostKeyLoginFailed = profile.kind == .ssh && !sessionReady && !reusesSSHConnection && exitCode == 255
         agentConnectionEnded("连接结束", waitForOutput: true)
         sshConnectionGroup?.connectionProcessEnded()
         idleTimer?.cancel(); idleTimer = nil; sessionReady = false
@@ -1155,6 +1227,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             display(Data("[复用终端未能保持连接；若服务器拒绝多通道或共享连接失效，请重新建立会话。不会回退到密码重试。]\r\n".utf8))
         }
         useLocalHostIdentity(); beginEndedInput()
+        offerHostKeyReplacement()
         onState?()
     }
     deinit { idleTimer?.cancel(); localTool?.stop(); terminal.terminate(); sshConnectionGroup?.detach(id); logger?.stop() }

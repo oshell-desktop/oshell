@@ -55,27 +55,40 @@ enum ResourceReviewTest {
         window.isReleasedWhenClosed = false
         let clock = TerminalClockView(frame: NSRect(x: 10, y: 10, width: 250, height: 30)); window.contentView!.addSubview(clock)
         var preferences = Preferences(); preferences.terminalClockEnabled = true
-        window.orderFront(nil); clock.apply(preferences)
-        checks["visibleClockStartsTimer"] = TerminalClockTicker.shared.isRunning
-        clock.isHidden = true
-        checks["hiddenClockStopsTimer"] = !TerminalClockTicker.shared.isRunning
-        clock.isHidden = false
-        checks["shownClockResumesTimer"] = TerminalClockTicker.shared.isRunning
-        window.miniaturize(nil)
-        later {
-            checks["minimizedClockStopsTimer"] = window.isMiniaturized && !TerminalClockTicker.shared.isRunning
-            let pausedText = clock.text
+        func whenVisible(_ name: String, _ body: @escaping () -> Void) {
+            let deadline = ProcessInfo.processInfo.systemUptime + 5
+            let timer = Timer(timeInterval: 0.05, repeats: true) { timer in
+                let visible = window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+                guard visible || ProcessInfo.processInfo.systemUptime >= deadline else { return }
+                timer.invalidate(); checks[name] = visible; body()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+        }
+        // Ordering a window does not synchronously update its occlusion state.
+        window.collectionBehavior = [.moveToActiveSpace]; window.center()
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil); clock.apply(preferences)
+        whenVisible("initialClockWindowIsVisible") {
+            checks["visibleClockStartsTimer"] = TerminalClockTicker.shared.isRunning
+            clock.isHidden = true
+            checks["hiddenClockStopsTimer"] = !TerminalClockTicker.shared.isRunning
+            clock.isHidden = false
+            checks["shownClockResumesTimer"] = TerminalClockTicker.shared.isRunning
+            window.miniaturize(nil)
             later {
-                checks["minimizedClockDoesNotUpdateText"] = clock.text == pausedText
-                window.deminiaturize(nil)
+                checks["minimizedClockStopsTimer"] = window.isMiniaturized && !TerminalClockTicker.shared.isRunning
+                let pausedText = clock.text
                 later {
-                    checks["restoredClockResumesWithCurrentTime"] = TerminalClockTicker.shared.isRunning && clock.text != pausedText
-                    clock.dispose(); window.close()
-                    checks["lastClockReleasesTimerAndSubscription"] = !TerminalClockTicker.shared.isRunning && TerminalClockTicker.shared.subscriberCount == 0
-                    let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "unchangedRefreshes": 1000, "tabs": 200, "refreshMilliseconds": elapsed * 1000]
-                    if let output = ProcessInfo.processInfo.environment["OSHELL_RESOURCE_REVIEW_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted,.sortedKeys]).write(to: URL(fileURLWithPath: output)) }
-                    print("Resource review:", checks.filter { !$0.value }.keys.sorted())
-                    workspace.shutdown(); NSApp.terminate(nil)
+                    checks["minimizedClockDoesNotUpdateText"] = clock.text == pausedText
+                    window.deminiaturize(nil); window.makeKeyAndOrderFront(nil)
+                    whenVisible("restoredClockWindowIsVisible") {
+                        checks["restoredClockResumesWithCurrentTime"] = TerminalClockTicker.shared.isRunning && clock.text != pausedText
+                        clock.dispose(); window.close()
+                        checks["lastClockReleasesTimerAndSubscription"] = !TerminalClockTicker.shared.isRunning && TerminalClockTicker.shared.subscriberCount == 0
+                        let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks, "unchangedRefreshes": 1000, "tabs": 200, "refreshMilliseconds": elapsed * 1000]
+                        if let output = ProcessInfo.processInfo.environment["OSHELL_RESOURCE_REVIEW_OUTPUT"] { try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted,.sortedKeys]).write(to: URL(fileURLWithPath: output)) }
+                        print("Resource review:", checks.filter { !$0.value }.keys.sorted())
+                        workspace.shutdown(); NSApp.terminate(nil)
+                    }
                 }
             }
         }

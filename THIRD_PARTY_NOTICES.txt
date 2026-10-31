@@ -22,7 +22,7 @@ at 512/256 pixels and retain their existing adaptive growth and maximum sizes.
 PTY writes use a dedicated ordered DispatchIO stream channel on a duplicated master FD;
 the read and write channels are separate and both are closed on termination.
 PTY exit monitoring uses the child PID rather than the I/O running flag, so an earlier PTY EOF cannot suppress exit notification or child reaping.
-The host can override key-down/key-up handling for explicit user-input synchronization, and select-all for copy-on-selection behavior.
+The host can override key-down/key-up handling for explicit user-input synchronization, select-all for copy-on-selection behavior, and responder resignation to release host-side selection output pauses.
 A host-supplied, display-only foreground highlight hook is shared by the Metal and CoreGraphics renderers; selection colors retain priority.
 PTY descriptors are marked close-on-exec so later sessions cannot retain another session's terminal.
 PTY output-drained status includes EOF and queued deliveries. Backpressured reads
@@ -67,6 +67,16 @@ Public-source packaging changes: SwiftTerm debug buffer dumps use private tempor
 Unused Sparkle developer utilities (BinaryDelta, generate_appcast, generate_keys and the legacy DSA signer) are omitted. The Ed25519 signer remains available for integration tests. Runtime bundles omit build-only framework headers and module maps; these remain in the build-time XCFramework.
 
 OShell mouse-focus change: macOS Metal rendering surfaces pass hit testing to the parent terminal view, retaining native scrollbars and terminal selection/mouse reporting.
+
+OShell macOS Metal surfaces use a two-drawable swap queue with the existing single-in-flight frame coordinator, avoiding a third full-resolution drawable per surface.
+
+OShell text shaping caches bound both entry count and accounted text/glyph storage, bypass oversized entries, and release reconstructible shaping/scaled-font caches when a surface detaches. Minimized macOS terminal windows can release their Metal surfaces and restore them without resetting the emulator or connection.
+
+OShell macOS Metal terminals reuse the cell-sized native caret layer for cursor animation instead of redrawing the entire Metal surface on every blink. The native caret uses AppKit's view drawing callback, and cursor drawing balances its graphics state on every return path. Other platforms retain the Metal cursor path.
+
+OShell persistent Metal row caches retain GPU buffers without a duplicate copy of intermediate CPU draw arrays. Valid rows reuse their existing buffers; aggregated rendering rebuilds CPU data when needed after a mode change.
+
+OShell Metal draw requests honor synchronized output even when triggered outside the feed/display debounce path. The terminal's existing end-of-frame and timeout notifications resume display updates.
 
 Nerd Fonts Symbols Only v3.4.0 (unmodified SymbolsNerdFontMono-Regular.ttf).
 https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.4.0
@@ -1029,3 +1039,6 @@ swift-atomics — LICENSE.txt
 
 swift-collections — LICENSE.txt
 Same license text as reproduced above.
+
+Inactive terminal views can release their Metal display surfaces after GPU work finishes, keeping compiled pipelines and terminal state. Restoring a visible surface reuses the renderer and invalidates its row draw cache.
+Metal text shaping keeps one copy of glyph positions and string indices per CoreText run; decoration and cell-bound calculations iterate those arrays lazily. The existing 2048-entry cache limit is unchanged.

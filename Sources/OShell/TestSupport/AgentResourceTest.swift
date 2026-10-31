@@ -59,9 +59,10 @@ final class AgentResourceTest {
         var owner: AgentArchiveWindow? = AgentArchiveWindow()
         weak var released = owner
         weak var terminal = owner?.replayTerminalForTesting
-        let timer = owner?.timerForTesting
+        checks["round\(round)IdleWindowHasNoTimer"] = owner?.timerForTesting == nil
         // Leave the eight-record producer paused while superseding whole-archive scans.
         for _ in 0..<40 { owner?.selectForTesting(url) }
+        let timer = owner?.timerForTesting
         let jobs = owner?.workForTesting ?? []
         owner?.close(); owner = nil
         weak var pane: TerminalPane?

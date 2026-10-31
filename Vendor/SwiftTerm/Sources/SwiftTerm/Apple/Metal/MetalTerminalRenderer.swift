@@ -345,6 +345,19 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         frameCoordinator.isIdle
     }
 
+    // The surface can be discarded while a tab is hidden without rebuilding
+    // shader pipelines or losing terminal state when it becomes visible again.
+    func attachSurface(_ view: MTKView?) {
+        self.view = view
+        updateCursorBlinkTimer(shouldBlink: false)
+        rowCache.removeAll(keepingCapacity: false)
+        cacheSignature = nil
+        if view == nil {
+            shaperCache.removeAll()
+            scaledFontCache.removeAll(keepingCapacity: false)
+        }
+    }
+
     func invalidateForReplacement() {
         frameCoordinator.invalidate()
         cursorBlinkTimer?.invalidate()
@@ -356,6 +369,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        // Layout, focus and explicit draw requests can bypass feed's display
+        // debounce. Keep the last complete frame until synchronized output ends;
+        // ESU (or the terminal's timeout) schedules the pending display update.
+        guard terminalView?.terminal.synchronizedOutputActive != true else { return }
 #if os(macOS)
         // currentDrawable may wait for the compositor. Do not acquire surfaces
         // for occluded, minimized, detached or hidden terminal views; lifecycle
@@ -390,11 +407,17 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let scale = terminalView.backingScaleFactor()
 #endif
         view.drawableSize = CGSize(width: view.bounds.width * scale, height: view.bounds.height * scale)
+        #if os(macOS)
+        // AppKit's cell-sized caret layer animates independently. Blinking it
+        // must not keep submitting full-window Metal frames while the shell is idle.
+        updateCursorBlinkTimer(shouldBlink: false)
+        #else
         let cursorStyle = terminalView.terminal.options.cursorStyle
         let shouldBlink = isBlinkStyle(cursorStyle)
             && !terminalView.terminal.cursorHidden
             && cursorHasFocus(in: terminalView)
         updateCursorBlinkTimer(shouldBlink: shouldBlink)
+        #endif
 
 #if canImport(os)
         let drawableID = OSSignpostID(log: MetalTerminalRenderer.profileLog)
@@ -789,6 +812,13 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 (rebuildRange?.contains(row) ?? false) ||
                 !cacheValid ||
                 (bufferingMode == .perFrameAggregated && entry?.data == nil)
+            // Persistent rows already own GPU-ready copies. Reuse those buffers
+            // without keeping or rebuilding the intermediate CPU arrays.
+            if !needsRebuild, bufferingMode == .perRowPersistent, let buffers = entry?.buffers {
+                rows.append(buffers)
+                cachedRows += 1
+                continue
+            }
             let rowBuffers: RowDrawBuffers?
             let rowData: RowDrawData
             if needsRebuild {
@@ -857,6 +887,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             }
             if let rowBuffers {
                 rows.append(rowBuffers)
+                rowCache[row]?.data = nil
             }
             if bufferingMode == .perFrameAggregated {
                 if var currentFrame = frameData {
@@ -878,6 +909,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         debugRowsCached = cachedRows
 #endif
 
+        #if os(macOS)
+        let cursorData: (colorVertices: [ColorVertex], glyphVerticesGray: [GlyphVertex], glyphVerticesColor: [GlyphVertex]) = ([], [], [])
+        #else
         let cursorData = buildCursorDrawData(scale: scale,
                                              cellWidth: cellWidth,
                                              cellHeight: cellHeight,
@@ -886,6 +920,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                              yDisp: visibleDisp,
                                              firstRow: firstRow,
                                              lastRow: lastRow)
+        #endif
 
         return DrawData(rows: rows,
                         frame: frameData,
@@ -1405,8 +1440,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     let thickness = underlineThickness * scale
                     let segmentStyle: UnderlineStyle = underlineStyle == .double ? .single : underlineStyle
 
-                    for (glyphIndex, ctPos) in run.shaperRun.positions.enumerated() {
-                        let stringIndex = run.utf16Offset + run.shaperRun.stringIndices[glyphIndex]
+                    for (ctPos, index) in run.shaperRun.positionIndices {
+                        let stringIndex = run.utf16Offset + index
                         let ordinal = shaped.segment.cellOrdinal(forUTF16: stringIndex)
                         let glyphColumn = shaped.segment.column + (ordinal * shaped.segment.columnWidth)
                         let basePos = CGPoint(x: lineOrigin.x + (cellWidth * CGFloat(glyphColumn)),
@@ -1459,8 +1494,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     let strikeThickness = max(round(scale * CTFontGetUnderlineThickness(ctFont)) / scale, 0.5)
                     let strikePosition = (CTFontGetXHeight(ctFont) + strikeThickness) * 0.5
 
-                    for (glyphIndex, ctPos) in run.shaperRun.positions.enumerated() {
-                        let stringIndex = run.utf16Offset + run.shaperRun.stringIndices[glyphIndex]
+                    for (ctPos, index) in run.shaperRun.positionIndices {
+                        let stringIndex = run.utf16Offset + index
                         let ordinal = shaped.segment.cellOrdinal(forUTF16: stringIndex)
                         let glyphColumn = shaped.segment.column + (ordinal * shaped.segment.columnWidth)
                         let basePos = CGPoint(x: lineOrigin.x + (cellWidth * CGFloat(glyphColumn)),
@@ -1962,26 +1997,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private struct ShaperKey: Hashable {
-        let fontName: String
-        let fontSize: CGFloat
-        let text: String
-    }
-
-    private struct ShaperGlyphRun {
-        let font: CTFont
-        let glyphs: [CGGlyph]
-        let positions: [CGPoint]
-        let stringIndices: [CFIndex]
-    }
-
-    private struct ShaperRun {
-        let glyphRuns: [ShaperGlyphRun]
-        let positions: [CGPoint]
-        let stringIndices: [CFIndex]
-        let glyphCount: Int
-    }
-
     private struct ShapedRun {
         let attributes: [NSAttributedString.Key: Any]
         let utf16Offset: Int
@@ -1991,90 +2006,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private struct ShapedSegment {
         let segment: ViewLineSegment
         let runs: [ShapedRun]
-    }
-
-    private final class ShaperCache {
-        private let maxEntries: Int
-        private var cache: [ShaperKey: ShaperRun] = [:]
-        private var order: [ShaperKey] = []
-
-        init(maxEntries: Int) {
-            self.maxEntries = maxEntries
-        }
-
-        func shape(text: String, font: CTFont) -> ShaperRun? {
-            guard !text.isEmpty else {
-                return nil
-            }
-            let key = ShaperKey(fontName: CTFontCopyPostScriptName(font) as String,
-                                fontSize: CTFontGetSize(font),
-                                text: text)
-            if let cached = cache[key] {
-                return cached
-            }
-
-            // buildAttributedString supplies terminal cells in their final
-            // screen order. Keep that order when CoreText shapes glyphs for
-            // the Metal atlas; otherwise CoreText applies BiDi a second time.
-            let writingDirectionKey = NSAttributedString.Key(kCTWritingDirectionAttributeName as String)
-            let attributedString = NSAttributedString(string: text, attributes: [
-                .font: font,
-                writingDirectionKey: [NSNumber(value: 2)],
-            ])
-            let line = CTLineCreateWithAttributedString(attributedString)
-            guard let runs = CTLineGetGlyphRuns(line) as? [CTRun], !runs.isEmpty else {
-                return nil
-            }
-
-            var glyphRuns: [ShaperGlyphRun] = []
-            var positions: [CGPoint] = []
-            var stringIndices: [CFIndex] = []
-            for run in runs {
-                let count = CTRunGetGlyphCount(run)
-                if count == 0 {
-                    continue
-                }
-                let attributes = CTRunGetAttributes(run) as? [NSAttributedString.Key: Any] ?? [:]
-                let runFont: CTFont = {
-                    if let runFont = attributes[.font] as? TTFont {
-                        return runFont as CTFont
-                    }
-                    return font
-                }()
-                let glyphs = [CGGlyph](unsafeUninitializedCapacity: count) { bufferPointer, countOut in
-                    CTRunGetGlyphs(run, CFRange(), bufferPointer.baseAddress!)
-                    countOut = count
-                }
-                var runPositions = [CGPoint](repeating: .zero, count: count)
-                CTRunGetPositions(run, CFRange(), &runPositions)
-                var runStringIndices = [CFIndex](repeating: 0, count: count)
-                CTRunGetStringIndices(run, CFRange(), &runStringIndices)
-                glyphRuns.append(ShaperGlyphRun(font: runFont,
-                                                glyphs: glyphs,
-                                                positions: runPositions,
-                                                stringIndices: runStringIndices))
-                positions.append(contentsOf: runPositions)
-                stringIndices.append(contentsOf: runStringIndices)
-            }
-
-            let result = ShaperRun(glyphRuns: glyphRuns,
-                                   positions: positions,
-                                   stringIndices: stringIndices,
-                                   glyphCount: positions.count)
-            insert(key: key, run: result)
-            return result
-        }
-
-        private func insert(key: ShaperKey, run: ShaperRun) {
-            if cache[key] == nil {
-                order.append(key)
-            }
-            cache[key] = run
-            while order.count > maxEntries {
-                let evicted = order.removeFirst()
-                cache.removeValue(forKey: evicted)
-            }
-        }
     }
 
     private func colorToSIMD(_ color: TTColor) -> SIMD4<Float> {

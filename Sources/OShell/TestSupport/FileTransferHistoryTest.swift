@@ -72,6 +72,22 @@ enum FileTransferHistoryTest {
         for _ in 0..<5 { let id=add(bounded,UUID()); _=bounded.start(id); bounded.succeed(id) }
         checks["boundedCompletedHistoryKeepsWaiting"] = bounded.snapshot.count == 3 && bounded.snapshot.contains { $0.id == waiting }
         bounded.clearCompleted(); checks["clearKeepsUnfinished"] = bounded.snapshot.map(\.id) == [waiting]
+        let large = FileTransferHistory(limit: 2), largeBatch = UUID()
+        let started = ProcessInfo.processInfo.systemUptime
+        let bulk = (0..<20_000).map { _ in add(large, largeBatch) }
+        let enqueueMilliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1000
+        checks["largeBatchKeepsAllQueuedRecords"] = large.snapshot.count == bulk.count
+        _ = large.start(bulk[0]); large.pause(largeBatch)
+        checks["pauseTrimsSkippedAndPreservesPaused"] = large.snapshot.map(\.id) == [bulk[0]] + Array(bulk.suffix(2)) && large.snapshot.first?.state == .paused
+        let retryBatch = UUID()
+        checks["pausedRecordCanResumeAfterTrim"] = large.requeue(bulk[0], batch: retryBatch) && large.start(bulk[0])
+        large.progress(bulk[0], bytes: 42, total: 42); large.succeed(bulk[0])
+        checks["completionStillBoundsHistory"] = large.snapshot.count == 2 && large.snapshot.allSatisfy { $0.state.finished }
+        let cancellationBatch = UUID()
+        for _ in 0..<5 { _ = add(large, cancellationBatch) }
+        large.cancel(cancellationBatch)
+        checks["cancellationStillBoundsHistory"] = large.snapshot.count == 2 && large.snapshot.allSatisfy { $0.state == .cancelled }
+        print("Synthetic history enqueue: 20000 records, \(enqueueMilliseconds) ms")
         let preparation = FileTransferHistory(), setup = UUID(); _=add(preparation,setup); _=add(preparation,setup); preparation.finishBatch(setup,error:ModelError.invalid("fixture setup"))
         checks["preparationFailureRecorded"] = preparation.snapshot.map(\.state) == [.failed,.skipped]
         session.view.setFrameSize(NSSize(width: 776, height: 450)); session.view.layoutSubtreeIfNeeded()

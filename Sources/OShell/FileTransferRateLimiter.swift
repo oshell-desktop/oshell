@@ -42,7 +42,10 @@ final class FileTransferRateLimiter {
         var offset = 0
         while offset < data.count {
             let count = try grant(upTo: min(32768, data.count-offset), checkCancellation: checkCancellation)
-            try write(data.subdata(in:offset..<offset+count)); offset += count
+            // The usual 32 KiB block already fits the grant; preserve its storage.
+            if offset == 0 && count == data.count { try write(data) }
+            else { try write(data.subdata(in: data.startIndex+offset..<data.startIndex+offset+count)) }
+            offset += count
         }
     }
     static func scpArguments(_ bytesPerSecond: Int) -> [String] {
