@@ -25,18 +25,31 @@ public struct WebDAVSettings: Codable {
         guard let url = parts.url else { throw ModelError.invalid("WebDAV 地址无效。") }; return url
     }
 }
-public struct WebDAVObject {
+public struct WebDAVObject: Equatable {
     public let data: Data
-    public let etag: String
+    fileprivate let version: String?
+    fileprivate let nutstoreTag: String?
+    init(data: Data, etag: String?, nutstoreTag: String? = nil) {
+        self.data = data; version = etag; self.nutstoreTag = nutstoreTag
+    }
+
+    public var etag: String {
+        get throws {
+            guard let version else { throw WebDAVFailure.unsafeVersion }
+            return version
+        }
+    }
 }
 public enum WebDAVFailure: Error, LocalizedError {
-    case conflict, authentication, status(Int), unsafeVersion, network, tls, tooLarge, redirect
+    case conflict, occupied, uncertainWrite, authentication, status(Int), unsafeVersion, network, tls, tooLarge, redirect
     public var errorDescription: String? {
         switch self {
         case .conflict: return "共享版本已变化，未覆盖。请重新同步并确认冲突。"
+        case .occupied: return "另一台设备占用了坚果云写入标记。请稍后重新同步。"
+        case .uncertainWrite: return "坚果云写入或释放标记的结果不确定。请核对远端文件和写入标记后再同步。"
         case .authentication: return "WebDAV 身份验证失败，请检查账号、密码及应用专用密码。"
         case .status(let code): return "WebDAV 返回 HTTP \(code)。请确认目录存在且账号有读写权限。"
-        case .unsafeVersion: return "服务器未提供可用的强 ETag，无法安全同步；不会无条件覆盖数据。"
+        case .unsafeVersion: return "服务器未提供用于更新此文件的强 ETag。已停止覆盖该文件，本地修改已保留。"
         case .tls: return "WebDAV TLS 连接或证书校验失败，请检查服务器证书和 HTTPS 配置。"
         case .network: return "WebDAV 网络请求失败或超时，本地数据已保留。"
         case .tooLarge: return "WebDAV 响应超过大小限制。"
@@ -85,34 +98,40 @@ private final class DAVRequest: NSObject, URLSessionDataDelegate {
             error = value.domain == NSURLErrorDomain && (-1206 ... -1200).contains(value.code) ? WebDAVFailure.tls : WebDAVFailure.network
         }; done.signal() }
 }
-/// Accept only a successful DAV resourcetype for the requested collection.
-private final class DAVCollectionResponse: NSObject, XMLParserDelegate {
+private final class DAVPropertyResponse: NSObject, XMLParserDelegate {
     let target: URL
     var stack = [String](), text = "", href = "", status = ""
     var collection = false, validProperty = false, matches = 0, isCollection = false
+    var propertyTag: String?, responseTag: String?, etag: String?
     init(_ target: URL) { self.target = target }
     func parser(_ parser: XMLParser, didStartElement element: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
         stack.append(namespaceURI == "DAV:" ? element : "?"); text = ""
-        if stack == ["multistatus", "response"] { href = ""; validProperty = false }
-        if stack == ["multistatus", "response", "propstat"] { status = ""; collection = false }
+        if stack == ["multistatus", "response"] { href = ""; validProperty = false; responseTag = nil }
+        if stack == ["multistatus", "response", "propstat"] { status = ""; collection = false; propertyTag = nil }
         if stack == ["multistatus", "response", "propstat", "prop", "resourcetype", "collection"] { collection = true }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
     func parser(_ parser: XMLParser, didEndElement element: String, namespaceURI: String?, qualifiedName: String?) {
         if stack == ["multistatus", "response", "href"] { href = text.trimmingCharacters(in: .whitespacesAndNewlines) }
         if stack == ["multistatus", "response", "propstat", "status"] { status = text }
-        if stack == ["multistatus", "response", "propstat"], status.split(separator: " ").dropFirst().first == "200", collection { validProperty = true }
+        if stack == ["multistatus", "response", "propstat", "prop", "getetag"] {
+            propertyTag = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if stack == ["multistatus", "response", "propstat"], status.split(separator: " ").dropFirst().first == "200" {
+            if collection { validProperty = true }
+            if let propertyTag { responseTag = propertyTag }
+        }
         if stack == ["multistatus", "response"], !href.isEmpty, let url = URL(string: href, relativeTo: target)?.absoluteURL,
            url.scheme == target.scheme, url.host == target.host, url.port == target.port,
            url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == target.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) {
-            matches += 1; isCollection = validProperty
+            matches += 1; isCollection = validProperty; etag = responseTag
         }
         stack.removeLast(); text = ""
     }
-    static func validate(_ data: Data, at url: URL) -> Bool {
-        let delegate = DAVCollectionResponse(url), parser = XMLParser(data: data)
+    static func parse(_ data: Data, at url: URL) -> DAVPropertyResponse? {
+        let delegate = DAVPropertyResponse(url), parser = XMLParser(data: data)
         parser.shouldProcessNamespaces = true; parser.shouldResolveExternalEntities = false; parser.delegate = delegate
-        return parser.parse() && delegate.matches == 1 && delegate.isCollection
+        return parser.parse() && delegate.matches == 1 ? delegate : nil
     }
 }
 public final class WebDAVClient: FontSyncTransport {
@@ -120,8 +139,17 @@ public final class WebDAVClient: FontSyncTransport {
     private let lock = NSLock()
     private var active: URLSession?, cancelled = false
     private var activeHTTP: WebDAVHTTPRequest?
+    private let nutstore: Bool
     private var resolvedDirectory: URL?
-    public init(_ settings: WebDAVSettings, allowLoopbackHTTP: Bool = false) throws { self.settings = settings; directory = try settings.directory(allowLoopbackHTTP: allowLoopbackHTTP) }
+    public init(_ settings: WebDAVSettings, allowLoopbackHTTP: Bool = false) throws {
+        self.settings = settings; directory = try settings.directory(allowLoopbackHTTP: allowLoopbackHTTP)
+        nutstore = directory.scheme == "https" && directory.host?.lowercased() == "dav.jianguoyun.com" && (directory.port ?? 443) == 443
+    }
+    @_spi(Testing) public init(nutstoreFixture settings: WebDAVSettings) throws {
+        self.settings = settings; directory = try settings.directory()
+        guard directory.scheme == "http", directory.host == "127.0.0.1" else { throw WebDAVFailure.network }
+        nutstore = true
+    }
     public func cancel() { lock.lock(); cancelled = true; let session = active, http = activeHTTP; lock.unlock(); session?.invalidateAndCancel(); http?.cancel() }
     private func request(_ method: String, url: URL, data: Data? = nil, headers: [String: String] = [:]) throws -> (HTTPURLResponse, Data) {
         if url.scheme == "http" {
@@ -161,7 +189,7 @@ public final class WebDAVClient: FontSyncTransport {
         let (response, data) = try request("PROPFIND", url: url, data: body, headers: ["Depth":"0", "Content-Type":"application/xml; charset=utf-8"])
         if response.statusCode == 404 { return false }
         guard response.statusCode == 207 else { throw WebDAVFailure.status(response.statusCode) }
-        guard DAVCollectionResponse.validate(data, at: url) else { throw ModelError.invalid("WebDAV 的 oshell 位置不是可访问的目录，或服务器目录响应无效；未写入同步数据。") }
+        guard DAVPropertyResponse.parse(data, at: url)?.isCollection == true else { throw ModelError.invalid("WebDAV 的 oshell 位置不是可访问的目录，或服务器目录响应无效；未写入同步数据。") }
         return true
     }
     /// Keep old direct-file endpoints in place; new endpoints use an oshell child.
@@ -181,14 +209,57 @@ public final class WebDAVClient: FontSyncTransport {
         }
         resolvedDirectory = target; return target
     }
-    public func probe() throws { _ = try syncDirectory(); _ = try fetch() }
+    public enum ProbeResult { case empty, versioned, coordinated, readOnly }
+    @discardableResult public func probe() throws -> ProbeResult {
+        let url = try syncDirectory().appendingPathComponent("oshell-vault.json")
+        guard let object = try read(url) else { return .empty }
+        if nutstore { return object.nutstoreTag == nil ? .readOnly : .coordinated }
+        do { _ = try replacementTag(object, at: url); return .versioned }
+        catch WebDAVFailure.unsafeVersion { return .readOnly }
+    }
     public func fetch() throws -> WebDAVObject? { try fetchObject(in: syncDirectory()) }
     private func fetchObject(in directory: URL) throws -> WebDAVObject? {
-        let (response, data) = try request("GET", url: directory.appendingPathComponent("oshell-vault.json"))
+        try read(directory.appendingPathComponent("oshell-vault.json"))
+    }
+    private func read(_ url: URL, matching tag: String? = nil) throws -> WebDAVObject? {
+        var headers = ["Accept-Encoding": "identity"]
+        if let tag { headers["If-Match"] = tag }
+        let (response, data) = try request("GET", url: url, headers: headers)
         if response.statusCode == 404 { return nil }
+        if response.statusCode == 412 { throw WebDAVFailure.conflict }
         guard response.statusCode == 200 else { throw WebDAVFailure.status(response.statusCode) }
-        guard let tag = response.allHeaderFields.first(where: { String(describing: $0.key).lowercased() == "etag" }).map({ String(describing: $0.value) }), Self.validETag(tag) else { throw WebDAVFailure.unsafeVersion }
-        return WebDAVObject(data: data, etag: tag)
+        if nutstore {
+            let tag = response.value(forHTTPHeaderField: "ETag").flatMap { raw -> String? in
+                guard !raw.isEmpty, raw.utf8.count <= 1024, !raw.hasPrefix("W/"), raw != "*",
+                      Self.validETag(raw) || raw.utf8.allSatisfy({ (33...126).contains($0) && $0 != 34 && $0 != 44 && $0 != 42 }) else { return nil }
+                return raw
+            }
+            // The local digest identifies the merge snapshot. Only the server's own tag goes into If-Match.
+            let revision = tag.map { _ in PlatformDigest.sha256(data).map { String(format: "%02x", $0) }.joined() }
+            return WebDAVObject(data: data, etag: revision, nutstoreTag: tag)
+        }
+        let version = response.value(forHTTPHeaderField: "ETag").flatMap { Self.validETag($0) ? $0 : nil }
+        return WebDAVObject(data: data, etag: version)
+    }
+
+    private func replacementTag(_ object: WebDAVObject?, at url: URL) throws -> String? {
+        guard let object else { return nil }
+        if let version = object.version { return version }
+        let body = Data("<d:propfind xmlns:d=\"DAV:\"><d:prop><d:getetag/></d:prop></d:propfind>".utf8)
+        let (response, data) = try request("PROPFIND", url: url, data: body, headers: ["Depth": "0", "Content-Type": "application/xml; charset=utf-8"])
+        if response.statusCode == 404 { throw WebDAVFailure.conflict }
+        if [405, 501].contains(response.statusCode) { throw WebDAVFailure.unsafeVersion }
+        guard response.statusCode == 207 else { throw WebDAVFailure.status(response.statusCode) }
+        guard let tag = DAVPropertyResponse.parse(data, at: url)?.etag, Self.validETag(tag) else { throw WebDAVFailure.unsafeVersion }
+        // PROPFIND can observe a newer revision than the GET used for merging.
+        guard let verified = try read(url, matching: tag), verified.data == object.data,
+              verified.version == nil || verified.version == tag else { throw WebDAVFailure.conflict }
+        return tag
+    }
+    public func put(_ data: Data, replacing object: WebDAVObject?) throws {
+        if nutstore { try put(data, matching: object?.etag); return }
+        let url = try syncDirectory().appendingPathComponent("oshell-vault.json")
+        try put(data, matching: replacementTag(object, at: url))
     }
     public static func validETag(_ value: String) -> Bool {
         let bytes = Array(value.utf8)
@@ -196,6 +267,10 @@ public final class WebDAVClient: FontSyncTransport {
     }
     public func put(_ data: Data, matching etag: String?) throws {
         guard data.count <= SharedVault.maximumSize else { throw WebDAVFailure.tooLarge }
+        if nutstore {
+            try nutstoreWrite(data, at: syncDirectory().appendingPathComponent("oshell-vault.json"), expected: etag, type: "application/json")
+            return
+        }
         if let etag, !Self.validETag(etag) { throw WebDAVFailure.unsafeVersion }
         let headers = ["Content-Type":"application/json", etag == nil ? "If-None-Match" : "If-Match": etag ?? "*"]
         let (response, _) = try request("PUT", url: syncDirectory().appendingPathComponent("oshell-vault.json"), data: data, headers: headers)
@@ -216,19 +291,68 @@ public final class WebDAVClient: FontSyncTransport {
         return folder.appendingPathComponent(name)
     }
     public func fetchFont(_ name: String) throws -> WebDAVObject? {
-        let (response, data) = try request("GET", url: fontURL(name, create: false))
-        if response.statusCode == 404 { return nil }
-        guard response.statusCode == 200 else { throw WebDAVFailure.status(response.statusCode) }
-        guard let tag = response.allHeaderFields.first(where: { String(describing: $0.key).lowercased() == "etag" }).map({ String(describing: $0.value) }), Self.validETag(tag) else { throw WebDAVFailure.unsafeVersion }
-        return WebDAVObject(data: data, etag: tag)
+        try read(fontURL(name, create: false))
+    }
+    public func putFont(_ data: Data, name: String, replacing object: WebDAVObject?) throws {
+        if nutstore { try putFont(data, name: name, matching: object?.etag); return }
+        let url = try fontURL(name, create: false)
+        try putFont(data, name: name, matching: replacementTag(object, at: url))
     }
     public func putFont(_ data: Data, name: String, matching etag: String?) throws {
         guard data.count <= FontLibrary.maximumFileSize else { throw WebDAVFailure.tooLarge }
+        if nutstore {
+            try nutstoreWrite(data, at: fontURL(name, create: true), expected: etag, type: name == "library.json" ? "application/json" : "application/octet-stream")
+            return
+        }
         if let etag, !Self.validETag(etag) { throw WebDAVFailure.unsafeVersion }
         let headers = ["Content-Type": name == "library.json" ? "application/json" : "application/octet-stream", etag == nil ? "If-None-Match" : "If-Match": etag ?? "*"]
         let (response, _) = try request("PUT", url: fontURL(name, create: true), data: data, headers: headers)
         if response.statusCode == 412 { throw WebDAVFailure.conflict }
         guard [200, 201, 204].contains(response.statusCode) else { throw WebDAVFailure.status(response.statusCode) }
+    }
+
+    // Nutstore ignores create-only PUT and concurrent bare If-Match writes can both succeed.
+    // MOVE with Overwrite:F publishes exactly one staged file at a previously absent name.
+    private func publishNew(_ data: Data, at url: URL, type: String) throws {
+        let stage = url.deletingLastPathComponent().appendingPathComponent("oshell-stage-" + UUID().uuidString + ".tmp")
+        let (put, _) = try request("PUT", url: stage, data: data, headers: ["Content-Type": type, "If-None-Match": "*"])
+        guard put.statusCode == 201 else { throw WebDAVFailure.status(put.statusCode) }
+        let (move, _) = try request("MOVE", url: stage, headers: ["Destination": url.absoluteString, "Overwrite": "F"])
+        if move.statusCode == 201 { return }
+        _ = try? request("DELETE", url: stage)
+        if [409, 412, 423].contains(move.statusCode) { throw WebDAVFailure.conflict }
+        throw WebDAVFailure.status(move.statusCode)
+    }
+
+    private func nutstoreWrite(_ data: Data, at url: URL, expected: String?, type: String) throws {
+        guard let expected else { try publishNew(data, at: url, type: type); return }
+        let marker = url.appendingPathExtension("oshell-lock")
+        do { try publishNew(Data(UUID().uuidString.utf8), at: marker, type: "text/plain") }
+        catch WebDAVFailure.conflict { throw WebDAVFailure.occupied }
+
+        var uncertain = false
+        do {
+            guard let current = try read(url), current.version == expected else { throw WebDAVFailure.conflict }
+            guard let tag = current.nutstoreTag else { throw WebDAVFailure.unsafeVersion }
+            uncertain = true
+            let (response, _) = try request("PUT", url: url, data: data, headers: ["If-Match": tag, "Content-Type": type])
+            if response.statusCode >= 500 { throw WebDAVFailure.uncertainWrite }
+            uncertain = false
+            if [404, 409, 412, 423].contains(response.statusCode) { throw WebDAVFailure.conflict }
+            guard [200, 204].contains(response.statusCode) else { throw WebDAVFailure.status(response.statusCode) }
+        } catch {
+            // A timed-out PUT can still be executing remotely. Do not let a second writer overtake it.
+            if uncertain { throw WebDAVFailure.uncertainWrite }
+            try releaseNutstoreMarker(marker)
+            throw error
+        }
+        try releaseNutstoreMarker(marker)
+    }
+
+    private func releaseNutstoreMarker(_ url: URL) throws {
+        guard let (response, _) = try? request("DELETE", url: url), [200, 204].contains(response.statusCode) else {
+            throw WebDAVFailure.uncertainWrite
+        }
     }
 
 }

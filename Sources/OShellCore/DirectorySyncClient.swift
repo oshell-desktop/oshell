@@ -7,6 +7,12 @@ public protocol SharedSyncTransport: AnyObject {
     func fetch() throws -> WebDAVObject?
     func put(_ data: Data, matching etag: String?) throws
     func cancel()
+    func put(_ data: Data, replacing object: WebDAVObject?) throws
+}
+public extension SharedSyncTransport {
+    func put(_ data: Data, replacing object: WebDAVObject?) throws {
+        try put(data, matching: object?.etag)
+    }
 }
 
 public final class DirectorySyncClient: FontSyncTransport {

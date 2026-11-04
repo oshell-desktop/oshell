@@ -127,6 +127,12 @@ public protocol FontSyncTransport: SharedSyncTransport {
     func checkFontSyncActive() throws
     func fetchFont(_ name: String) throws -> WebDAVObject?
     func putFont(_ data: Data, name: String, matching etag: String?) throws
+    func putFont(_ data: Data, name: String, replacing object: WebDAVObject?) throws
+}
+public extension FontSyncTransport {
+    func putFont(_ data: Data, name: String, replacing object: WebDAVObject?) throws {
+        try putFont(data, name: name, matching: object?.etag)
+    }
 }
 public enum FontLibrarySync {
     public static func synchronize(local: FontLibrary, transport: FontSyncTransport, baseline: URL, validate: (URL) throws -> Void = { _ in }) throws {
@@ -150,11 +156,11 @@ public enum FontLibrarySync {
         }
         let changedRemote = merged != remote || object == nil
         if changedRemote {
-            try transport.putFont(merged.encoded(), name: "library.json", matching: object?.etag)
+            try transport.putFont(merged.encoded(), name: "library.json", replacing: object)
             // Resume from the transferred local snapshot if a newer local edit
             // prevents apply, retaining remote-only additions on the next merge.
             try PrivateFile.write(own.encoded(), to: baseline)
-        } else if try transport.fetchFont("library.json")?.etag != object?.etag { throw WebDAVFailure.conflict }
+        } else if try transport.fetchFont("library.json") != object { throw WebDAVFailure.conflict }
         try transport.checkFontSyncActive()
         try local.commit(merged, expecting: own)
         try PrivateFile.write(merged.encoded(), to: baseline)

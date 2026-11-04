@@ -368,7 +368,12 @@ WebDAV 同样使用本地加密工作副本。在“同步方式”中选择 Web
 
 证书信任只绑定当前域名/IP、端口和这张证书，随本机 WebDAV 登录设置加密保存，不写入共享会话文件，也不修改系统钥匙串。证书更换需重新确认；过期或尚未生效不能直接信任。使用 IP 地址直连时，证书缺少 HTTPS 服务端用途标记或名称不匹配，可在确认指纹后为该 IP、端口和这张证书建立专用信任；其他域名/端口和其他证书不受信任。点击“取消证书信任”并应用，可恢复系统校验；取消整个设置窗口不会保存信任更改。其他设备需独立配置证书信任。
 
-WebDAV 登录信息和同步基准也使用主密码加密，分别保存在本地 `webdav-settings.json` 与 `webdav-baseline.json` 中。服务器必须支持强 ETag 和条件写入：创建使用 `If-None-Match: *`，更新使用 `If-Match`，HTTP 412 时停止覆盖并重新比较。协议依据 [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html) 和 [RFC 9110 的 If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#name-if-match)。
+WebDAV 登录信息和同步基准也使用主密码加密，分别保存在本地 `webdav-settings.json` 与 `webdav-baseline.json` 中。读取已有配置或字体允许缺少强 ETag。创建文件使用 `If-None-Match: *`。更新已有文件使用 `If-Match`，所需的强 ETag 可以来自 GET 响应头，也可以来自同一文件的 WebDAV `getetag` 属性。仅属性提供强 ETag 时，OShell 会先复核文件内容。两处都没有可用的强 ETag 时，设置中的连接测试会提示已有配置只读；检测到版本变化时停止更新并重新比较。协议依据 [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html) 和 [RFC 9110 的 If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#name-if-match)。
+
+**坚果云多设备写入。** 参与同一目录同步的 OShell 和 OShell Desktop 请先升级到支持坚果云写入标记的版本。两端继续读写同一个 `oshell-vault.json`。可以勾选“客户端设置”，并在同步时处理两台设备对同一设置的修改。首次创建通过不覆盖目标的 WebDAV MOVE 发布。更新时先独占 `oshell-vault.json.oshell-lock`，核对完整内容的摘要，再把服务器给出的版本标记用于条件上传。字体清单使用同样的规则。
+
+同时写入时，未取得标记的一端保留本地修改，下次同步会重新比较。若写入时断网或应用异常退出，标记可能保留。请先在所有设备停用同步，确认已经没有进行中的请求并备份远端共享文件，再清理残留的对应 `.oshell-lock` 文件并重新同步。不要删除共享配置或活动写入标记。其他程序直接改写远端文件不受 OShell 写入标记协调。
+
 
 同步启用或有待生效设置时不能清除或修改主密码。需先停用同步并取消待生效设置，再调整主密码；更换主密码后请使用新的同步目录重新建立共享，原共享文件仍由原密码保护。
 

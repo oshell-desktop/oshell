@@ -341,8 +341,8 @@ final class WebDAVSync {
                 // Using the merged remote value as that base would lose remote-
                 // only additions that have not yet reached the local database.
                 let continuation = try upload ? SharedVault.encode(SessionSyncConfiguration.wireConfiguration(localSnapshot, preserving: compatibility, selection: selection), password: master) : nil
-                if upload { try client.put(encrypted, matching: remote?.etag) }
-                else if try client.fetch()?.etag != remote?.etag { throw WebDAVFailure.conflict }
+                if upload { try client.put(encrypted, replacing: remote) }
+                else if try client.fetch() != remote { throw WebDAVFailure.conflict }
                 return (encrypted, continuation)
             }
             DispatchQueue.main.async { [weak self, weak workspace] in

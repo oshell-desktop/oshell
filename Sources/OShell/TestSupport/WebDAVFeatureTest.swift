@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 OShell contributors
 import AppKit
-import OShellCore
+@_spi(Testing) import OShellCore
 
 final class WebDAVFeatureTest {
     private static var retained: WebDAVFeatureTest?
@@ -17,7 +17,9 @@ final class WebDAVFeatureTest {
         let timer = Timer(timeInterval: 0.3, repeats: false) { _ in test.start() }; RunLoop.main.add(timer, forMode: .common)
     }
     private func client(_ path: String, password: String = "fixture-password") throws -> WebDAVClient {
-        try WebDAVClient(.init(address: server + path + "/", username: "fixture", password: password))
+        let settings = WebDAVSettings(address: server + path + "/", username: "fixture", password: password)
+        if ["engine", "nutstore", "uncertain"].contains(path) { return try WebDAVClient(nutstoreFixture: settings) }
+        return try WebDAVClient(settings)
     }
     private func wait(_ label: String, condition: @escaping () -> Bool, then: @escaping () -> Void) {
         let deadline = Date().addingTimeInterval(55)
@@ -66,7 +68,56 @@ final class WebDAVFeatureTest {
                     do { try c.put(encrypted, matching: nil); results["createNeverOverwrites"] = false } catch { results["createNeverOverwrites"] = true }
                     do { try c.put(encrypted, matching: "\"stale\""); results["staleETagRejected"] = false } catch { results["staleETagRejected"] = true }
                     try c.put(SharedVault.encode(initial, password: master), matching: fetched.etag); results["matchingETagWrites"] = true
-                    for name in ["noetag", "weak", "redirect", "large", "offline"] {
+                    for name in ["noetag", "weak", "bare"] {
+                        let dav = try client(name)
+                        results[name + "ProbeReadOnly"] = try dav.probe() == .readOnly
+                        let vault = try dav.fetch(), font = try dav.fetchFont("library.json")
+                        results[name + "Readable"] = vault?.data == Data("{}".utf8) && font?.data == vault?.data
+                        do { try dav.put(encrypted, replacing: vault); results[name + "VaultProtected"] = false }
+                        catch WebDAVFailure.unsafeVersion { results[name + "VaultProtected"] = true }
+                        do { try dav.putFont(encrypted, name: "library.json", replacing: font); results[name + "FontProtected"] = false }
+                        catch WebDAVFailure.unsafeVersion { results[name + "FontProtected"] = true }
+                    }
+                    let properties = try client("propertytag")
+                    try properties.put(encrypted, replacing: nil)
+                    results["propertyTagDetected"] = try properties.probe() == .versioned
+                    let snapshot = try properties.fetch()
+                    let next = try SharedVault.encode(initial, password: master)
+                    try properties.put(next, replacing: snapshot)
+                    results["propertyTagConditionallyUpdates"] = try properties.fetch()?.data == next
+                    do { try properties.put(encrypted, replacing: snapshot); results["propertyTagRejectsStaleSnapshot"] = false }
+                    catch WebDAVFailure.conflict { results["propertyTagRejectsStaleSnapshot"] = true }
+                    let first = try client("nutstore"), second = try client("nutstore")
+                    try first.put(encrypted, replacing: nil)
+                    do { try second.put(next, replacing: nil); results["nutstoreNoOverwriteCreate"] = false }
+                    catch WebDAVFailure.conflict { results["nutstoreNoOverwriteCreate"] = try second.fetch()?.data == encrypted }
+                    let base = try first.fetch()
+                    let edits = [next, try SharedVault.encode(initial, password: master)]
+                    let responses = NSLock()
+                    var winners = [Int](), rejected = 0
+                    DispatchQueue.concurrentPerform(iterations: 2) { i in
+                        do {
+                            try [first, second][i].put(edits[i], replacing: base)
+                            responses.lock(); winners.append(i); responses.unlock()
+                        } catch WebDAVFailure.occupied {
+                            responses.lock(); rejected += 1; responses.unlock()
+                        } catch WebDAVFailure.conflict {
+                            responses.lock(); rejected += 1; responses.unlock()
+                        } catch {}
+                    }
+                    let winner = winners.first.map { edits[$0] }
+                    let latest = try first.fetch()
+                    results["nutstoreOneWriter"] = winners.count == 1 && rejected == 1 && latest?.data == winner
+                    do { try second.put(encrypted, replacing: base); results["nutstoreRejectsStale"] = false }
+                    catch WebDAVFailure.conflict { results["nutstoreRejectsStale"] = try second.fetch() == latest }
+                    let uncertain = try client("uncertain")
+                    try uncertain.put(encrypted, replacing: nil)
+                    let before = try uncertain.fetch()
+                    do { try uncertain.put(next, replacing: before); results["uncertainReported"] = false }
+                    catch WebDAVFailure.uncertainWrite { results["uncertainReported"] = true }
+                    do { try uncertain.put(encrypted, replacing: before); results["uncertainBlocksWriter"] = false }
+                    catch WebDAVFailure.occupied { results["uncertainBlocksWriter"] = try uncertain.fetch()?.data == next }
+                    for name in ["redirect", "large", "offline"] {
                         do { _ = try client(name).fetch(); results[name + "Rejected"] = false } catch { results[name + "Rejected"] = true }
                     }
                     do { _ = try client("protocol", password: "incorrect").fetch(); results["badCredentialsRejected"] = false } catch { results["badCredentialsRejected"] = true }
@@ -86,6 +137,7 @@ final class WebDAVFeatureTest {
         do {
             workspace.store.requiresMasterProtection = true; workspace.store.masterPassword = master
             checks["encryptedCacheSaved"] = workspace.saveConfiguration(workspace.configuration)
+            sync.makeClient = { try WebDAVClient(nutstoreFixture: $0) }
             try sync.configure(.init(address: server + "engine/", username: "fixture", password: "fixture-password"), master: master)
 
             let page = StorageSettingsView(workspace: workspace)

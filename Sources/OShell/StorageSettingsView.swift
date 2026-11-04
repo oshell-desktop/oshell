@@ -209,7 +209,7 @@ final class StorageSettingsView: NSView {
             _ = try ensureMaster(); let settings = try davSettings(), client = try WebDAVClient(settings)
             testing = true; pendingCertificate = nil; davStatus.stringValue = "正在测试…"; updateCertificateStatus()
             DispatchQueue.global(qos: .utility).async { [weak self] in
-                let result = Result { try client.probe(); return try client.syncDirectory().path }
+                let result = Result { (try client.probe(), try client.syncDirectory().path) }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.testing = false
@@ -222,7 +222,13 @@ final class StorageSettingsView: NSView {
                     }
                     self.workspace?.windowCoordinator?.webDAV.diagnostics.record(.connectionTest, backend: .webDAV, manual: true, error: { if case .failure(let error) = result { return error }; return nil }())
                     switch result {
-                    case .success(let path): self.davStatus.stringValue = "连接正常；同步目录：\(path)。点击“应用”保存。"
+                    case .success(let probe):
+                        switch probe.0 {
+                        case .empty: self.davStatus.stringValue = "已连接 \(probe.1)，尚无共享配置。首次同步时将尝试创建文件。"
+                        case .coordinated: self.davStatus.stringValue = "已连接坚果云。上传前将独占写入并复核共享文件版本。"
+                        case .versioned: self.davStatus.stringValue = "已连接 \(probe.1)，共享配置可读取并提供强 ETag。"
+                        case .readOnly: self.davStatus.stringValue = "共享配置可读取，但缺少强 ETag，无法安全上传修改。"
+                        }
                     case .failure(let error): self.davStatus.stringValue = error.localizedDescription; self.pendingCertificate = error as? WebDAVCertificateIssue
                     }
                     self.updateCertificateStatus()

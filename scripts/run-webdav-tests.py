@@ -7,12 +7,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import argparse, time
 from xml.sax.saxutils import escape
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 class DAV(BaseHTTPRequestHandler):
     bodies = {}
     collections = set()
     created = []
+    writes = []
     redirected_requests = 0
     guard = threading.Lock()
     def log_message(self, *_): pass
@@ -30,9 +32,17 @@ class DAV(BaseHTTPRequestHandler):
             self.respond(401); return False
         return True
     def do_PROPFIND(self):
-        self.rfile.read(int(self.headers.get('Content-Length', '0')))
+        body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         if not self.allowed(): return
         folder = self.path.split('/')[1]
+        if b'getetag' in body:
+            assert self.headers.get('Depth') == '0'
+            tags = {'noetag': '', 'weak': 'W/"weak"', 'bare': 'bare'}
+            content = self.bodies.get(self.path)
+            tag = tags.get(folder) if folder in tags else ('"' + hashlib.sha256(content).hexdigest() + '"' if content is not None else None)
+            if tag is None: self.respond(404); return
+            self.respond(207, ('<d:multistatus xmlns:d="DAV:"><d:response><d:href>'+escape(self.path)+'</d:href><d:propstat><d:prop><d:getetag>'+escape(tag)+'</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>').encode())
+            return
         if folder == 'denied': self.respond(403); return
         if folder == 'badxml': self.respond(207, b'<broken'); return
         if folder == 'race' and self.path not in self.collections: self.respond(404); return
@@ -62,24 +72,48 @@ class DAV(BaseHTTPRequestHandler):
             self.send_response(302); self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/redirect-target/'); self.send_header('Content-Length', '0'); self.end_headers(); return
         if folder == 'offline': self.respond(503); return
         if folder == 'large': self.respond(200, etag='"large"', length=64 * 1024 * 1024); return
-        if folder in ('noetag', 'weak'): self.respond(200, b'{}', etag=None if folder == 'noetag' else 'W/"weak"'); return
+        if folder in ('noetag', 'weak', 'bare'): self.respond(200, b'{}', etag={'weak': 'W/"weak"', 'bare': 'bare'}.get(folder)); return
         with self.guard:
             body = self.bodies.get(self.path)
         if body is None: self.respond(404)
+        elif folder in ('engine', 'nutstore', 'uncertain'):
+            self.respond(200, body, hashlib.sha256(body).hexdigest())
+        elif folder == 'propertytag':
+            tag = '"' + hashlib.sha256(body).hexdigest() + '"'
+            if self.headers.get('If-Match', tag) != tag: self.respond(412)
+            else: self.respond(200, body)
         else: self.respond(200, body, '"' + hashlib.sha256(body).hexdigest() + '"')
+    def do_MOVE(self):
+        if not self.allowed(): return
+        dest = urlsplit(self.headers['Destination']).path
+        assert self.headers.get('Overwrite') == 'F'
+        with self.guard:
+            if dest in self.bodies: self.respond(409); return
+            self.bodies[dest] = self.bodies.pop(self.path)
+        self.respond(201)
+    def do_DELETE(self):
+        if not self.allowed(): return
+        with self.guard: old = self.bodies.pop(self.path, None)
+        self.respond(404 if old is None else 204)
     def do_PUT(self):
         data = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         if not self.allowed(): return
         with self.guard:
+            self.writes.append(self.path)
             old = self.bodies.get(self.path)
-            if old is None:
+            folder = self.path.split('/')[1]
+            if folder in ('engine', 'nutstore', 'uncertain'):
+                tag = self.headers.get('If-Match')
+                accepted = tag is None or old is not None and tag == hashlib.sha256(old).hexdigest()
+            elif old is None:
                 accepted = self.headers.get('If-None-Match') == '*'
             else:
                 accepted = self.headers.get('If-Match') == '"' + hashlib.sha256(old).hexdigest() + '"'
             if not accepted: self.respond(412); return
             self.bodies[self.path] = data
             if self.path == '/protocol/oshell/oshell-vault.json': self.bodies['/legacyroot/oshell-vault.json'] = data
-        if self.path.startswith('/engine/'): time.sleep(0.6)  # Exercise edits/modal dialogs while a PUT is in flight.
+        if folder == 'uncertain' and self.path.endswith('oshell-vault.json'): self.respond(503); return
+        if folder == 'engine' and self.path.endswith('oshell-vault.json'): time.sleep(0.6)  # Exercise edits/modal dialogs while a PUT is in flight.
         self.respond(201 if old is None else 204, etag='"' + hashlib.sha256(data).hexdigest() + '"')
 
 def main():
@@ -90,7 +124,7 @@ def main():
         with tempfile.TemporaryDirectory(dir=ROOT/'work', prefix='webdav-test-', ignore_cleanup_errors=True) as temp:
             base = Path(temp); interchange = base/'cross-architecture-vault.json'
             for flavor in (['arm64', 'amd64'] if args.flavor == 'both' else [args.flavor]):
-                DAV.bodies.clear(); DAV.collections.clear(); DAV.created.clear(); DAV.redirected_requests = 0
+                DAV.bodies.clear(); DAV.collections.clear(); DAV.created.clear(); DAV.writes.clear(); DAV.redirected_requests = 0
                 app = base/('OShell-'+flavor+'.app'); source = ROOT/('work/test-app/OShell.app' if flavor == 'arm64' else 'work/test-release/amd64/OShell.app')
                 subprocess.run(['ditto', str(source), str(app)], check=True)
                 info_path = app/'Contents/Info.plist'; info = plistlib.loads(info_path.read_bytes()); identity = 'app.oshell.webdav-test.'+uuid.uuid4().hex
@@ -109,6 +143,8 @@ def main():
                     result = json.loads(report.read_text())
                     print(flavor, len(result['checks']), 'checks; failures:', [k for k,v in result['checks'].items() if not v], flush=True)
                     assert result['passed']
+                    assert not any(p.startswith(('/noetag/', '/weak/', '/bare/')) for p in DAV.writes)
+                    assert DAV.writes.count('/propertytag/oshell/oshell-vault.json') == 2
                     assert DAV.redirected_requests == 0, 'WebDAV credentials must not follow redirects'
                     assert DAV.created.count('/protocol/oshell/') == 1
                     assert '/existing/oshell/' not in DAV.created and not any(p.startswith('/legacyroot/') for p in DAV.created)

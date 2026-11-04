@@ -46,6 +46,8 @@ struct SyncStatusPresentation {
             mark = .attention; title = "同步未完成 · 本地数据已保留"
             switch failure {
             case .authentication: guidance = "请检查同步配置中的 WebDAV 账号及密码，应用后重试。"
+            case .occupied, .uncertainWrite: guidance = "请等其他设备完成同步。标记持续存在时，请先在所有设备停止同步、核对远端文件后再处理 .oshell-lock 标记。"
+            case .unsafeVersion: guidance = "远端文件可读取，但服务器未提供更新它所需的强 ETag。要上传本机修改，请使用支持条件更新的 WebDAV 服务。"
             case .tls: guidance = "请在同步配置中测试连接，检查或核对服务器证书后重试。"
             case .directoryUnavailable, .cloudDownload, .cloudConflict: guidance = "请在 Finder 检查目录是否可用、文件是否已下载，以及是否有冲突副本。"
             case .remoteDeleted: guidance = "共享文件已被删除；请确认目标数据后重新选择同步位置，不会自动覆盖。"
