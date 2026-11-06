@@ -199,6 +199,8 @@ struct SFTPPacket {
     }
 }
 final class SFTPBackend: ResumableFileBackend {
+    var resumeDirectoryTransfers = false
+    private let profile: SessionProfile
     private let rateLimiter = FileTransferRateLimiter()
     func setTransferRateLimit(_ bytesPerSecond: Int) { rateLimiter.setLimit(bytesPerSecond) }
     let description: String
@@ -208,6 +210,7 @@ final class SFTPBackend: ResumableFileBackend {
     private var requestID: UInt32 = 0
     private var connected = false
     init(profile: SessionProfile, knownHosts: URL, oneTimePassword: String? = nil, connectionGroup: SSHConnectionGroup? = nil) throws {
+        self.profile = profile
         description = "SFTP · \(profile.name) · \(profile.host)"
         try FileManager.default.createDirectory(at: knownHosts.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         lease = try connectionGroup.map { try SSHConnectionLease(group: $0, profile: profile) }
@@ -327,15 +330,25 @@ final class SFTPBackend: ResumableFileBackend {
     }
     func transfer(_ job: ResumableFileTransfer, progress: @escaping (UInt64, UInt64) -> Void) throws {
         try RemotePath.validate(job.remote)
+        let held = try job.begin()
+        defer { try? held?.close() }
         if job.upload { try resumeUpload(job, progress: progress) }
         else { try resumeDownload(job, progress: progress) }
+        try job.completed()
     }
     private func resumeUpload(_ job: ResumableFileTransfer, progress: @escaping (UInt64, UInt64) -> Void) throws {
         let local = try ResumableFileTransfer.openLocal(job.local, flags: O_RDONLY); defer { try? local.close() }
         let stamp = ResumableFileTransfer.LocalStamp(try ResumableFileTransfer.info(local.fileDescriptor))
         if job.localSource == nil { job.localSource = stamp }
         try job.checkLocalSource(local)
-        try requireNewDestination(job.remote)
+        if job.persistent {
+            do { _ = try resumeAttributes(job.remotePartial); job.ownsPartial = true }
+            catch let error as SFTPStatus where error.code == 2 {
+                if job.publishing { job.publishedDestination() } else { job.ownsPartial = false }
+            }
+        }
+        if job.remotePartial != job.remote { try requireNewDestination(job.remote) }
+        try job.save()
         let size = UInt64(stamp.size), remote: Data
         var offset: UInt64 = 0
         if job.ownsPartial {
@@ -356,6 +369,7 @@ final class SFTPBackend: ResumableFileBackend {
         } else {
             remote = try handle(3, path: job.remotePartial, flags: 2 | 8 | 32)
             job.ownsPartial = true
+            do { try job.save() } catch { try? close(remote); throw error }
         }
         var closed = false; defer { if !closed { try? close(remote) } }
         progress(offset, size)
@@ -369,7 +383,9 @@ final class SFTPBackend: ResumableFileBackend {
         try job.checkLocalSource(local)
         try close(remote); closed = true
         guard try ResumableFileTransfer.RemoteStamp(resumeAttributes(job.remotePartial)).size == size else { throw ModelError.invalid("远程片段大小变化，未完成最终保存。") }
+        if job.remotePartial == job.remote { return }
         try requireNewDestination(job.remote)
+        job.publishing = true; try job.save()
         // Standard SFTP RENAME refuses an existing destination; do not use the
         // POSIX-rename extension, which would replace another file.
         try rename(job.remotePartial, to: job.remote)
@@ -378,7 +394,13 @@ final class SFTPBackend: ResumableFileBackend {
         let source = try ResumableFileTransfer.RemoteStamp(resumeAttributes(job.remote))
         if job.remoteSource == nil { job.remoteSource = source }
         guard source == job.remoteSource else { throw ModelError.invalid("远程源文件已变化，请重新发起下载；已有片段保留。") }
-        guard !FileManager.default.fileExists(atPath: job.local.path) else { throw ModelError.invalid("本地目标已存在，续传不会覆盖它。") }
+        if job.persistent {
+            if FileManager.default.fileExists(atPath: job.localPartial.path) { job.ownsPartial = true }
+            else if job.publishing { job.publishedDestination() }
+            else { job.ownsPartial = false; job.localPartialIdentity = nil }
+        }
+        guard job.localPartial == job.local || !FileManager.default.fileExists(atPath: job.local.path) else { throw ModelError.invalid("本地目标已存在，续传不会覆盖它。") }
+        try job.save()
         let remote = try handle(3,path:job.remote,flags:1); var closed = false; defer { if !closed { try? close(remote) } }
         guard try ResumableFileTransfer.RemoteStamp(resumeAttributes(handle:remote)) == source else { throw ModelError.invalid("远程源文件在打开时发生变化。") }
         let local = try ResumableFileTransfer.openLocal(job.localPartial, flags: job.ownsPartial ? O_RDWR : O_RDWR | O_CREAT | O_EXCL)
@@ -386,7 +408,7 @@ final class SFTPBackend: ResumableFileBackend {
         let partialInfo = try ResumableFileTransfer.info(local.fileDescriptor)
         guard partialInfo.st_nlink == 1 else { throw ModelError.invalid("本地临时片段存在其他硬链接，无法安全续传。") }
         let stamp = ResumableFileTransfer.LocalStamp(partialInfo)
-        if !job.ownsPartial { job.localPartialIdentity = stamp; job.ownsPartial = true }
+        if job.localPartialIdentity == nil { job.localPartialIdentity = stamp; job.ownsPartial = true; try job.save() }
         guard stamp.device == job.localPartialIdentity?.device, stamp.inode == job.localPartialIdentity?.inode, UInt64(stamp.size) <= source.size else { throw ModelError.invalid("本地片段被替换或大小异常，已停止续传。") }
         var offset: UInt64 = 0
         while offset < UInt64(stamp.size) {
@@ -407,6 +429,8 @@ final class SFTPBackend: ResumableFileBackend {
         let check = try ResumableFileTransfer.openLocal(job.localPartial, flags: O_RDONLY); defer { try? check.close() }
         let final = ResumableFileTransfer.LocalStamp(try ResumableFileTransfer.info(check.fileDescriptor))
         guard final.device == stamp.device, final.inode == stamp.inode, UInt64(final.size) == source.size else { throw ModelError.invalid("本地片段在下载期间被替换。") }
+        if job.localPartial == job.local { return }
+        job.publishing = true; try job.save()
         guard renamex_np(job.localPartial.path, job.local.path, UInt32(RENAME_EXCL)) == 0 else {
             throw ModelError.invalid("无法安全保存下载目标：目标可能已存在，或磁盘不支持排他重命名。临时片段已保留。")
         }
@@ -419,8 +443,21 @@ final class SFTPBackend: ResumableFileBackend {
         let attributes = try local.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
         guard attributes.isSymbolicLink != true else { throw ModelError.invalid("不自动跟随本地符号链接：\(local.lastPathComponent)") }
         if attributes.isDirectory == true {
-            try mkdir(remote)
+            if resumeDirectoryTransfers {
+                do {
+                    let existing = try resumeAttributes(remote)
+                    guard existing.directory && !existing.symbolicLink else { throw ModelError.invalid("远程同名目标不是普通目录。") }
+                } catch let error as SFTPStatus where error.code == 2 { try mkdir(remote) }
+            } else { try mkdir(remote) }
             for child in try FileManager.default.contentsOfDirectory(at: local, includingPropertiesForKeys: nil) { try upload(child, to: RemotePath.join(remote, child.lastPathComponent), depth: depth + 1, progress: progress) }
+            return
+        }
+        if resumeDirectoryTransfers {
+            var partial: String?
+            do { _ = try resumeAttributes(remote); partial = remote }
+            catch let error as SFTPStatus where error.code == 2 {}
+            let job = try ResumableFileTransfer.persistent(local: local, remote: remote, upload: true, profile: profile, partial: partial)
+            try transfer(job, progress: progress)
             return
         }
         // EXCL protects existing remote files, including races after listing.
@@ -440,9 +477,17 @@ final class SFTPBackend: ResumableFileBackend {
         guard depth <= 32 else { throw ModelError.invalid("目录嵌套过深。") }
         let info = try stat(remote)
         if info.directory {
-            guard !FileManager.default.fileExists(atPath: local.path) else { throw ModelError.invalid("本地目录已存在。") }
-            try FileManager.default.createDirectory(at: local, withIntermediateDirectories: false)
+            if FileManager.default.fileExists(atPath: local.path) {
+                let flags = try local.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard resumeDirectoryTransfers, flags.isDirectory == true, flags.isSymbolicLink != true else { throw ModelError.invalid("本地目录已存在或类型不匹配。") }
+            } else { try FileManager.default.createDirectory(at: local, withIntermediateDirectories: false) }
             for child in try list(remote) where !child.symbolicLink { try download(RemotePath.join(remote, child.name), to: local.appendingPathComponent(child.name), depth: depth + 1, progress: progress) }
+            return
+        }
+        if resumeDirectoryTransfers {
+            let partial = FileManager.default.fileExists(atPath: local.path) ? local.path : nil
+            let job = try ResumableFileTransfer.persistent(local: local, remote: remote, upload: false, profile: profile, partial: partial)
+            try transfer(job, progress: progress)
             return
         }
         let handle = try handle(3, path: remote, flags: 1); var closed = false; defer { if !closed { try? close(handle) } }

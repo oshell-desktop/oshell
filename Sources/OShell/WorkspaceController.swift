@@ -718,7 +718,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     func openExternal(_ request: ZOCLaunchRequest) {
         guard isSecurityUnlocked else { return }
         do {
-            let profile = try request.profile()
+            let profile = try ExternalKeepAliveSettings.applying(to: request.profile())
             let group = try SSHConnectionGroup(profile: profile, external: true)
             presentConnection(makePane(profile, oneTimePassword: request.password, terminalType: request.terminalType, connectionGroup: group))
             show(); NSApp.activate(ignoringOtherApps: true)

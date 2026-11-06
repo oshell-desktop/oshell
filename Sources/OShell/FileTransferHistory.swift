@@ -155,7 +155,7 @@ final class FileTransferHistoryView: NSView, NSTableViewDataSource, NSTableViewD
         let available = selected.map { canResume?($0.id) == true } ?? false
         continueButton.isEnabled = available && selected?.state == .paused
         retryButton.isEnabled = available && (selected?.state == .failed || selected?.state == .cancelled)
-        hint.toolTip = "SFTP 普通文件支持暂停和续传；目录、FTP、SCP 暂不支持。关闭标签后续传记录清除，临时文件保留。"
+        hint.toolTip = "SFTP 普通文件支持暂停和续传；目录、FTP、SCP 暂不支持。关闭标签或重启后，再次传输相同路径可恢复 SFTP 断点；目录需重新发起传输。"
     }
     func selectRecord(_ id: UUID) { reload(); if let row = rows.firstIndex(where: { $0.id == id }) { table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) } }
     @objc private func pauseTransfer() { onPause?() }

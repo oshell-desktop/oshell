@@ -37,6 +37,15 @@ enum LiveKeepAliveTest {
             try controller.store.save(controller.configuration)
             try Data(contentsOf: root.appendingPathComponent("known_hosts")).write(to: controller.store.url.deletingLastPathComponent().appendingPathComponent("known_hosts"))
             let request = try ZOCLaunchRequest.parse(["/DEV:SSH", "/CONNECT:test:\(fixture["password"] as! String)@127.0.0.1:\(fixture["outerPort"] as! Int)"])
+            var gateway = try request.profile(), keep = gateway.keepAlive
+            keep.enabled = true; keep.interval = 41; keep.idleEnabled = false
+            try ExternalKeepAliveSettings.save(keep, for: gateway)
+            gateway.id = UUID(); gateway.username = "new-one-time-user"
+            checks["webLaunchPreferencesSurviveNewIDAndAccount"] = try ExternalKeepAliveSettings.applying(to: gateway).keepAlive == keep
+            var otherGateway = gateway; otherGateway.port += 1
+            checks["gatewayPortSeparatesPreferences"] = try ExternalKeepAliveSettings.applying(to: otherGateway).keepAlive != keep
+            let stored = try String(contentsOf: ExternalKeepAliveSettings.url, encoding: .utf8)
+            checks["gatewayPreferencesContainNoCredential"] = !stored.contains(gateway.username) && !stored.contains(fixture["password"] as! String)
             controller.openExternal(request)
             let tab = controller.selectedTab!, pane = tab.activePane
             func text() -> String { String(decoding: pane.terminal.getTerminal().getBufferAsData(), as: UTF8.self) }
@@ -78,7 +87,7 @@ enum LiveKeepAliveTest {
                         var next = pane.profile.keepAlive; next.idleInterval = 2; next.idleText = "echo LIVE_B\\r"
                         do { try controller.applyLiveIdleKeepAlive(paneID: pane.id, settings: next, persist: true) }
                         catch { checks["applyB"] = false; finish(); return }
-                        checks["savedOnlyIdleFields"] = controller.configuration.profiles[0].keepAlive.interval == 77 && controller.configuration.profiles[0].keepAlive.idleText == next.idleText
+                        checks["savedOnlyIdleFields"] = controller.configuration.profiles[0].keepAlive.interval == 77 && (try? ExternalKeepAliveSettings.applying(to: pane.profile).keepAlive.idleText) == next.idleText
                         wait("changedTimerSendsB", { count("LIVE_B") > 0 }) {
                             let a = count("LIVE_A"), b = count("LIVE_B")
                             var stopped = pane.profile.keepAlive; stopped.idleEnabled = false
@@ -110,7 +119,7 @@ enum LiveKeepAliveTest {
                                                 checks["endedPaneNotEditable"] = !pane.canEditLiveKeepAlive
                                                 checks["closedPaneRejectsApply"] = (try? pane.applyIdleKeepAlive(protected)) == nil
                                                 checks["otherConnectionUnaffected"] = other.canEditLiveKeepAlive && !other.profile.keepAlive.idleEnabled
-                                                checks["persistedAfterReload"] = (try? controller.store.load().profiles[0].keepAlive.idleText) == "echo LIVE_B\\r"
+                                                checks["persistedAfterReload"] = (try? ExternalKeepAliveSettings.applying(to: request.profile()).keepAlive.idleText) == "echo LIVE_B\\r"
                                                 finish()
                                             }
                                         }

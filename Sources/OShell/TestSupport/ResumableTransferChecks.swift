@@ -74,6 +74,57 @@ enum ResumableTransferChecks {
             }
             checks["lateDestinationCollisionRejected"] = false
         } catch { checks["lateDestinationCollisionRejected"] = planted && (try? Data(contentsOf:racing.local)) == Data("keep-existing".utf8) }
+        func durable(_ file: URL, _ target: String, upload: Bool, partial: String? = nil) throws -> ResumableFileTransfer {
+            try ResumableFileTransfer.persistent(local: file, remote: target, upload: upload, profile: profile, partial: partial)
+        }
+        let persistedUp = try durable(source, "/persisted-upload.bin", upload: true)
+        checks["persistentUploadInterrupted"] = try interrupted(persistedUp)
+        let restoredUp = try durable(source, persistedUp.remote, upload: true)
+        checks["freshTaskFindsUploadCheckpoint"] = try (resume(restoredUp) ?? 0) > 0
+        checks["restoredUploadExactBytes"] = try Data(contentsOf: remoteFile(restoredUp.remote)) == payload
+        let sameUpload = try durable(source, restoredUp.remote, upload: true, partial: restoredUp.remote)
+        checks["repeatCompletedUploadSkipsBytes"] = try resume(sameUpload) == UInt64(payload.count)
+        let persistedDown = try durable(local.appendingPathComponent("persisted-down.bin"), up.remote, upload: false)
+        checks["persistentDownloadInterrupted"] = try interrupted(persistedDown)
+        let restoredDown = try durable(persistedDown.local, up.remote, upload: false)
+        checks["freshTaskFindsDownloadCheckpoint"] = try (resume(restoredDown) ?? 0) > 0
+        checks["restoredDownloadExactBytes"] = try Data(contentsOf: restoredDown.local) == payload
+        let oldUp = "/legacy-part.bin"
+        try payload.prefix(65536).write(to: remoteFile(oldUp))
+        let importedUp = try durable(source, "/legacy-final.bin", upload: true, partial: oldUp)
+        checks["historyFreeUploadResumes"] = try resume(importedUp) == 65536 && Data(contentsOf: remoteFile(importedUp.remote)) == payload
+        let oldDown = local.appendingPathComponent(".oshell-part-legacy")
+        try payload.prefix(32768).write(to: oldDown)
+        let importedDown = try durable(local.appendingPathComponent("legacy-down.bin"), up.remote, upload: false, partial: oldDown.path)
+        checks["historyFreeDownloadResumes"] = try resume(importedDown) == 32768 && Data(contentsOf: importedDown.local) == payload
+        let oldDirect = local.appendingPathComponent("direct-part.bin")
+        try payload.prefix(32768).write(to: oldDirect)
+        checks["sameNamePartialResumes"] = try resume(durable(oldDirect, up.remote, upload: false, partial: oldDirect.path)) == 32768 && Data(contentsOf: oldDirect) == payload
+        let wrong = local.appendingPathComponent("unrelated.bin")
+        try Data("unrelated".utf8).write(to: wrong)
+        checks["unrelatedSameNamePreserved"] = try rejects(durable(wrong, up.remote, upload: false, partial: wrong.path)) && Data(contentsOf: wrong) == Data("unrelated".utf8)
+        let changedPersisted = try durable(source, "/persistent-change.bin", upload: true)
+        _ = try interrupted(changedPersisted); try (payload + Data([0])).write(to: source)
+        checks["restoredCheckpointRejectsChangedSource"] = try rejects(durable(source, changedPersisted.remote, upload: true))
+        try payload.write(to: source)
+        let heldJob = try durable(source, "/concurrent.bin", upload: true)
+        let held = try heldJob.begin()
+        do { _ = try durable(source, heldJob.remote, upload: true).begin(); checks["sameTaskCannotRunTwice"] = false }
+        catch { checks["sameTaskCannotRunTwice"] = true }
+        try held?.close()
+        let tree = local.appendingPathComponent("repeat-tree")
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        try payload.write(to: tree.appendingPathComponent("file.bin"))
+        let treeFirst = try backend(); treeFirst.resumeDirectoryTransfers = true
+        do { try treeFirst.upload(tree, to: "/repeat-tree") { n,_ in if n >= 32768 { treeFirst.cancel() } } } catch {}
+        let treeSecond = try backend(); treeSecond.resumeDirectoryTransfers = true; defer { treeSecond.cancel() }
+        var treeOffset: UInt64?
+        try treeSecond.upload(tree, to: "/repeat-tree") { n,_ in if treeOffset == nil { treeOffset = n } }
+        checks["directoryRetransferResumesFile"] = try (treeOffset ?? 0) > 0 && Data(contentsOf: remoteFile("/repeat-tree/file.bin")) == payload
+        let treeDown = local.appendingPathComponent("repeat-tree-down")
+        try treeSecond.download("/repeat-tree", to: treeDown) { _,_ in }
+        try treeSecond.download("/repeat-tree", to: treeDown) { _,_ in }
+        checks["directoryRetransferPreservesCompletedFiles"] = try Data(contentsOf: treeDown.appendingPathComponent("file.bin")) == payload
         let empty = local.appendingPathComponent("resume-empty.bin"); try Data().write(to:empty)
         let emptyJob = ResumableFileTransfer(local:empty,remote:"/resume-empty.bin",upload:true)
         _ = try resume(emptyJob); checks["emptyResumableUpload"] = try Data(contentsOf:remoteFile(emptyJob.remote)).isEmpty

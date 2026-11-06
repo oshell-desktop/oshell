@@ -93,7 +93,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         }
         table.context = { [weak self] row in self?.menu(for: row) }
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autohidesScrollers = true; AppUI.styleScrollSurface(scroll)
-        let hint = NSTextField(labelWithString: "拖入文件或文件夹上传；右键下载、重命名、删除。重名传输默认自动编号。")
+        let hint = NSTextField(labelWithString: "拖入文件或文件夹上传；右键下载、重命名、删除。SFTP 可校验并续传同名文件。")
         hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
         hint.lineBreakMode = .byTruncatingTail; hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         status.identifier = .init("files.status")
@@ -349,11 +349,51 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         let menu = NSMenu(); menu.autoenablesItems = false
         func add(_ title: String, _ action: Selector, _ enabled: Bool) { let item = menu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self; item.isEnabled = enabled && connected && !busy }
         add("下载…", #selector(downloadSelected), !selected.isEmpty)
+        let singleFile = selected.count == 1 && !selected[0].directory && !selected[0].symbolicLink && !selected[0].unknownType
+        add("从已有远程片段续传上传…", #selector(adoptUpload), singleFile && usesResumableSFTP)
+        add("使用本地片段续传下载…", #selector(adoptDownload), singleFile && usesResumableSFTP)
         add("重命名…", #selector(renameEntry), selected.count == 1)
         add("删除…", #selector(deleteEntries), !selected.isEmpty)
         menu.addItem(.separator()); add("上传…", #selector(chooseUpload), true); add("新建目录…", #selector(newDirectory), true); add("刷新", #selector(refresh), true)
         return menu
     }
+    @objc private func adoptUpload() {
+        guard selected.count == 1, let endpoint = profile, usesResumableSFTP else { return }
+        let partial = RemotePath.join(directory, selected[0].name)
+        let panel = NSOpenPanel(); panel.title = "选择完整的本地源文件，校验远程片段后续传"
+        guard panel.runPopupModal() == .OK, let local = panel.url else { return }
+        let alert = PopupAlert(); alert.messageText = "从远程片段继续上传"
+        alert.informativeText = "将完整校验已传部分。内容不一致时停止，完成后保存为下方文件名。"
+        let name = NSTextField(string: selected[0].name.hasPrefix(".oshell-part-") ? local.lastPathComponent : selected[0].name)
+        name.frame = NSRect(x: 0, y: 0, width: 400, height: 26); alert.accessoryView = name
+        alert.addButton(withTitle: "校验并续传"); alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard RemotePath.safeName(name.stringValue) else { Dialogs.message("请输入有效文件名。"); return }
+        adoptedTransfer(local: local, remote: RemotePath.join(directory, name.stringValue), upload: true, partial: partial, profile: endpoint)
+    }
+
+    @objc private func adoptDownload() {
+        guard selected.count == 1, let endpoint = profile, usesResumableSFTP else { return }
+        let remote = RemotePath.join(directory, selected[0].name), finalName = selected[0].name
+        let panel = NSOpenPanel(); panel.title = "选择本地已下载的片段"; panel.showsHiddenFiles = true
+        guard panel.runPopupModal() == .OK, let partial = panel.url else { return }
+        guard Dialogs.confirm("校验并继续下载？", text: "将校验已有内容，一致后继续。完成后保存为 \(finalName)。", action: "继续") else { return }
+        adoptedTransfer(local: partial.deletingLastPathComponent().appendingPathComponent(finalName), remote: remote, upload: false, partial: partial.path, profile: endpoint)
+    }
+
+    private func adoptedTransfer(local: URL, remote: String, upload: Bool, partial: String, profile: SessionProfile) {
+        let token = UUID(), history = transferHistory
+        let record = history.enqueue(batch: token, upload: upload, transport: historyTransport, local: local.path, remote: remote)
+        showHistory(true)
+        perform("正在校验已有片段…", id: token, historyBatch: token) { [weak self] backend in
+            guard let backend = backend as? ResumableFileBackend, history.start(record) else { throw ModelError.invalid("当前连接不支持续传。") }
+            let job = try ResumableFileTransfer.persistent(local: local, remote: remote, upload: upload, profile: profile, partial: partial)
+            self?.registerResume(job, record: record)
+            try backend.transfer(job, progress: self?.progressCallback(local.lastPathComponent, token: token, recordID: record) ?? { _,_ in })
+            history.succeed(record)
+        } completion: { [weak self] in self?.status.stringValue = "续传完成"; if upload { self?.refresh() } }
+    }
+
     @objc private func chooseUpload() {
         guard connected, !busy else { return }
         let panel = NSOpenPanel(); panel.title = "上传到 \(directory)"; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
@@ -361,10 +401,18 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     }
     func upload(_ urls: [URL], to destination: String) {
         guard connected, !busy, !urls.isEmpty else { return }
-        let useRsync = usesRsync
-        let alert = PopupAlert(); alert.messageText = useRsync ? "rsync 上传 \(urls.count) 个项目" : "上传 \(urls.count) 个项目"; alert.informativeText = "目标：\(profile?.name ?? "") · \(profile?.host ?? "") · \(destination)\n" + urls.map(\.lastPathComponent).prefix(10).joined(separator: "\n") + (useRsync ? "\n将增量更新同名文件及目录内容，保留目标额外文件。中断后可重新执行相同路径。" : "\n重名自动编号；文件夹将递归上传。")
+        let useRsync = usesRsync, endpoint = profile, resumableSFTP = usesResumableSFTP
+        let alert = PopupAlert(); alert.messageText = useRsync ? "rsync 上传 \(urls.count) 个项目" : "上传 \(urls.count) 个项目"; alert.informativeText = "目标：\(profile?.name ?? "") · \(profile?.host ?? "") · \(destination)\n" + urls.map(\.lastPathComponent).prefix(10).joined(separator: "\n") + (useRsync ? "\n将增量更新同名文件及目录内容，保留目标额外文件。中断后可重新执行相同路径。" : resumableSFTP ? "\n自动查找上次断点。勾选后会校验同名文件，一致时跳过或继续，内容不同则停止。" : "\n重名自动编号；文件夹将递归上传。")
         let input = NSTextField(string: destination); input.frame = NSRect(x: 0, y: 0, width: 500, height: 26); alert.accessoryView = input; alert.addButton(withTitle: "上传"); alert.addButton(withTitle: "取消")
+        let continueExisting = NSButton(checkboxWithTitle: "校验并续传同名文件及目录（取消则保留两份）", target: nil, action: nil)
+        continueExisting.state = .on; continueExisting.identifier = .init("files.resumeExisting")
+        if resumableSFTP {
+            let stack = NSStackView(views: [input, continueExisting]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
+            stack.frame = NSRect(x: 0, y: 0, width: 500, height: 65); input.widthAnchor.constraint(equalToConstant: 500).isActive = true
+            alert.accessoryView = stack
+        }
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let continuing = resumableSFTP && continueExisting.state == .on
         let target = input.stringValue, useSCP = sshProfile != nil && transferMode.indexOfSelectedItem == 1
         let token = UUID(), history = transferHistory
         let records = urls.map { history.enqueue(batch: token, upload: true, transport: historyTransport, local: $0.path, remote: RemotePath.join(target, $0.lastPathComponent)) }
@@ -373,6 +421,8 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         do { if useRsync { rsync = try makeRsyncTransfer() } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
         let scp = self.scp, rsync = self.rsync
         perform("正在上传…", id: token, historyBatch: token) { [weak self] backend in
+            (backend as? SFTPBackend)?.resumeDirectoryTransfers = continuing
+            let target = try backend.canonicalPath(target)
             let existingEntries = try backend.list(target)
             var names = Set(existingEntries.map(\.name)), kinds = [String: (directory: Bool, link: Bool)]()
             for entry in existingEntries { kinds[entry.name] = (entry.directory, entry.symbolicLink) }
@@ -381,7 +431,7 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
                 let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
                 guard history.start(record, directory: isDirectory) else { throw ModelError.invalid("传输已取消。") }
                 guard RemotePath.safeName(url.lastPathComponent) else { throw ModelError.invalid("文件名包含不支持的字符。") }
-                let name = useRsync ? url.lastPathComponent : Self.uniqueName(url.lastPathComponent, existing: names); names.insert(name)
+                let name = useRsync || continuing ? url.lastPathComponent : Self.uniqueName(url.lastPathComponent, existing: names); names.insert(name)
                 let remote = RemotePath.join(target, name)
                 history.remoteDestination(record, remote: remote)
                 if useRsync {
@@ -391,7 +441,9 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
                     try rsync.run(local: url, remote: remote, upload: true, directory: isDirectory, progress: self?.rsyncProgressCallback(name, token: token, record: record) ?? { _,_ in })
                 } else if useSCP { guard let scp else { throw ModelError.invalid("SCP 连接不可用。"); }; try scp.run(local: url, remote: remote, upload: true) }
                 else if let resumable = backend as? ResumableFileBackend, !isDirectory {
-                    let job = ResumableFileTransfer(local: url, remote: remote, upload: true)
+                    guard let endpoint else { throw ModelError.invalid("续传连接信息不可用。") }
+                    let job = try ResumableFileTransfer.persistent(local: url, remote: remote, upload: true, profile: endpoint,
+                                                                  partial: continuing && existingEntries.contains(where: { $0.name == name }) ? remote : nil)
                     self?.registerResume(job, record: record)
                     try resumable.transfer(job, progress: self?.progressCallback(name, token: token, recordID: record) ?? { _,_ in })
                 } else { try backend.upload(url, to: remote, progress: self?.progressCallback(name, token: token, recordID: record) ?? { _, _ in }) }
@@ -408,7 +460,16 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
     }
     func download(_ files: [RemoteFileEntry], from parent: String, to destination: URL) {
         guard connected, !busy, !files.isEmpty else { return }
-        let useRsync = usesRsync
+        let useRsync = usesRsync, endpoint = profile
+        var continuing = usesResumableSFTP
+        if continuing && files.contains(where: { FileManager.default.fileExists(atPath: destination.appendingPathComponent($0.name).path) }) {
+            let alert = PopupAlert(); alert.messageText = "下载目标已存在"
+            alert.informativeText = "校验同名文件后继续未完成的部分，完整一致的文件跳过。内容不一致时停止。"
+            alert.addButton(withTitle: "校验并续传"); alert.addButton(withTitle: "保留两份"); alert.addButton(withTitle: "取消")
+            let choice = alert.runModal()
+            if choice == .alertThirdButtonReturn { return }
+            continuing = choice == .alertFirstButtonReturn
+        }
         if useRsync, !Dialogs.confirm("rsync 下载到本地？", text: "源：\(profile?.name ?? "") · \(parent)\n目标：\(destination.path)\n\n将更新选中项目的同名文件及目录内容，保留目标额外文件。", action: "更新并下载") { return }
         let useSCP = sshProfile != nil && transferMode.indexOfSelectedItem == 1
         let token = UUID(), history = transferHistory
@@ -418,12 +479,13 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         do { if useRsync { rsync = try makeRsyncTransfer() } } catch { history.finishBatch(token, error: error); Dialogs.message(error.localizedDescription); return }
         let scp = self.scp, rsync = self.rsync
         perform("正在下载…", id: token, historyBatch: token) { [weak self] backend in
+            (backend as? SFTPBackend)?.resumeDirectoryTransfers = continuing
             var names = Set(try FileManager.default.contentsOfDirectory(atPath: destination.path))
             for (index, entry) in files.enumerated() {
                 let record = records[index]
                 guard history.start(record) else { throw ModelError.invalid("传输已取消。") }
                 guard RemotePath.safeName(entry.name) else { throw ModelError.invalid("远程文件名无效。") }
-                let name = useRsync ? entry.name : Self.uniqueName(entry.name, existing: names); names.insert(name); let local = destination.appendingPathComponent(name), remote = RemotePath.join(parent, entry.name)
+                let name = useRsync || continuing ? entry.name : Self.uniqueName(entry.name, existing: names); names.insert(name); let local = destination.appendingPathComponent(name), remote = RemotePath.join(parent, entry.name)
                 history.destination(record, local: local.path)
                 if useRsync {
                     guard !entry.symbolicLink, !entry.unknownType else { throw ModelError.invalid("rsync 入口不接受符号链接或未知文件类型。") }
@@ -438,7 +500,9 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
                     guard let scp else { throw ModelError.invalid("SCP 连接不可用。"); }; try scp.run(local: stage, remote: remote, upload: false)
                     try FileManager.default.moveItem(at: stage.appendingPathComponent(entry.name), to: local)
                 } else if let resumable = backend as? ResumableFileBackend, !entry.directory && !entry.symbolicLink && !entry.unknownType {
-                    let job = ResumableFileTransfer(local: local, remote: remote, upload: false)
+                    guard let endpoint else { throw ModelError.invalid("续传连接信息不可用。") }
+                    let job = try ResumableFileTransfer.persistent(local: local, remote: remote, upload: false, profile: endpoint,
+                                                                  partial: continuing && FileManager.default.fileExists(atPath: local.path) ? local.path : nil)
                     self?.registerResume(job, record: record)
                     try resumable.transfer(job, progress: self?.progressCallback(name, token: token, recordID: record) ?? { _,_ in })
                 } else { try backend.download(remote, to: local, progress: self?.progressCallback(name, token: token, recordID: record) ?? { _, _ in }) }
@@ -465,10 +529,15 @@ final class RemoteFileSession: NSViewController, NSTableViewDataSource, NSTableV
         guard Dialogs.confirm("删除 \(entries.count) 个远程项目？", text: entries.map(\.name).joined(separator: "\n") + "\n永久删除，不进入废纸篓；目录必须为空。", action: "删除") else { return }
         perform("正在删除…") { backend in for entry in entries { try backend.remove(RemotePath.join(parent, entry.name), directory: entry.directory) }; return (parent, try backend.list(parent)) } completion: { [weak self] in self?.display($0) }
     }
+    private var usesResumableSFTP: Bool {
+        backend is ResumableFileBackend && transferMode.indexOfSelectedItem == 0
+    }
+
     private func registerResume(_ job: ResumableFileTransfer, record: UUID) {
+        let partialDescription = job.partialDescription
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.closed, self.transferHistory.snapshot.contains(where: { $0.id == record }) else { return }
-            self.resumeJobs[record] = job; self.transferHistory.partialDestination(record, path: job.partialDescription); self.historyView.selectRecord(record)
+            self.resumeJobs[record] = job; self.transferHistory.partialDestination(record, path: partialDescription); self.historyView.selectRecord(record)
         }
     }
     private var pausableRecord: UUID? {

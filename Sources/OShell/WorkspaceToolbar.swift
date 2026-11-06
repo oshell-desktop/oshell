@@ -118,6 +118,10 @@ extension WorkspaceController {
     }
     @objc func editCurrentSessionProfile() {
         guard canEditCurrentSessionProfile, let pane = selectedTab?.activePane else { return }
+        if pane.sshConnectionGroup?.isExternal == true {
+            showCurrentSessionProperties()
+            return
+        }
         let source = credentialProfiles.first { $0.id == pane.profile.id } ?? pane.profile
         var titleChoice: (UUID, SessionTitleDisplayMode)?
         guard let profile = Dialogs.session(source, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor, titleSelection: { titleChoice = ($0, $1) }) else { return }
