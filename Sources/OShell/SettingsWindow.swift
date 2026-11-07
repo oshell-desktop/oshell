@@ -46,7 +46,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTabViewDelegate {
         "storage": ("arrow.triangle.2.circlepath.icloud", "管理配置存储和多设备同步。"),
         "selection": ("selection.pin.in.out", "设置文本选择、复制与空白处理。"),
         "text": ("textformat", "调整终端文本和字符显示。"),
-        "clock": ("clock", "设置终端时钟的外观与位置。"),
+        "clock": ("clock", "设置时钟的显示时机、外观与位置。"),
         "security": ("lock.shield", "管理解锁方式和凭据保护。"),
         "titles": ("rectangle.topthird.inset.filled", "设置会话标签的标题显示。"),
         "files": ("folder", "选择内置文件管理或当前终端命令。"),

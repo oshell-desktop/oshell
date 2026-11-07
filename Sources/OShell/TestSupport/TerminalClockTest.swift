@@ -49,6 +49,7 @@ enum TerminalClockTest {
                 guard let root = NSApp.modalWindow?.contentView,
                       let controls = clockControls(root) else { return }
                 checks["positionDisabledUntilEnabled"] = !controls.position.isEnabled
+                checks["fullscreenOnlyDefaultsOffAndDisabled"] = controls.fullscreenOnly.state == .off && !controls.fullscreenOnly.isEnabled
                 controls.enabled.performClick(nil); controls.position.selectItem(withTitle: TerminalClockPosition.bottomRight.title)
                 root.layoutSubtreeIfNeeded()
                 checks["clockControlsFitSettings"] = controls.position.isEnabled && root.bounds.contains(controls.convert(controls.bounds, to: root))
@@ -144,6 +145,40 @@ enum TerminalClockTest {
                 checks["disableSaves"] = workspace.saveConfiguration(value)
                 checks["disableStopsSharedTicker"] = !TerminalClockTicker.shared.isRunning && workspace.clockView.isHidden
                 value.preferences.terminalClockEnabled = true; _ = workspace.saveConfiguration(value)
+                let coordinator = workspace.windowCoordinator ?? WorkspaceWindows(initial: workspace)
+                let other = coordinator.newWindow()
+                window.makeKeyAndOrderFront(nil)
+                later {
+                    guard let root = NSApp.modalWindow?.contentView, let controls = clockControls(root) else { return }
+                    controls.fullscreenOnly.performClick(nil)
+                    checks["fullscreenSelectionWaitsForApply"] = !workspace.clockView.isHidden && !other.clockView.isHidden
+                    checks["fullscreenPreviewStillVisible"] = !controls.previewClock.isHidden
+                    checks["fullscreenControlFitsPage"] = root.bounds.contains(controls.fullscreenOnly.convert(controls.fullscreenOnly.bounds, to: root))
+                    snapshot(root, "terminal-clock-fullscreen-settings-review")
+                    views(root).compactMap { $0 as? NSButton }.first { $0.title == "应用" }?.performClick(nil)
+                }
+                workspace.showPreferences()
+                checks["fullscreenOnlyHidesAllWindowedClocks"] = workspace.clockView.isHidden && other.clockView.isHidden && !TerminalClockTicker.shared.isRunning
+                checks["fullscreenOnlySavedLocally"] = UserDefaults.standard.bool(forKey: TerminalClockView.fullscreenOnlyDefaultsKey)
+                let reopened = WorkspaceController(store: workspace.store, configuration: workspace.configuration)
+                checks["newWindowLoadsFullscreenPreference"] = reopened.clockView.enabled && reopened.clockView.isHidden
+                reopened.shutdown(); reopened.window?.orderOut(nil)
+                later {
+                    guard let root = NSApp.modalWindow?.contentView, let controls = clockControls(root) else { return }
+                    checks["fullscreenPreferenceReopensChecked"] = controls.fullscreenOnly.state == .on
+                    controls.fullscreenOnly.performClick(nil)
+                    _ = PopupKeyboard.dismiss(window: NSApp.modalWindow!)
+                }
+                workspace.showPreferences()
+                checks["cancelKeepsFullscreenPreference"] = UserDefaults.standard.bool(forKey: TerminalClockView.fullscreenOnlyDefaultsKey) && workspace.clockView.isHidden
+                later {
+                    guard let root = NSApp.modalWindow?.contentView, let controls = clockControls(root) else { return }
+                    controls.fullscreenOnly.performClick(nil)
+                    views(root).compactMap { $0 as? NSButton }.first { $0.title == "应用" }?.performClick(nil)
+                }
+                workspace.showPreferences()
+                checks["alwaysVisibleRestoresAllWindowClocks"] = !workspace.clockView.isHidden && !other.clockView.isHidden && TerminalClockTicker.shared.isRunning
+                other.shutdown(); other.window?.orderOut(nil); coordinator.remove(other)
                 finish()
             }
         }

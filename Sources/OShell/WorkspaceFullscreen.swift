@@ -100,6 +100,7 @@ extension WorkspaceController {
     }
     func windowDidEnterFullScreen(_ notification: Notification) {
         fullscreenTransitionInProgress = false
+        clockView.refreshVisibility()
         // AppKit still owns the animation transaction inside this callback.
         // Defer a queued toggle request until it can accept the opposite transition.
         if isFocusFullscreen { DispatchQueue.main.async { [weak self] in self?.reconcileFocusFullscreen() } }
@@ -110,16 +111,19 @@ extension WorkspaceController {
     }
     func windowDidExitFullScreen(_ notification: Notification) {
         fullscreenTransitionInProgress = false
+        clockView.refreshVisibility()
         restoreWindowedPresentation()
         if isFocusFullscreen { DispatchQueue.main.async { [weak self] in self?.reconcileFocusFullscreen() } }
     }
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
         fullscreenTransitionInProgress = false; focusFullscreenRequested = false; setFocusFullscreenChrome(false)
         restoreWindowedPresentation()
+        clockView.refreshVisibility()
     }
     func windowDidFailToExitFullScreen(_ window: NSWindow) {
         fullscreenTransitionInProgress = false
         if isFocusFullscreen { focusFullscreenRequested = true }
+        clockView.refreshVisibility()
     }
     func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions {
         return proposedOptions.subtracting([.hideDock, .hideMenuBar]).union([.autoHideDock, .autoHideMenuBar, .autoHideToolbar])

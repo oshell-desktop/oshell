@@ -1021,14 +1021,17 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let titleView = SessionTitleSettingsView()
         let imagePasteView = ImagePasteSettingsControl()
         let fileManagementView = FileManagementSettingsView()
+        let clockSettings = TerminalClockSettingsView(configuration.preferences)
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
-        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, fileManagementView: fileManagementView, selectionView: { autoCopy, trim in
+        guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, fileManagementView: fileManagementView, clockView: clockSettings, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
         }, localShortcutSelection: { localShortcut = $0 }) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
         var value = configuration; value.preferences = preferences
         guard saveConfiguration(value) else { return }
+        UserDefaults.standard.set(clockSettings.fullscreenOnly.state == .on, forKey: TerminalClockView.fullscreenOnlyDefaultsKey)
+        for workspace in windowCoordinator?.workspaces ?? [self] { workspace.clockView.apply(workspace.configuration.preferences) }
         do {
             let openProfiles = (windowCoordinator?.workspaces ?? [self]).flatMap { $0.inputPanes.filter { !$0.isBlank }.map(\.profile) }
             try titleView.apply(profiles: configuration.profiles + openProfiles)

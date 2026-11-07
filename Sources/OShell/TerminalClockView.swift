@@ -63,7 +63,10 @@ final class TerminalClockTicker {
 
 /// Pure decoration: no PTY writes, no selection, and all pointer events pass through.
 final class TerminalClockView: NSView {
+    // Window presentation is local to this Mac, outside the shared Swift/Go preferences.
+    static let fullscreenOnlyDefaultsKey = "OShell.clock.fullscreenOnly"
     private(set) var enabled = false
+    private var fullscreenOnly = false
     private(set) var position: TerminalClockPosition = .topRight
     private(set) var text = ""
     private(set) var foreground = NSColor.white
@@ -71,7 +74,7 @@ final class TerminalClockView: NSView {
     private var disposed = false
     private weak var terminalArea: NSView?
     private var placement = [NSLayoutConstraint]()
-    var needsClockUpdates: Bool { enabled && alphaValue > 0 && !disposed && window != nil }
+    var needsClockUpdates: Bool { enabled && !isHidden && alphaValue > 0 && !disposed && window != nil }
     var needsVisibleClockUpdates: Bool { needsClockUpdates && window?.isVisible == true && window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true && !isHiddenOrHasHiddenAncestor }
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -84,11 +87,12 @@ final class TerminalClockView: NSView {
         setAccessibilityElement(false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); TerminalClockTicker.shared.update(self) }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); refreshVisibility() }
     override func viewDidHide() { super.viewDidHide(); TerminalClockTicker.shared.update(self) }
     override func viewDidUnhide() { super.viewDidUnhide(); TerminalClockTicker.shared.update(self) }
-    func apply(_ preferences: Preferences) {
+    func apply(_ preferences: Preferences, fullscreenOnly: Bool = UserDefaults.standard.bool(forKey: TerminalClockView.fullscreenOnlyDefaultsKey)) {
         guard !disposed else { return }
+        self.fullscreenOnly = fullscreenOnly
         var preferences = preferences; preferences.clampClockStyle()
         enabled = preferences.terminalClockEnabled; position = preferences.terminalClockPosition
         let chosen = preferences.terminalClockFontName.isEmpty ? nil : NSFont(name: preferences.terminalClockFontName, size: CGFloat(preferences.terminalClockFontSize))
@@ -96,7 +100,10 @@ final class TerminalClockView: NSView {
         foreground = NSColor(hex: preferences.terminalClockColor) ?? NSColor(hex: preferences.colorScheme.foreground) ?? .white
         alphaValue = CGFloat(preferences.terminalClockOpacity)
         invalidateIntrinsicContentSize()
-        isHidden = !enabled; needsDisplay = true; positionInTerminal()
+        needsDisplay = true; positionInTerminal(); refreshVisibility()
+    }
+    func refreshVisibility() {
+        isHidden = !enabled || (fullscreenOnly && window?.styleMask.contains(.fullScreen) != true)
         TerminalClockTicker.shared.update(self)
     }
     func updateText(_ value: String) {
@@ -154,6 +161,7 @@ final class TerminalClockView: NSView {
 
 final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
     let enabled = NSButton(checkboxWithTitle: "显示窗口时钟", target: nil, action: nil)
+    let fullscreenOnly = NSButton(checkboxWithTitle: "仅全屏时显示（含专注全屏）", target: nil, action: nil)
     let position = NSPopUpButton(), font = NSPopUpButton(), size = NSComboBox()
     let followColor = NSButton(checkboxWithTitle: "跟随终端文字颜色", target: nil, action: nil)
     let color = PopupColorWell()
@@ -167,6 +175,9 @@ final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
         enabled.state = preferences.terminalClockEnabled ? .on : .off
         enabled.identifier = .init("settings.clock.enabled")
         enabled.toolTip = "显示当前 Mac 的日期和时间，每秒刷新；不会发送到服务器或写入终端记录。"
+        fullscreenOnly.state = UserDefaults.standard.bool(forKey: TerminalClockView.fullscreenOnlyDefaultsKey) ? .on : .off
+        fullscreenOnly.identifier = .init("settings.clock.fullscreenOnly")
+        fullscreenOnly.toolTip = "系统全屏、专注全屏及全心专注时显示，普通窗口隐藏。此选项仅保存在本机。"
         for value in TerminalClockPosition.allCases { position.addItem(withTitle: value.title); position.lastItem?.representedObject = value.rawValue }
         position.selectItem(withTitle: preferences.terminalClockPosition.title)
         TerminalFontCatalog.populate(font, selected: preferences.terminalClockFontName)
@@ -181,7 +192,7 @@ final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
             control.identifier = .init("settings.clock." + id); control.setAccessibilityLabel(label)
             control.target = self; control.action = #selector(changed)
         }
-        for button in [enabled, followColor] { button.target = self; button.action = #selector(changed) }
+        for button in [enabled, fullscreenOnly, followColor] { button.target = self; button.action = #selector(changed) }
         func row(_ title: String, _ controls: [NSView]) -> NSView {
             let label = NSTextField(labelWithString: title); label.widthAnchor.constraint(equalToConstant: 88).isActive = true
             let stack = NSStackView(views: [label] + controls); stack.alignment = .centerY; stack.spacing = 12
@@ -195,7 +206,7 @@ final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
         transparency.widthAnchor.constraint(equalToConstant: 280).isActive = true
         opacityLabel.widthAnchor.constraint(equalToConstant: 48).isActive = true
         let heading = NSTextField(labelWithString: "窗口浮动时钟"); heading.font = .systemFont(ofSize: 15, weight: .semibold)
-        let hint = NSTextField(wrappingLabelWithString: "每个 OShell 窗口只显示一个时钟，切换标签或分屏不重复。覆盖在窗口工作区上方，不占用行列，也不拦截点击、选择或滚动。透明度 0% 为不透明，100% 为完全透明。")
+        let hint = NSTextField(wrappingLabelWithString: "每个窗口只显示一个时钟，不占用行列，也不拦截鼠标操作。“仅全屏时显示”仅保存在本机，普通窗口隐藏并停止刷新。透明度 0% 为不透明，100% 为完全透明。")
         hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
         preview.wantsLayer = true; preview.layer?.backgroundColor = (NSColor(hex: preferences.colorScheme.background) ?? .black).cgColor
         let sample = NSTextField(wrappingLabelWithString: String(repeating: "INFO  Request completed        INFO  Connection established        INFO  Health check passed\n", count: 8))
@@ -204,7 +215,8 @@ final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
         sample.translatesAutoresizingMaskIntoConstraints = false; preview.addSubview(sample)
         previewClock.translatesAutoresizingMaskIntoConstraints = false; preview.addSubview(previewClock); previewClock.constrain(to: preview)
         NSLayoutConstraint.activate([sample.topAnchor.constraint(equalTo: preview.topAnchor, constant: 12), sample.leadingAnchor.constraint(equalTo: preview.leadingAnchor, constant: 12), sample.trailingAnchor.constraint(equalTo: preview.trailingAnchor, constant: -12)])
-        let stack = NSStackView(views: [heading, enabled, row("显示位置", [position]), row("字体", [font]), row("字号", [size, NSTextField(labelWithString: "8–96 点，可直接输入")]), row("字体颜色", [color, followColor]), row("字体透明度", [transparency, opacityLabel]), hint, preview])
+        let visibility = NSStackView(views: [enabled, fullscreenOnly]); visibility.spacing = 24; visibility.alignment = .centerY
+        let stack = NSStackView(views: [heading, visibility, row("显示位置", [position]), row("字体", [font]), row("字号", [size, NSTextField(labelWithString: "8–96 点，可直接输入")]), row("字体颜色", [color, followColor]), row("字体透明度", [transparency, opacityLabel]), hint, preview])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false; addSubview(stack)
         NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: topAnchor, constant: 20), stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24), hint.widthAnchor.constraint(equalTo: stack.widthAnchor), preview.widthAnchor.constraint(equalTo: stack.widthAnchor), preview.heightAnchor.constraint(equalToConstant: 150)])
@@ -214,10 +226,10 @@ final class TerminalClockSettingsView: NSView, NSComboBoxDelegate {
     func controlTextDidChange(_ obj: Notification) { changed() }
     func comboBoxSelectionDidChange(_ notification: Notification) { DispatchQueue.main.async { [weak self] in self?.changed() } }
     @objc func changed() {
-        for control in [position as NSControl, font, size, followColor, transparency] { control.isEnabled = enabled.state == .on }
+        for control in [position as NSControl, fullscreenOnly, font, size, followColor, transparency] { control.isEnabled = enabled.state == .on }
         color.isEnabled = enabled.state == .on && followColor.state == .off
         opacityLabel.stringValue = String(format: "%.0f%%", transparency.doubleValue)
-        var draft = base; apply(to: &draft); previewClock.apply(draft)
+        var draft = base; apply(to: &draft); previewClock.apply(draft, fullscreenOnly: false)
     }
     func apply(to preferences: inout Preferences) {
         preferences.terminalClockEnabled = enabled.state == .on

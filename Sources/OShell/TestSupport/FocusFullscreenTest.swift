@@ -26,6 +26,10 @@ final class FocusFullscreenTest {
         }; poll()
     }
     private func start() {
+        UserDefaults.standard.set(true, forKey: TerminalClockView.fullscreenOnlyDefaultsKey)
+        workspace.configuration.preferences.terminalClockEnabled = true
+        workspace.clockView.apply(workspace.configuration.preferences)
+        checks["clockHiddenWhileWindowed"] = workspace.clockView.isHidden && !TerminalClockTicker.shared.isRunning
         workspace.newLocal(); workspace.splitVertical()
         paneIDs = workspace.inputPanes.map(\.id)
         wait("localProcessesReady", { self.workspace.inputPanes.allSatisfy { $0.terminal.process.running } }) { [self] in
@@ -52,6 +56,7 @@ final class FocusFullscreenTest {
             workspace.requestFocusFullscreen(true)
             wait("enteredNativeFocusFullscreen", { self.window.styleMask.contains(.fullScreen) && !self.workspace.fullscreenTransitionInProgress }) { [self] in
                 checks["nativeFocusShowsOnlyTabsAndBelow"] = workspace.isFocusFullscreen && workspace.topToolbar?.isHidden == true && workspace.sessionLinkBar.isHidden
+                checks["clockVisibleInFocusFullscreen"] = !workspace.clockView.isHidden && workspace.clockView.needsClockUpdates && TerminalClockTicker.shared.isRunning
                 checks["titleAndWindowButtonsHidden"] = window.titleVisibility == .hidden && [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].allSatisfy { window.standardWindowButton($0)?.isHidden == true }
                 let options = workspace.window(window, willUseFullScreenPresentationOptions: [.fullScreen])
                 checks["nativeMenuAndDockAutoHide"] = options.contains(.autoHideMenuBar) && options.contains(.autoHideDock)
@@ -80,6 +85,7 @@ final class FocusFullscreenTest {
                 let savedConfiguration = try? encoder.encode(workspace.configuration)
                 let deepToggle = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control, .command, .shift], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "F", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3)!
                 checks["deepFocusShortcutEnables"] = window.performKeyEquivalent(with: deepToggle) && workspace.isDeepFocus
+                checks["clockVisibleInDeepFocus"] = !workspace.clockView.isHidden
                 window.contentView?.layoutSubtreeIfNeeded()
                 func headersHidden() -> Bool {
                     workspace.inputPanes.allSatisfy { pane in
@@ -124,14 +130,30 @@ final class FocusFullscreenTest {
                 let toggle = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control, .command], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: "f", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3)!
                 checks["shortcutStillExitsFocusFullscreen"] = window.performKeyEquivalent(with: toggle) && !workspace.focusFullscreenRequested
                 wait("returnedToWindowedMode", { !self.window.styleMask.contains(.fullScreen) && !self.workspace.fullscreenTransitionInProgress && !self.workspace.isFocusFullscreen }) { [self] in
+                    checks["clockStopsAfterLeavingFocusFullscreen"] = workspace.clockView.isHidden && !TerminalClockTicker.shared.isRunning
                     checks["exitRestoresChromeAndPreferences"] = !workspace.isDeepFocus && !workspace.quickSendBar.isHidden && workspace.topToolbar?.isHidden == false && workspace.configuration.sessionLinks.visible == initialLinks && workspace.sessionLinkBar.isHidden == !initialLinks
                     checks["allOriginalProcessesSurviveFullscreen"] = workspace.inputPanes.filter { paneIDs.contains($0.id) }.map { $0.terminal.process.shellPid } == pids && workspace.inputPanes.filter { paneIDs.contains($0.id) }.allSatisfy { $0.terminal.process.running }
                     checks["exitRestoresWindowSize"] = abs(window.frame.width - originalFrame.width) < 2 && abs(window.frame.height - originalFrame.height) < 2
                     // Exercise an exit request while entry animation is pending.
                     workspace.requestFocusFullscreen(true); workspace.requestFocusFullscreen(false)
-                    wait("rapidEntryCancelRestoresWindow", { !self.workspace.isFocusFullscreen && !self.workspace.fullscreenTransitionInProgress && !self.window.styleMask.contains(.fullScreen) }) { [self] in finish() }
+                    wait("rapidEntryCancelRestoresWindow", { !self.workspace.isFocusFullscreen && !self.workspace.fullscreenTransitionInProgress && !self.window.styleMask.contains(.fullScreen) }) { [self] in checkOrdinaryFullscreenClock() }
                 }
                 }
+            }
+        }
+    }
+    private func checkOrdinaryFullscreenClock() {
+        checks["cancelledEntryKeepsClockHidden"] = workspace.clockView.isHidden && !TerminalClockTicker.shared.isRunning
+        window.toggleFullScreen(nil)
+        wait("enteredOrdinaryFullscreen", { self.window.styleMask.contains(.fullScreen) && !self.workspace.fullscreenTransitionInProgress }) { [self] in
+            checks["clockVisibleInOrdinaryFullscreen"] = !workspace.isFocusFullscreen && !workspace.clockView.isHidden && TerminalClockTicker.shared.isRunning
+            let other = WorkspaceController(store: workspace.store, configuration: workspace.configuration)
+            checks["windowedClockHiddenWhileOtherFullscreen"] = other.clockView.isHidden && TerminalClockTicker.shared.subscriberCount == 1
+            other.shutdown(); other.window?.orderOut(nil)
+            window.toggleFullScreen(nil)
+            wait("leftOrdinaryFullscreen", { !self.window.styleMask.contains(.fullScreen) && !self.workspace.fullscreenTransitionInProgress }) { [self] in
+                checks["clockStopsAfterOrdinaryFullscreen"] = workspace.clockView.isHidden && !TerminalClockTicker.shared.isRunning
+                finish()
             }
         }
     }
