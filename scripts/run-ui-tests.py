@@ -38,6 +38,7 @@ CASES = {
  'file-resume':'OSHELL_FILE_RESUME_OUTPUT',
  'file-transfer-history':'OSHELL_FILE_HISTORY_OUTPUT',
  'session-sidebar':'OSHELL_SIDEBAR_OUTPUT',
+ 'window-size':'OSHELL_WINDOW_SIZE_OUTPUT',
  'terminal-selection':'OSHELL_SELECTION_OUTPUT',
  'local-prompt-editing':'OSHELL_LOCAL_PROMPT_OUTPUT',
  'biometric-local-store':'OSHELL_BIOMETRIC_LOCAL_OUTPUT',

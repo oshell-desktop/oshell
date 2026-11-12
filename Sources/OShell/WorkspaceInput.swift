@@ -37,6 +37,7 @@ extension WorkspaceController {
         loadedComposer?.updateTargets(inputPanes.filter { composerTargets.contains($0.id) })
         syncIndicator.isHidden = syncTargets.isEmpty; stopSyncButton.isHidden = syncTargets.isEmpty
         syncIndicator.stringValue = "同步 \(syncTargets.count)"
+        topToolbar?.enclosingScrollView?.needsLayout = true
         syncIndicator.toolTip = inputPanes.filter { syncTargets.contains($0.id) }.map { "\($0.title) · \($0.profile.name)" }.joined(separator: "\n")
     }
     func routeKeyboard(_ source: TerminalPane, bytes: [UInt8]) -> Bool {

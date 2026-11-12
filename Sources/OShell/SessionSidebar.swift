@@ -6,7 +6,7 @@ import OShellCore
 enum SessionSidebarPreferences {
     static let visibleKey = "OShell.sessionSidebar.visible"
     private static let shortcutKey = "OShell.sessionSidebar.shortcut"
-    static var visible: Bool { UserDefaults.standard.object(forKey: visibleKey) == nil || UserDefaults.standard.bool(forKey: visibleKey) }
+    static var visible: Bool { UserDefaults.standard.bool(forKey: visibleKey) }
     static func saveShortcut(_ value: ShortcutOverride?) {
         if let value, let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: shortcutKey) }
         else { UserDefaults.standard.removeObject(forKey: shortcutKey) }
@@ -266,10 +266,13 @@ extension WorkspaceController {
     }
     @objc func toggleSessionSidebar() {
         guard isSecurityUnlocked, !isFocusFullscreen else { return }
+        setSessionSidebarVisible(!sessionSidebarVisible, focusSearch: true)
+    }
+    func setSessionSidebarVisible(_ visible: Bool, focusSearch: Bool = false) {
         let hadFocus = sessionSidebar.search.currentEditor() === window?.firstResponder || (window?.firstResponder as? NSView)?.isDescendant(of: sessionSidebar) == true
-        sessionSidebarVisible.toggle(); UserDefaults.standard.set(sessionSidebarVisible, forKey: SessionSidebarPreferences.visibleKey)
+        sessionSidebarVisible = visible; UserDefaults.standard.set(visible, forKey: SessionSidebarPreferences.visibleKey)
         refreshSessionSidebar(); window?.contentView?.layoutSubtreeIfNeeded()
-        if sessionSidebarVisible { window?.makeFirstResponder(sessionSidebar.search) }
-        else if hadFocus { selectedTab?.activePane.activate() }
+        if visible && focusSearch && !isFocusFullscreen { window?.makeFirstResponder(sessionSidebar.search) }
+        else if !visible && hadFocus { selectedTab?.activePane.activate() }
     }
 }

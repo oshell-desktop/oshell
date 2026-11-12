@@ -35,8 +35,8 @@ extension WorkspaceController {
         return try GlobalProxySettings.load().resolve(profile, configuration: configuration)
     }
     func configureGlobalProxyButton() {
-        globalProxyButton.bezelStyle = .texturedRounded; globalProxyButton.setButtonType(.toggle)
-        globalProxyButton.image = NSImage(systemSymbolName: "network", accessibilityDescription: "全局代理")
+        globalProxyButton.bezelStyle = .texturedRounded; globalProxyButton.setButtonType(.pushOnPushOff)
+        globalProxyButton.image = WorkspaceToolbarIcon.proxy.image
         globalProxyButton.imagePosition = .imageOnly
         globalProxyButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         globalProxyButton.identifier = .init("toolbar.globalProxy")

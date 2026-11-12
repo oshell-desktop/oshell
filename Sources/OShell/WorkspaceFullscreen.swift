@@ -86,7 +86,8 @@ extension WorkspaceController {
         refreshFocusContentChrome()
         refreshSessionSidebar()
         normalWorkspaceTop?.isActive = !enabled; focusWorkspaceTop?.isActive = enabled
-        topToolbar?.isHidden = enabled; topToolbar?.enclosingScrollView?.isHidden = enabled; topDivider?.isHidden = enabled
+        (topToolbar?.enclosingScrollView as? WorkspaceToolbarHost)?.focusMode = enabled
+        topDivider?.isHidden = enabled
         sessionLinkBar.isHidden = enabled || !configuration.sessionLinks.visible
         refreshMasterWarning()
         updateFullscreenButtons()

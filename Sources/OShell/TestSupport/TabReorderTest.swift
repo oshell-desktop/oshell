@@ -92,6 +92,58 @@ enum TabReorderTest {
             info.draggingSource = strip.items.first
             checks["otherWindowDragRejected"] = overflow.draggingUpdated(info).isEmpty && !overflow.performDragOperation(info)
             testWindow.close()
+            controller.duplicateTab(originals[1]); let localCopy = controller.selectedTab!
+            let sourceIndex = controller.tabs.firstIndex { $0 === originals[1] }!
+            checks["doubleClickCopyInsertsAfterSource"] = localCopy !== originals[1] && controller.tabs[sourceIndex + 1] === localCopy
+            localCopy.activePane.shutdown(); controller.closeTab()
+            checks["closeLocalCopySelectsSource"] = controller.selectedTab === originals[1]
+            controller.tabs.flatMap { $0.layout.panes }.forEach { $0.shutdown() }
+            while !controller.tabs.isEmpty { controller.closeTab() }
+            for _ in 0..<3 { controller.newBlankTab() }
+            let a = controller.tabs[0], b = controller.tabs[1], c = controller.tabs[2]
+            func copySession(_ tab: TerminalTab) {
+                let item = NSMenuItem(); item.representedObject = tab.id; controller.copyTabSession(item)
+            }
+            func closeFromMenu(_ tab: TerminalTab) {
+                let item = NSMenuItem(); item.representedObject = tab.id; controller.closeTabFromMenu(item)
+            }
+            copySession(b); let copy = controller.selectedTab!
+            checks["copyBackgroundTabInsertsAfterSource"] = controller.tabs.map(\.id) == [a.id,b.id,copy.id,c.id]
+            checks["blankCopyStaysBlank"] = copy.activePane.isBlank && !copy.activePane.started
+            copySession(b); let duplicate = controller.selectedTab!
+            checks["repeatedCopyInsertsImmediatelyAfterSource"] = controller.tabs.map(\.id) == [a.id,b.id,duplicate.id,copy.id,c.id]
+            controller.closeTab()
+            checks["closeCurrentSelectsPrevious"] = controller.selectedTab === b
+            closeFromMenu(copy)
+            checks["closeBackgroundPreservesSelection"] = controller.selectedTab === b
+            controller.select(a); controller.closeTab()
+            checks["closeFirstSelectsNewFirst"] = controller.selectedTab === b && controller.tabs.first === b
+            copySession(c); let lastCopy = controller.selectedTab!
+            checks["copyLastAppends"] = controller.tabs.map(\.id) == [b.id,c.id,lastCopy.id]
+            controller.closeTab()
+            checks["closeLastSelectsPrevious"] = controller.selectedTab === c
+            controller.closeTab(); controller.closeTab()
+            checks["closeOnlyTabClearsSelection"] = controller.tabs.isEmpty && controller.selectedTab == nil
+
+            for _ in 0..<4 { controller.newBlankTab() }
+            let grouped = controller.tabs
+            do {
+                let group = try controller.createTabGroup(name:"Copy and close fixture")
+                for tab in grouped.prefix(3) { _ = controller.moveTab(tab.id,toGroup:group.id) }
+                _ = controller.reorderTab(grouped[2].id,before:grouped[0].id,inGroup:group.id)
+                let other = controller.customTabLayout!.group(containing:grouped[3].id)!, otherOrder = other.tabs
+                controller.select(grouped[3]); copySession(grouped[0]); let groupedCopy = controller.selectedTab!
+                checks["groupCopyFollowsDisplayedSourceOrder"] = group.tabs == [grouped[2].id,grouped[0].id,groupedCopy.id,grouped[1].id]
+                checks["groupCopyLeavesOtherGroupUntouched"] = other.tabs == otherOrder
+                controller.closeTab()
+                checks["groupCloseSelectsPrevious"] = controller.selectedTab === grouped[0] && group.active == grouped[0].id
+                controller.select(grouped[2]); controller.closeTab()
+                checks["groupCloseFirstSelectsNewFirst"] = controller.selectedTab === grouped[0] && group.tabs.first == grouped[0].id
+                controller.select(grouped[1]); controller.closeTab()
+                checks["groupCloseLastSelectsPrevious"] = controller.selectedTab === grouped[0]
+                controller.closeTab()
+                checks["closeLastInGroupSelectsRemainingVisibleTab"] = controller.selectedTab === grouped[3]
+            } catch { checks["copyCloseGroupSetup"] = false }
             let report:[String:Any] = ["passed":checks.values.allSatisfy { $0 },"checks":checks]
             if let path = ProcessInfo.processInfo.environment["OSHELL_TAB_REORDER_OUTPUT"] { try? JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:URL(fileURLWithPath:path)) }
             controller.shutdown();NSApp.terminate(nil)

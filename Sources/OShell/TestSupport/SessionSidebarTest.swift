@@ -9,6 +9,8 @@ enum SessionSidebarTest {
     }
     private static func exercise(_ workspace: WorkspaceController) {
         var checks = [String: Bool]()
+        checks["sidebarDefaultsToCollapsed"] = !SessionSidebarPreferences.visible && !workspace.sessionSidebarVisible
+            && workspace.sidebarContainer?.isHidden == true && workspace.sidebarWidth?.constant == 0
         SessionSidebarPreferences.saveShortcut(nil)
         let a = SessionProfile(name: "Production API", group: "prod/apps", host: "192.0.2.10", username: "ops")
         let b = SessionProfile(name: "数据库", group: "prod/db", host: "db.example.test", username: "admin")
@@ -85,11 +87,18 @@ enum SessionSidebarTest {
         checks["defaultShortcut"] = SessionSidebarPreferences.shortcuts(KeyboardShortcuts()).action(for: defaultKey) == .sessionSidebar
         let custom = KeyboardShortcut(11, KeyboardShortcut.command | KeyboardShortcut.option)
         func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
-        func edit(apply: Bool) {
+        func edit(apply: Bool, sidebarVisible: Bool = false) {
+            let previousVisibility = workspace.sessionSidebarVisible
             let timer = Timer(timeInterval: 0.15, repeats: false) { _ in
                 guard let root = NSApp.modalWindow?.contentView,
                       let tabs = views(root).compactMap({ $0 as? NSTabView }).first,
                       let shortcuts = tabs.tabViewItems.compactMap({ $0.view as? ShortcutSettingsView }).first else { checks["shortcutEditorExists"] = false; NSApp.abortModal(); return }
+                tabs.selectTabViewItem(withIdentifier: "general"); root.layoutSubtreeIfNeeded()
+                if let button = views(root).compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue == "settings.sessionSidebar.visible" }) {
+                    checks["sidebarSettingReflectsCurrentState-\(apply)-\(sidebarVisible)"] = (button.state == .on) == previousVisibility
+                    checks["sidebarSettingFitsGeneralPage"] = button.superview?.visibleRect.contains(button.frame) == true
+                    button.state = sidebarVisible ? .on : .off
+                } else { checks["sidebarSettingExists"] = false }
                 tabs.selectTabViewItem(withIdentifier: "shortcuts")
                 shortcuts.selectAction(.sessionSidebar); shortcuts.setCandidate(custom); shortcuts.assign()
                 checks["shortcutEditorAssigns"] = shortcuts.settings.bindings(for: .sessionSidebar) == [custom]
@@ -98,7 +107,13 @@ enum SessionSidebarTest {
             RunLoop.main.add(timer, forMode: .common); RunLoop.main.add(timer, forMode: .modalPanel); workspace.showPreferences()
         }
         edit(apply: false); checks["cancelKeepsShortcut"] = SessionSidebarPreferences.shortcuts(KeyboardShortcuts()).action(for: defaultKey) == .sessionSidebar
+        checks["cancelKeepsSidebarVisible"] = workspace.sessionSidebarVisible && SessionSidebarPreferences.visible
         edit(apply: true)
+        checks["settingsCollapseSidebarAndRemember"] = !workspace.sessionSidebarVisible && !SessionSidebarPreferences.visible
+            && workspace.sidebarContainer?.isHidden == true && workspace.sidebarWidth?.constant == 0
+        edit(apply: true, sidebarVisible: true)
+        checks["settingsExpandSidebarAndRemember"] = workspace.sessionSidebarVisible && SessionSidebarPreferences.visible
+            && workspace.sidebarContainer?.isHidden == false && workspace.sidebarWidth?.constant == 250
         checks["customShortcutSavedLocally"] = SessionSidebarPreferences.shortcuts(KeyboardShortcuts()).action(for: custom) == .sessionSidebar
         checks["shortcutNotInSharedConfiguration"] = workspace.configuration.preferences.keyboardShortcuts.overrides[ShortcutAction.sessionSidebar.rawValue] == nil && (try? workspace.store.load().preferences.keyboardShortcuts.overrides[ShortcutAction.sessionSidebar.rawValue]) == nil
         // Return to AppKit's event loop after the settings modal closes so

@@ -29,7 +29,7 @@ enum UpdateFeatureTest {
             checks["protectedStartupUnlockSucceeds"] = locked.unlockAtStartup(); unlockTimer.invalidate()
             checks["unlockEnablesUpdateWithoutSession"] = locked.updateButton.isEnabled && locked.tabs.isEmpty && !locked.appUpdater.started
             checks["unlockRefreshesBeforeCallbacks"] = callbackReady
-            checks["unlockKeepsSessionActionsDisabled"] = !locked.currentPropertiesButton.isEnabled && !locked.splitButton.isEnabled && locked.defaultPropertiesButton.isEnabled
+            checks["unlockKeepsSessionActionsDisabled"] = !locked.sessionPropertiesControl.isEnabled(forSegment: 0) && !locked.splitButton.isEnabled && locked.sessionPropertiesControl.isEnabled(forSegment: 1)
             var openedUpdateSettings = false
             let settingsTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
                 guard let window = NSApp.modalWindow, let root = window.contentView else { return }

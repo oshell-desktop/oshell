@@ -50,6 +50,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTabViewDelegate {
         "security": ("lock.shield", "管理解锁方式和凭据保护。"),
         "titles": ("rectangle.topthird.inset.filled", "设置会话标签的标题显示。"),
         "files": ("folder", "选择内置文件管理或当前终端命令。"),
+        "window": ("macwindow", "设置启动和新建窗口时的默认尺寸。"),
         "about": ("info.circle", "版本信息、开源项目与许可。")
     ]
     init(tabs: NSTabView, appearanceView: AppearanceSettingsView) {
@@ -162,7 +163,7 @@ final class GeneralSettingsView: NSView {
             : "非等宽字体：自动适配字符格，较宽字形会横向缩放；严格字形一致建议使用等宽字体。"
         fontHint.textColor = TerminalFontCatalog.isMonospaced(font) ? .secondaryLabelColor : .systemOrange
     }
-    init(font: NSPopUpButton, size: NSPopUpButton, history: ScrollbackSettingsControl, gpu: NSButton, input: [NSView]) {
+    init(font: NSPopUpButton, size: NSPopUpButton, history: ScrollbackSettingsControl, gpu: NSButton, sidebar: NSButton, input: [NSView]) {
         super.init(frame: NSRect(x: 0, y: 0, width: 820, height: 520))
         func heading(_ title: String) -> NSTextField {
             let label = NSTextField(labelWithString: title); label.font = .systemFont(ofSize: 13, weight: .semibold); return label
@@ -189,7 +190,7 @@ final class GeneralSettingsView: NSView {
         fontChanged(font)
         let separator = NSBox(); separator.boxType = .separator
         let behavior = NSStackView(views: input); behavior.orientation = .vertical; behavior.alignment = .leading; behavior.spacing = 8
-        let extras = NSStackView(views: [gpu]); extras.alignment = .centerY
+        let extras = NSStackView(views: [gpu, sidebar]); extras.alignment = .centerY; extras.spacing = 24
         let stack = NSStackView(views: [heading("终端显示"), display, history.warning, preview, extras, separator, heading("输入与传输"), behavior])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false; addSubview(stack)

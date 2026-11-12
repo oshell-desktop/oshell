@@ -1,5 +1,7 @@
 # 开发与测试
 
+界面变更遵循 [UI 风格与设计理念](ui-design.md)，包括工具栏、图标、交互反馈、辅助功能和资源使用约定。
+
 ## 本机应用
 
 需要现代 macOS、Swift 6 工具链、Xcode Command Line Tools 和 Python 3。依赖固定在 `Vendor/`。

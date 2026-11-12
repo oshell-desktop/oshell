@@ -199,7 +199,7 @@ extension WorkspaceController {
     }
     func refreshTabGroupMenu() {
         let menu = NSMenu(); menu.autoenablesItems = false
-        menu.addItem(withTitle: "标签组", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "标签组", action: nil, keyEquivalent: "").image = WorkspaceToolbarIcon.tabGroups.image
         let create = menu.addItem(withTitle: "新建标签组…", action: #selector(newNamedTabGroup), keyEquivalent: ""); create.target = self
         if let root = customTabLayout {
             menu.addItem(.separator())

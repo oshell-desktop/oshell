@@ -41,6 +41,7 @@ final class WorkspaceWindows {
         workspaces.append(workspace)
         workspace.window?.setFrameAutosaveName("")
         if let previous = active?.window, let window = workspace.window {
+            WindowSizePreferences.apply(to: window, on: previous.screen)
             let screen = previous.screen?.visibleFrame ?? previous.frame
             let origin = NSPoint(x: min(previous.frame.minX + 28, screen.maxX - window.frame.width),
                                  y: max(screen.minY, previous.frame.minY - 28))

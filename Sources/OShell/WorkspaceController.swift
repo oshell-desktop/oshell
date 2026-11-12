@@ -22,7 +22,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     let aiButton = NSButton(title: "MCP", target: nil, action: nil)
     var aiHost: AIWorkspaceHost?
     var loadedAI: AgentControlView?
-    let currentPropertiesButton = NSButton(), defaultPropertiesButton = NSButton(), updateButton = NSButton()
+    let sessionPropertiesControl = SessionPropertiesControl(frame: .zero), updateButton = NSButton()
     let splitButton = NSPopUpButton(frame: .zero, pullsDown: true)
     let tabGroupButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private let arrangementButton = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -127,7 +127,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             do { configuration = try store.load() }
             catch { configuration = Configuration(); loadFailed = true }
         }
-        let window = WorkspaceWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+        let window = WorkspaceWindow(contentRect: NSRect(origin: .zero, size: WindowSizePreferences.defaultSize),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "OShell"; window.minSize = NSSize(width: 760, height: 460)
         window.tabbingMode = .disallowed
@@ -141,6 +141,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         PasswordVault.shared.configureProtection(configuration, reconcileBiometrics: false)
         if !loadFailed && !configuration.hasMasterPassword && !store.requiresMasterProtection { completeStartupUnlock(true) }
         window.delegate = self; window.center(); window.setFrameAutosaveName(CommandLine.arguments.contains("--memory-profile") ? "OShell.memory-profile" : "OShell.main")
+        WindowSizePreferences.apply(to: window)
         quickSendScope = configuration.preferences.quickSendScope
         ApplicationAppearance.apply(configuration.preferences.interfaceTheme)
         ShortcutRuntime.current = SessionSidebarPreferences.shortcuts(configuration.preferences.keyboardShortcuts)
@@ -192,35 +193,44 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         guard isObservingSelectedTab, let selectedTab, selectedTab.hasUnreadOutput else { return }
         selectedTab.markOutputRead(); refreshTabTitles()
     }
-    func windowDidResize(_ notification: Notification) { refreshQuickSendBar() }
+    func windowDidResize(_ notification: Notification) {
+        (topToolbar?.enclosingScrollView as? WorkspaceToolbarHost)?.refreshPresentation()
+        refreshQuickSendBar()
+    }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func show() {
         guard isSecurityUnlocked else { return }
         showWindow(nil); window?.makeKeyAndOrderFront(nil)
     }
-    private func iconButton(_ title: String, _ symbol: String, _ action: Selector) -> NSButton {
+    private func iconButton(_ title: String, _ icon: WorkspaceToolbarIcon, _ action: Selector) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        button.image = icon.image
         button.imagePosition = .imageLeading; button.bezelStyle = .texturedRounded; button.controlSize = .regular
         return button
     }
     private func buildInterface() {
         guard let content = window?.contentView else { return }
-        let new = iconButton("新建", "plus", #selector(newSession))
-        let connect = iconButton("会话管理", "folder", #selector(showSessionManager))
+        let new = iconButton("新建", .newSession, #selector(newSession))
+        let connect = iconButton("会话管理", .catalog, #selector(showSessionManager))
         connect.toolTip = "会话管理（Esc 关闭）"
         quickButton.bezelStyle = .texturedRounded; quickButton.setAccessibilityLabel("快捷连接")
-        let local = iconButton("本地", "terminal", #selector(newLocal))
-        let files = iconButton("文件管理", "folder.fill", #selector(showFiles))
+        quickButton.identifier = .init("toolbar.quickConnect"); quickButton.toolTip = "快捷连接：收藏会话与快速切换"
+        quickButton.imagePosition = .imageOnly; quickButton.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        connect.identifier = .init("toolbar.sessionManager"); new.identifier = .init("toolbar.newSession")
+        let local = iconButton("本地", .local, #selector(newLocal))
+        local.identifier = .init("toolbar.local")
+        let files = iconButton("文件管理", .files, #selector(showFiles))
         files.identifier = .init("toolbar.fileManager")
         files.setAccessibilityLabel("文件管理")
         files.toolTip = "文件管理：使用当前 SSH 连接打开 SFTP，或选择其他 SFTP / FTP 会话"
         for (button, grouped) in [(arrangementButton, true), (splitArrangementButton, false)] {
-            button.bezelStyle = .texturedRounded
+            button.bezelStyle = .texturedRounded; button.imagePosition = .imageOnly
+            button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            button.identifier = .init(grouped ? "toolbar.groupArrangement" : "toolbar.paneArrangement")
             button.setAccessibilityLabel(grouped ? "分组排列" : "分屏排列")
             button.toolTip = grouped ? "每个标签拆成一个独立分组并排列" : "共用标签栏，同时排列显示各标签内容"
             let menu = NSMenu()
-            menu.addItem(withTitle: grouped ? "分组排列" : "分屏排列", action: nil, keyEquivalent: "")
+            menu.addItem(withTitle: grouped ? "分组排列" : "分屏排列", action: nil, keyEquivalent: "").image = (grouped ? WorkspaceToolbarIcon.groupArrangement : .paneArrangement).image
             for mode in TabArrangement.allCases {
                 let item = menu.addItem(withTitle: mode.title, action: grouped ? #selector(changeArrangement(_:)) : #selector(changeSplitArrangement(_:)), keyEquivalent: "")
                 item.tag = mode.rawValue; item.target = self; item.toolTip = mode.hint
@@ -228,39 +238,64 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             button.menu = menu
         }
         tabGroupButton.bezelStyle = .texturedRounded; tabGroupButton.setAccessibilityLabel("标签组")
-        tabGroupButton.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        tabGroupButton.identifier = .init("toolbar.tabGroups"); tabGroupButton.imagePosition = .imageOnly
+        tabGroupButton.widthAnchor.constraint(equalToConstant: 44).isActive = true
         tabGroupButton.toolTip = "新建、命名和显示/隐藏标签组；隐藏不会断开连接"
         let tools = NSPopUpButton(frame: .zero, pullsDown: true); tools.bezelStyle = .texturedRounded
-        let toolsMenu = NSMenu(); toolsMenu.addItem(withTitle: "工具", action: nil, keyEquivalent: "")
-        for (title, action) in [("会话列表", #selector(toggleSessionSidebar)), ("专注全屏", #selector(toggleFocusFullscreen)), ("全心专注", #selector(toggleDeepFocus)), ("快捷链接栏", #selector(toggleSessionLinkBar)), ("快速发送栏", #selector(toggleQuickSendBar)), ("撰写窗", #selector(toggleComposer)), ("同步输入…", #selector(configureSyncInput)), ("停止同步输入", #selector(stopSyncInput)), ("快速命令管理器…", #selector(showQuickCommands)), ("文件管理…", #selector(showFiles)), ("突出显示集…", #selector(showHighlights))] {
-            toolsMenu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
+        tools.identifier = .init("toolbar.tools"); tools.imagePosition = .imageOnly
+        tools.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        tools.setAccessibilityLabel("工具"); tools.toolTip = "工具：专注模式、快速发送、同步输入与突出显示"
+        let toolsMenu = NSMenu(); toolsMenu.addItem(withTitle: "工具", action: nil, keyEquivalent: "").image = WorkspaceToolbarIcon.tools.image
+        for (title, symbol, action) in [
+            ("会话列表", "sidebar.left", #selector(toggleSessionSidebar)),
+            ("专注全屏", "arrow.up.left.and.arrow.down.right", #selector(toggleFocusFullscreen)),
+            ("全心专注", "viewfinder", #selector(toggleDeepFocus)),
+            ("快捷链接栏", "link", #selector(toggleSessionLinkBar)),
+            ("快速发送栏", "paperplane", #selector(toggleQuickSendBar)),
+            ("撰写窗", "square.and.pencil", #selector(toggleComposer)),
+            ("同步输入…", "keyboard", #selector(configureSyncInput)),
+            ("停止同步输入", "stop.circle", #selector(stopSyncInput)),
+            ("快速命令管理器…", "list.bullet.rectangle", #selector(showQuickCommands)),
+            ("文件管理…", "folder", #selector(showFiles)),
+            ("突出显示集…", "highlighter", #selector(showHighlights))
+        ] {
+            let item = toolsMenu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         }
         tools.menu = toolsMenu
-        let find = iconButton("搜索", "magnifyingglass", #selector(findInTerminal))
+        let find = iconButton("搜索", .search, #selector(findInTerminal))
         recordButton.title = "记录"; recordButton.target = self; recordButton.action = #selector(toggleLogging)
-        recordButton.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "日志记录")
+        recordButton.image = WorkspaceToolbarIcon.record.image
+        find.identifier = .init("toolbar.search"); recordButton.identifier = .init("toolbar.record")
         recordButton.imagePosition = .imageLeading; recordButton.bezelStyle = .texturedRounded
-        let settings = iconButton("", "gearshape", #selector(showPreferences)); settings.toolTip = "设置"
+        let settings = iconButton("", .settings, #selector(showPreferences)); settings.toolTip = "设置"; settings.identifier = .init("toolbar.settings"); settings.setAccessibilityLabel("设置")
         configurePropertyButtons(); configureSyncStatusButton()
         configureGlobalProxyButton()
-        aiButton.bezelStyle = .texturedRounded; aiButton.setButtonType(.toggle)
+        aiButton.bezelStyle = .texturedRounded; aiButton.setButtonType(.pushOnPushOff)
         aiButton.identifier = .init("toolbar.ai"); aiButton.setAccessibilityLabel("MCP 控制中心")
         aiButton.target = self; aiButton.action = #selector(toggleAIAssistant)
-        aiButton.widthAnchor.constraint(equalToConstant: 46).isActive = true
+        aiButton.image = WorkspaceToolbarIcon.mcp.image; aiButton.imagePosition = .imageLeading
+        aiButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
         refreshAIShortcut()
         updateButton.identifier = .init("toolbar.checkUpdates")
         updateButton.target = self; updateButton.action = #selector(checkForUpdates)
-        updateButton.image = NSImage(named: NSImage.refreshTemplateName)
+        updateButton.image = WorkspaceToolbarIcon.update.image
         updateButton.imagePosition = .imageLeading; updateButton.bezelStyle = .texturedRounded
-        sessionSidebarButton.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "会话列表")
-        sessionSidebarButton.bezelStyle = .texturedRounded; sessionSidebarButton.setButtonType(.toggle)
+        sessionSidebarButton.image = WorkspaceToolbarIcon.sidebar.image
+        sessionSidebarButton.bezelStyle = .texturedRounded; sessionSidebarButton.setButtonType(.pushOnPushOff)
         sessionSidebarButton.target = self; sessionSidebarButton.action = #selector(toggleSessionSidebar)
         sessionSidebarButton.identifier = .init("toolbar.sessionSidebar"); sessionSidebarButton.setAccessibilityLabel("显示 / 隐藏会话列表")
         sessionSidebarButton.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        let toolbar = WorkspaceToolbar(views: [sessionSidebarButton, connect, quickButton, new, local, files, AppUI.separator(), currentPropertiesButton, defaultPropertiesButton, tools, AppUI.separator(), tabGroupButton, splitButton, arrangementButton, splitArrangementButton, syncIndicator, stopSyncButton, NSView(), globalProxyButton, aiButton, syncStatusButton, updateButton, AppUI.separator(), find, recordButton, settings])
+        let toolbar = WorkspaceToolbar(views: [sessionSidebarButton, connect, quickButton, new, local, files, AppUI.separator(), splitButton, tabGroupButton, arrangementButton, splitArrangementButton, AppUI.separator(), find, recordButton, tools, aiButton, syncIndicator, stopSyncButton, NSView(), sessionPropertiesControl, globalProxyButton, syncStatusButton, updateButton, settings])
         for case let button as NSButton in toolbar.arrangedSubviews {
-            button.font = .systemFont(ofSize: 12)
-            if !(button is NSPopUpButton) { button.bezelStyle = .texturedRounded }
+            button.font = .systemFont(ofSize: 12); button.imageScaling = .scaleProportionallyDown
+            button.bezelStyle = .recessed
+            // Border-only-on-hover also hides a native popup's arrow. Keep
+            // popups borderless so their disclosure indicator stays visible.
+            button.isBordered = !(button is NSPopUpButton)
+            button.showsBorderOnlyWhileMouseInside = !(button is NSPopUpButton)
+            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
         }
         topToolbar = toolbar
         toolbar.identifier = .init("workspace.toolbar")
@@ -277,8 +312,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         stopSyncButton.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "停止同步输入"); stopSyncButton.isBordered = false; stopSyncButton.contentTintColor = .systemOrange; stopSyncButton.toolTip = "停止同步输入"; stopSyncButton.setAccessibilityLabel("停止同步输入"); stopSyncButton.target = self; stopSyncButton.action = #selector(stopSyncInput)
         syncIndicator.isHidden = true; stopSyncButton.isHidden = true
         syncIndicator.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        stopSyncButton.widthAnchor.constraint(equalToConstant: 22).isActive = true
-        stopSyncButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        stopSyncButton.widthAnchor.constraint(equalToConstant: 28).isActive = true
         let divider = NSBox(); divider.boxType = .separator; topDivider = divider
         configureSessionLinkBar()
         sessionLinkHeight = sessionLinkBar.heightAnchor.constraint(equalToConstant: configuration.sessionLinks.visible ? 30 : 0)
@@ -288,7 +322,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         focusWorkspaceTop = workspace.topAnchor.constraint(equalTo: content.topAnchor)
         NSLayoutConstraint.activate([
             toolbarHost.topAnchor.constraint(equalTo: content.topAnchor), toolbarHost.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            toolbarHost.trailingAnchor.constraint(equalTo: content.trailingAnchor), toolbarHost.heightAnchor.constraint(equalToConstant: 40),
+            toolbarHost.trailingAnchor.constraint(equalTo: content.trailingAnchor), toolbarHost.heightConstraint,
             masterWarning.topAnchor.constraint(equalTo: toolbarHost.bottomAnchor), masterWarning.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             masterWarning.trailingAnchor.constraint(equalTo: content.trailingAnchor), masterWarningHeight,
             sessionLinkBar.topAnchor.constraint(equalTo: masterWarning.bottomAnchor), sessionLinkBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -537,12 +571,12 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
                 let submenu = NSMenu(); item.submenu = submenu; menu.addItem(item); populate(submenu, directory: child)
             }
             for profile in profiles.filter({ $0.group == directory }).sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) {
-                let item = NSMenuItem(title: profile.name + " · " + profile.kind.title, action: #selector(connectQuick(_:)), keyEquivalent: "")
+                let item = NSMenuItem(title: profile.name, action: #selector(connectQuick(_:)), keyEquivalent: "")
                 item.image = SessionListIcon.session(profile.kind, shortcut: false).menuImage()
                 item.target = self; item.representedObject = profile.id; item.toolTip = profile.host; menu.addItem(item)
             }
         }
-        let menu = NSMenu(); menu.addItem(withTitle: "快捷连接", action: nil, keyEquivalent: "")
+        let menu = NSMenu(); menu.addItem(withTitle: "快捷连接", action: nil, keyEquivalent: "").image = WorkspaceToolbarIcon.quickConnect.image
         populate(menu, directory: "")
         if menu.items.count == 1 { let item = menu.addItem(withTitle: "暂无快捷会话", action: nil, keyEquivalent: ""); item.isEnabled = false }
         menu.addItem(.separator()); menu.addItem(withTitle: "管理会话…", action: #selector(showSessionManager), keyEquivalent: "").target = self
@@ -554,8 +588,17 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     func duplicateTab(_ tab: TerminalTab) {
         guard isSecurityUnlocked, tabs.contains(where: { $0 === tab }), tab.activePane.canDuplicateConnection else { return }
         guard let pane = replica(of: tab.activePane) else { return }
-        activeTabGroupID = customTabLayout?.group(containing: tab.id)?.id
-        let duplicate = TerminalTab(pane); tabs.append(duplicate); selectedTab = duplicate
+        insertCopy(pane, after: tab)
+    }
+    private func insertCopy(_ pane: TerminalPane, after source: TerminalTab) {
+        guard let index = tabs.firstIndex(where: { $0 === source }) else { return }
+        let duplicate = TerminalTab(pane)
+        tabs.insert(duplicate, at: index + 1)
+        if let group = customTabLayout?.group(containing: source.id), let position = group.tabs.firstIndex(of: source.id) {
+            group.tabs.insert(duplicate.id, at: position + 1)
+            activeTabGroupID = group.id
+        }
+        selectedTab = duplicate
         rebuildWorkspace(); select(duplicate)
     }
     private func replica(of source: TerminalPane) -> TerminalPane? {
@@ -576,18 +619,15 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         return pane.profile.kind == .ssh && !pane.ended && !pane.isShutdown && pane.sessionReady && pane.sshConnectionGroup?.isAvailable == true
     }
     @objc func copyTabSession(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID, let tab = tabs.first(where: { $0.id == id }) else { return }
-        activeTabGroupID = customTabLayout?.group(containing: id)?.id
-        if tab.activePane.isBlank { newBlankTab(); return }
-        let pane = makePane(tab.activePane.profile, terminalType: tab.activePane.externalTerminalType)
-        let copy = TerminalTab(pane); tabs.append(copy); selectedTab = copy; rebuildWorkspace(); select(copy)
+        guard isSecurityUnlocked, let id = sender.representedObject as? UUID, let tab = tabs.first(where: { $0.id == id }) else { return }
+        let pane = makePane(tab.activePane.profile, terminalType: tab.activePane.externalTerminalType, blank: tab.activePane.isBlank)
+        insertCopy(pane, after: tab)
     }
     @objc func copyTabSSHChannel(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID, let tab = tabs.first(where: { $0.id == id }), canCopySSHChannel(tab) else { return }
         let source = tab.activePane
-        activeTabGroupID = customTabLayout?.group(containing: id)?.id
         let pane = makePane(source.profile, terminalType: source.externalTerminalType, connectionGroup: source.sshConnectionGroup, reuseConnection: true)
-        let copy = TerminalTab(pane); tabs.append(copy); selectedTab = copy; rebuildWorkspace(); select(copy)
+        insertCopy(pane, after: tab)
     }
     @objc func newBlankFromTab(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? UUID {
@@ -896,16 +936,17 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         if let group = customTabLayout?.group(containing: tab.id), let position = group.tabs.firstIndex(of: tab.id) {
             let remaining = group.tabs.filter { $0 != tab.id }
             if !remaining.isEmpty {
-                let nextID = remaining[min(position, remaining.count - 1)]
+                let nextID = remaining[max(0, position - 1)]
                 groupNeighbor = tabs.first { $0.id == nextID }
+                if group.active == tab.id { group.active = nextID }
             }
         }
         tab.layout.panes.forEach { $0.shutdown() }; tab.displayView.removeFromSuperview(); tabs.remove(at: index)
         tabHistory.removeAll { $0 == tab.id }
         if wasSelected {
             let visible = tabs.filter { customTabLayout?.group(containing: $0.id)?.isHidden != true }
-            let adjacent = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)]
-            selectedTab = groupNeighbor ?? adjacent.flatMap { candidate in visible.contains(where: { $0 === candidate }) ? candidate : nil } ?? visible.first
+            let previous = tabs.prefix(index).last { customTabLayout?.group(containing: $0.id)?.isHidden != true }
+            selectedTab = groupNeighbor ?? previous ?? visible.first
             if let selectedTab { activeTabGroupID = customTabLayout?.group(containing: selectedTab.id)?.id }
         }
         rebuildWorkspace()
@@ -1022,11 +1063,13 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let imagePasteView = ImagePasteSettingsControl()
         let fileManagementView = FileManagementSettingsView()
         let clockSettings = TerminalClockSettingsView(configuration.preferences)
+        let windowSizeSettings = WindowSizeSettingsControl(currentSize: window.map { $0.contentRect(forFrameRect: $0.frame).size })
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
+        var sidebarVisible = sessionSidebarVisible
         guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, fileManagementView: fileManagementView, clockView: clockSettings, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
-        }, localShortcutSelection: { localShortcut = $0 }) else { return }
+        }, localShortcutSelection: { localShortcut = $0 }, sidebarVisible: sessionSidebarVisible, sidebarSelection: { sidebarVisible = $0 }, windowSizeView: windowSizeSettings) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
         var value = configuration; value.preferences = preferences
         guard saveConfiguration(value) else { return }
@@ -1039,8 +1082,10 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         do { try fileManagementView.apply() } catch { Dialogs.message("文件管理设置未保存：" + error.localizedDescription) }
         do { try imagePasteView.apply() } catch { Dialogs.message("图片粘贴设置未保存：" + error.localizedDescription) }
         if let selection = try? selectionView?.values() { selection.save() }
+        do { WindowSizePreferences.save(try windowSizeSettings.value()) }
+        catch { Dialogs.message("启动窗口大小未保存：" + error.localizedDescription) }
         SessionSidebarPreferences.saveShortcut(localShortcut)
-        ShortcutRuntime.install(preferences.keyboardShortcuts); refreshSessionSidebar()
+        ShortcutRuntime.install(preferences.keyboardShortcuts); setSessionSidebarVisible(sidebarVisible)
         do { try appUpdater.configure() } catch { Dialogs.message(error.localizedDescription) }
         let applied = configuration.preferences
         ApplicationAppearance.apply(applied.interfaceTheme)
@@ -1101,7 +1146,11 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         if let pane = selectedTab?.activePane {
             window?.title = "\(tabs.count) 个标签 · \(panes.count) 个终端 | \(pane.title)\(pane.isLogging ? " · 日志记录中" : "")\(pane.isTransferring ? " · 文件传输中" : "") — OShell"
             recordButton.title = pane.isLogging ? "停止记录" : "记录"; recordButton.isEnabled = !pane.ended
-        } else { window?.title = tabs.isEmpty ? "OShell" : "\(tabs.count) 个标签 · \(panes.count) 个终端 · 当前无活动标签 — OShell"; recordButton.title = "记录"; recordButton.isEnabled = false }
+            recordButton.image = (pane.isLogging ? WorkspaceToolbarIcon.stopRecording : .record).image
+            recordButton.contentTintColor = pane.isLogging ? .systemRed : nil
+        } else { window?.title = tabs.isEmpty ? "OShell" : "\(tabs.count) 个标签 · \(panes.count) 个终端 · 当前无活动标签 — OShell"; recordButton.title = "记录"; recordButton.isEnabled = false; recordButton.image = WorkspaceToolbarIcon.record.image; recordButton.contentTintColor = nil }
+        let recordLabel = selectedTab?.activePane.isLogging == true ? "停止记录终端日志" : "记录终端日志"
+        recordButton.toolTip = recordLabel; recordButton.setAccessibilityLabel(recordLabel)
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleDeepFocus) {

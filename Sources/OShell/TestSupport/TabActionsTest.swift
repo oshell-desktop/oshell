@@ -72,11 +72,13 @@ enum TabActionsTest {
                 controller.arrange(.tabs)
                 if let copy = menu.items.first(where: { $0.title == "复制 SSH 渠道" }) { NSApp.sendAction(copy.action!, to: copy.target, from: copy) }
                 let channelTab = controller.selectedTab!, channel = channelTab.activePane
+                checks["channelCopyImmediatelyAfterSource"] = controller.tabs[1] === channelTab
                 checks["channelTargetsRightClickedTab"] = channel.profile == source.profile && channel.sshConnectionGroup === source.sshConnectionGroup && channel.reusesSSHConnection
                 wait("copiedChannelReady", { channel.sessionReady && text(channel).contains("READY") }) {
                     let freshMenu = controller.sessionTabContextMenu(original.id)
                     if let copy = freshMenu.items.first(where: { $0.title == "复制会话" }) { NSApp.sendAction(copy.action!, to: copy.target, from: copy) }
                     let independent = controller.selectedTab!.activePane
+                    checks["sessionCopyImmediatelyAfterSource"] = controller.tabs[1].activePane === independent && controller.tabs[2] === channelTab
                     checks["sessionCopyGetsIndependentTransport"] = independent.profile == source.profile && independent.sshConnectionGroup !== source.sshConnectionGroup && !independent.reusesSSHConnection
                     wait("independentCopyAuthenticated", { independent.sessionReady && text(independent).contains("READY") }) {
                         source.sendManaged(Array("SOURCE\r".utf8)); channel.sendManaged(Array("CHANNEL\r".utf8)); independent.sendManaged(Array("INDEPENDENT\r".utf8))

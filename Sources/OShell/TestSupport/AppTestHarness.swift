@@ -62,6 +62,7 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--file-resume-test") { FileResumeUITest.run(controller) }
         if CommandLine.arguments.contains("--file-transfer-history-test") { FileTransferHistoryTest.run(controller) }
         if CommandLine.arguments.contains("--session-sidebar-test") { SessionSidebarTest.run(controller) }
+        if CommandLine.arguments.contains("--window-size-test") { WindowSizeTest.run(controller) }
         if CommandLine.arguments.contains("--terminal-selection-test") { TerminalSelectionTest.run(controller) }
         if CommandLine.arguments.contains("--local-prompt-editing-test") { LocalPromptEditingTest.run(controller) }
         if CommandLine.arguments.contains("--biometric-local-store-test") { BiometricLocalStoreTest.run(controller) }

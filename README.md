@@ -123,6 +123,7 @@ open dist/OShell.app
 - [其他终端会话转换指南（借助 AI 开发脚本）](docs/session-conversion.md)
 - [Shell 集成](shell-integration/README.md)
 - [开发与测试](docs/development.md)
+- [UI 风格与设计理念](docs/ui-design.md)
 - [构建与发布更新](docs/releases.md)
 - [安全说明](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
