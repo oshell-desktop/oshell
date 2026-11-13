@@ -38,6 +38,7 @@ final class OShellTerminal: LocalProcessTerminalView {
     }
     override func layout() { super.layout(); owner?.resizeLocalTool() }
     override func keyDown(with event: NSEvent) {
+        if owner?.reconnectOnReturn(event) == true { return }
         if event.isARepeat, event.keyCode == 53, let owner, AgentCoordinator.shared.grants[owner.id]?.task != nil { return }
         wordClickSeed = nil; userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyDown(with: event) }
     override func keyUp(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyUp(with: event) }
@@ -377,6 +378,20 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         terminal.foregroundHighlightProvider = { text in matcher.matches(in: text).compactMap { match in NSColor(hex: match.color).map { (match.range, $0) } } }
     }
     private var endedInput: EndedSessionInput?
+    var onReconnectRequested: ((TerminalPane) -> Void)?
+    func reconnectOnReturn(_ event: NSEvent) -> Bool {
+        guard ended, !isShutdown, !isBlank, profile.kind == .ssh, !isRunningLocalTool,
+              !terminal.hasMarkedText(),
+              [36, 76].contains(event.keyCode), event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              endedInput?.isEmptyForReconnect == true else { return false }
+        if !event.isARepeat {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.ended, !self.isShutdown, !self.isRunningLocalTool else { return }
+                self.onReconnectRequested?(self)
+            }
+        }
+        return true
+    }
     var outputPausedForSelection = false { didSet { updateOutputDelivery() } }
     var outputPausedForAudit = false { didSet { updateOutputDelivery() } }
     private func updateOutputDelivery() {
@@ -795,7 +810,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         guard endedInput == nil else { return }
         endedInput = EndedSessionInput(allowsLocalTools: true)
         // Clear style and show a cursor even if the remote application hid it.
-        terminal.feed(byteArray: Array("\u{1b}[0m\u{1b}[?25h\r\n本机网络工具：help 查看分类，tools 查看安装状态和路径。\r\n输入 exit 或 quit 并回车关闭当前会话（最后一个会话关闭标签页）；⇧⌘R 重连原会话。\r\n\(EndedSessionInput.prompt)".utf8)[...])
+        let reconnectHint = profile.kind == .ssh && !isBlank ? "空输入行按回车重连原 SSH 会话；也可按 ⇧⌘R。" : "⇧⌘R 重连原会话。"
+        terminal.feed(byteArray: Array("\u{1b}[0m\u{1b}[?25h\r\n本机网络工具：help 查看分类，tools 查看安装状态和路径。\r\n输入 exit 或 quit 并回车关闭当前会话（最后一个会话关闭标签页）；\(reconnectHint)\r\n\(EndedSessionInput.prompt)".utf8)[...])
     }
     func handleEndedInput(_ bytes: ArraySlice<UInt8>, queueIfExited: Bool = true) {
         guard ended, !isShutdown else { return }
@@ -1038,7 +1054,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
            responder === terminal || responder.isDescendant(of: view) {
             window.makeFirstResponder(nil)
         }
-        onCloseRequested = nil; endedInput = nil; onOutput = nil; hasUnreadOutput = false
+        onCloseRequested = nil; onReconnectRequested = nil; endedInput = nil; onOutput = nil; hasUnreadOutput = false
         promptScan?.cancel(); promptScan = nil
         hostProbeWork?.cancel(); hostProbeWork = nil; hostProbeTimeout?.cancel(); hostProbeTimeout = nil
         hostProbeToken = nil; hostProbeEcho = nil

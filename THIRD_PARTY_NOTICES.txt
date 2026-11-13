@@ -12,6 +12,8 @@ MIT license, included in Vendor/SwiftTerm/LICENSE.
 OShell changes: a standalone package manifest and fixed build identity; 8 KiB PTY reads,
 1 MiB receive backlog / 256 KiB resume threshold; skip scheduled redraws for detached tabs;
 allow the host application to override remote clipboard requests.
+The host can move a stopped terminal's normal-screen scrollback into a fresh
+connection, preserving styled cells and graphemes while resetting connection modes.
 OShell also makes focus notification overridable and reaps terminated PTY children off-main,
 resetting their PID to avoid signalling a stale PID on repeated termination.
 Main-queue receive batches yield after 1 ms. Exit statuses are decoded and Metal shader

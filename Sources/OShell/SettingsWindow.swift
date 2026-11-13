@@ -51,6 +51,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTabViewDelegate {
         "titles": ("rectangle.topthird.inset.filled", "设置会话标签的标题显示。"),
         "files": ("folder", "选择内置文件管理或当前终端命令。"),
         "window": ("macwindow", "设置启动和新建窗口时的默认尺寸。"),
+        "quickSend": ("paperplane", "设置本机快速发送命令的历史保留条数。"),
         "about": ("info.circle", "版本信息、开源项目与许可。")
     ]
     init(tabs: NSTabView, appearanceView: AppearanceSettingsView) {

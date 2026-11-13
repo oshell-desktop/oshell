@@ -20,6 +20,8 @@ final class StorageSettingsView: NSView {
     private let policyView = SyncPolicySettingsView()
     private let davStatus = NSTextField(wrappingLabelWithString: "")
     private let address = NSTextField(), username = NSTextField(), password = NSSecureTextField()
+    private let authentication = NSPopUpButton()
+    private var selectedAuthentication: WebDAVSettings.Authentication { authentication.indexOfSelectedItem == 1 ? .digest : .basic }
     private var trustedCertificate: WebDAVCertificateTrust?
     private var pendingCertificate: WebDAVCertificateIssue?
     private let certificateStatus = NSTextField(wrappingLabelWithString: "")
@@ -54,6 +56,10 @@ final class StorageSettingsView: NSView {
         address.placeholderString = "HTTP / HTTPS WebDAV 父目录地址（自动使用 oshell 子目录）"
         username.placeholderString = "WebDAV 账号"; password.placeholderString = "WebDAV 密码 / 应用专用密码"
         address.identifier = .init("webdav.address"); username.identifier = .init("webdav.username"); password.identifier = .init("webdav.password")
+        authentication.addItems(withTitles: ["Basic", "Digest"])
+        authentication.identifier = .init("webdav.authentication"); authentication.setAccessibilityLabel("WebDAV 认证方式")
+        authentication.target = self; authentication.action = #selector(authenticationChanged)
+        let authenticationRow = NSStackView(views: [label("认证方式"), authentication]); authenticationRow.spacing = 12
         for field in [address, username, password] { field.delegate = self }
         let probe = button("测试连接", #selector(testConnection))
         trustCertificate.target = self; trustCertificate.action = #selector(trustServerCertificate)
@@ -63,7 +69,7 @@ final class StorageSettingsView: NSView {
         certificateControls.addArrangedSubview(trustCertificate); certificateControls.addArrangedSubview(forgetCertificate); certificateControls.spacing = 8
         certificateStatus.font = .systemFont(ofSize: 12); certificateStatus.isSelectable = true
         certificateStatus.identifier = .init("webdav.certificateStatus")
-        for v in [address, username, password, probe, davStatus, certificateStatus, certificateControls] { davFields.addArrangedSubview(v) }
+        for v in [address, authenticationRow, username, password, probe, davStatus, certificateStatus, certificateControls] { davFields.addArrangedSubview(v) }
         let intro = label("先选择一种同步方式，再配置同步位置。多台设备使用同一位置和相同主密码；在下方选择同步内容，默认仅同步会话资料；未勾选类别保留本机和远端现状。")
         let help = label("点击“应用”生效，无需重启；首次接入和同步冲突仍需确认。启用时会引导设置或解锁主密码。")
         let localPath = label("本机始终使用：" + current.path); localPath.isSelectable = true; localPath.identifier = .init("storage.current")
@@ -108,6 +114,7 @@ final class StorageSettingsView: NSView {
                 guard let master = PasswordVault.shared.cachedMaster else { throw ModelError.invalid("请先解锁主密码，以读取已保存的连接设置。") }
                 if let dav = try sync?.settings(master: master) {
                     address.stringValue = dav.address; username.stringValue = dav.username; password.stringValue = dav.password; trustedCertificate = dav.trustedServerCertificate
+                    authentication.selectItem(at: dav.authentication == .digest ? 1 : 0)
                 }
             }
             loadError = nil
@@ -175,6 +182,7 @@ final class StorageSettingsView: NSView {
     @objc private func reveal() { NSWorkspace.shared.open(current) }
     private func davSettings() throws -> WebDAVSettings {
         var settings = WebDAVSettings(address: address.stringValue, username: username.stringValue, password: password.stringValue)
+        settings.authentication = selectedAuthentication
         let url = try settings.directory()
         if trustedCertificate?.matches(url) == true { settings.trustedServerCertificate = trustedCertificate }
         return settings
@@ -184,7 +192,9 @@ final class StorageSettingsView: NSView {
         let plainHTTP = url?.scheme == "http"
         let active = url.flatMap { value in trustedCertificate.flatMap { $0.matches(value) ? $0 : nil } }
         certificateStatus.stringValue = active.map { "已保存此服务器证书信任（仅本机）\n\($0.endpoint) · \($0.subject)\nSHA-256：\($0.fingerprint)\n更改需点击“应用”保存。" } ?? "使用 macOS 默认信任；未受信任时先测试连接，再核对并信任证书。信任仅保存在本机，不参与会话同步。"
-        if plainHTTP { certificateStatus.stringValue = "HTTP 连接未加密：WebDAV 账号密码会明文传输；会话数据文件仍由主密码加密。建议仅在可信网络使用。" }
+        if plainHTTP { certificateStatus.stringValue = selectedAuthentication == .digest
+            ? "HTTP 连接未加密：Digest 不直接发送密码，但不能替代 HTTPS；会话数据文件仍由主密码加密。建议使用 HTTPS。"
+            : "HTTP 连接未加密：WebDAV 账号密码会明文传输；会话数据文件仍由主密码加密。建议仅在可信网络使用。" }
         trustCertificate.isEnabled = !plainHTTP && !testing && pendingCertificate?.canTrust == true && url.map { pendingCertificate?.certificate.matches($0) == true } == true
         forgetCertificate.isEnabled = !testing && active != nil
         certificateStatus.isHidden = !plainHTTP && active == nil && pendingCertificate == nil
@@ -216,7 +226,8 @@ final class StorageSettingsView: NSView {
                     // Editing/closing a settings draft must never trust a response
                     // for an earlier endpoint or accidentally persist it.
                     guard self.window != nil, self.selectedMethod == .webDAV, self.address.stringValue == settings.address,
-                          self.username.stringValue == settings.username, self.password.stringValue == settings.password else {
+                          self.username.stringValue == settings.username, self.password.stringValue == settings.password,
+                          self.selectedAuthentication == settings.authentication else {
                         self.davStatus.stringValue = "连接信息已更改，请重新测试。"
                         self.updateCertificateStatus(); return
                     }
@@ -323,5 +334,6 @@ final class StorageSettingsView: NSView {
     }
 }
 extension StorageSettingsView: NSTextFieldDelegate {
+    @objc private func authenticationChanged() { davChanged = true; pendingCertificate = nil; davStatus.stringValue = ""; updateCertificateStatus() }
     func controlTextDidChange(_ obj: Notification) { davChanged = true; pendingCertificate = nil; updateCertificateStatus() }
 }

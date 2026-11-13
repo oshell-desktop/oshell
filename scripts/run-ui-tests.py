@@ -107,6 +107,8 @@ CASES.update({
     'session-links':'OSHELL_SESSION_LINKS_OUTPUT',
     'quicksend-groups':'OSHELL_QUICKSEND_GROUPS_OUTPUT',
     'quicksend-persistence':'OSHELL_QUICKSEND_PERSISTENCE_OUTPUT',
+    'quicksend-history':'OSHELL_QUICKSEND_HISTORY_OUTPUT',
+    'ssh-reconnect':'OSHELL_SSH_RECONNECT_OUTPUT',
     'toolbar-actions':'OSHELL_TOOLBAR_ACTIONS_OUTPUT',
     'shell-integration':'OSHELL_SHELL_INTEGRATION_OUTPUT',
 })
@@ -143,10 +145,20 @@ def run_case(source, case, timeout):
         report = ROOT/'validation'/f'ui-{case}.json'; report.unlink(missing_ok=True)
         log = report.with_suffix('.log'); log.write_text('')
         ssh_fixture = None
-        if case == 'agent-control' and os.environ.get('OSHELL_AGENT_SSH') == '1':
+        if case == 'ssh-reconnect' or (case == 'agent-control' and os.environ.get('OSHELL_AGENT_SSH') == '1'):
             import importlib.util
             spec = importlib.util.spec_from_file_location('agent_ssh', ROOT/'scripts/test-agent-ssh.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
             ssh_fixture = module.Fixture(data)
+            if case == 'ssh-reconnect':
+                import threading, time
+                def disconnect_requested():
+                    flag = data/'disconnect-ssh'
+                    while not ssh_fixture.closed:
+                        if flag.exists():
+                            flag.unlink()
+                            for transport in list(ssh_fixture.transports): transport.close()
+                        time.sleep(.02)
+                threading.Thread(target=disconnect_requested, daemon=True).start()
         destination = base/'results' if case == 'session-list' else report
         if case == 'session-list': destination.mkdir()
         args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data), '--env', 'OSHELL_TEST_FONT_ROOT='+str(ROOT/'Vendor'),
@@ -174,8 +186,9 @@ def run_case(source, case, timeout):
                         path=data/client/name
                         if path.exists(): (ROOT/'validation'/('agent-'+client+'-'+name)).write_bytes(path.read_bytes())
             if ssh_fixture is not None:
-                result['checks']['sshAuthenticatedOnce'] = ssh_fixture.facts['authenticated'] == 1
-                result['checks']['sshUsesOneVisiblePTYNoExec'] = ssh_fixture.facts['shells'] == 1 and ssh_fixture.facts['execRequests'] == 0
+                expected = 3 if case == 'ssh-reconnect' else 1
+                result['checks']['sshExpectedAuthentications' if case == 'ssh-reconnect' else 'sshAuthenticatedOnce'] = ssh_fixture.facts['authenticated'] == expected
+                result['checks']['sshExpectedPTYsNoExec' if case == 'ssh-reconnect' else 'sshUsesOneVisiblePTYNoExec'] = ssh_fixture.facts['shells'] == expected and ssh_fixture.facts['execRequests'] == 0
                 report.write_text(json.dumps(result,ensure_ascii=False,indent=2))
             passed = result.get('passed', result.get('ok'))
             if case == 'stress': passed = result.get('samples', 0) > 0

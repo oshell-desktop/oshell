@@ -4,12 +4,23 @@ import Foundation
 import Security
 
 public struct WebDAVSettings: Codable {
+    public enum Authentication: String, Codable { case basic, digest }
     public var address: String
     public var username: String
     public var password: String
+    public var authentication: Authentication = .basic
     /// Stored only in this Mac's encrypted WebDAV settings, not the shared vault configuration.
     public var trustedServerCertificate: WebDAVCertificateTrust? = nil
     public init(address: String, username: String, password: String) { self.address = address; self.username = username; self.password = password }
+    private enum CodingKeys: String, CodingKey { case address, username, password, authentication, trustedServerCertificate }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        address = try values.decode(String.self, forKey: .address)
+        username = try values.decode(String.self, forKey: .username)
+        password = try values.decode(String.self, forKey: .password)
+        authentication = try values.decodeIfPresent(Authentication.self, forKey: .authentication) ?? .basic
+        trustedServerCertificate = try values.decodeIfPresent(WebDAVCertificateTrust.self, forKey: .trustedServerCertificate)
+    }
     // Keep the argument for source compatibility with existing interop helpers.
     public func directory(allowLoopbackHTTP: Bool = false) throws -> URL {
         guard var parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -47,7 +58,7 @@ public enum WebDAVFailure: Error, LocalizedError {
         case .conflict: return "共享版本已变化，未覆盖。请重新同步并确认冲突。"
         case .occupied: return "另一台设备占用了坚果云写入标记。请稍后重新同步。"
         case .uncertainWrite: return "坚果云写入或释放标记的结果不确定。请核对远端文件和写入标记后再同步。"
-        case .authentication: return "WebDAV 身份验证失败，请检查账号、密码及应用专用密码。"
+        case .authentication: return "WebDAV 身份验证失败，请检查认证方式、账号、密码及服务器支持的认证算法。"
         case .status(let code): return "WebDAV 返回 HTTP \(code)。请确认目录存在且账号有读写权限。"
         case .unsafeVersion: return "服务器未提供用于更新此文件的强 ETag。已停止覆盖该文件，本地修改已保留。"
         case .tls: return "WebDAV TLS 连接或证书校验失败，请检查服务器证书和 HTTPS 配置。"
@@ -61,7 +72,24 @@ private final class DAVRequest: NSObject, URLSessionDataDelegate {
     let done = DispatchSemaphore(value: 0)
     let endpoint: URL
     let pinned: WebDAVCertificateTrust?
-    init(endpoint: URL, pinned: WebDAVCertificateTrust?) { self.endpoint = endpoint; self.pinned = pinned }
+    let settings: WebDAVSettings
+    var authenticationResponse: HTTPURLResponse?
+    init(endpoint: URL, settings: WebDAVSettings) { self.endpoint = endpoint; self.settings = settings; pinned = settings.trustedServerCertificate }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let space = challenge.protectionSpace
+        if space.authenticationMethod == NSURLAuthenticationMethodServerTrust {
+            urlSession(session, didReceive: challenge, completionHandler: completionHandler); return
+        }
+        guard settings.authentication == .digest,
+              !space.isProxy(), space.protocol == endpoint.scheme,
+              WebDAVCertificateTrust.normalizedHost(space.host) == endpoint.host.map(WebDAVCertificateTrust.normalizedHost),
+              space.port == (endpoint.port ?? 443),
+              let response = challenge.failureResponse as? HTTPURLResponse, response.statusCode == 401 else {
+            error = WebDAVFailure.authentication; completionHandler(.cancelAuthenticationChallenge, nil); return
+        }
+        authenticationResponse = response
+        completionHandler(.cancelAuthenticationChallenge, nil)
+    }
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust else { completionHandler(.performDefaultHandling, nil); return }
@@ -158,19 +186,38 @@ public final class WebDAVClient: FontSyncTransport {
             defer { lock.lock(); activeHTTP = nil; lock.unlock() }
             guard !stopped else { throw WebDAVFailure.network }
             var fields = headers
-            fields["Authorization"] = "Basic " + Data((settings.username + ":" + settings.password).utf8).base64EncodedString()
+            if settings.authentication == .basic { fields["Authorization"] = "Basic " + Data((settings.username + ":" + settings.password).utf8).base64EncodedString() }
             fields["User-Agent"] = "OShell"
-            let result = try task.perform(method, url: url, body: data, headers: fields)
+            let result = try task.perform(method, url: url, body: data, headers: fields, settings: settings)
             if [401, 403].contains(result.0.statusCode) { throw WebDAVFailure.authentication }
             if (300...399).contains(result.0.statusCode) { throw WebDAVFailure.redirect }
             return result
         }
+        var authorization: String?, previousNonce: String?
+        for attempt in 0..<3 {
+            let result = try requestHTTPS(method, url: url, data: data, headers: headers, authorization: authorization)
+            if result.0.statusCode != 401 {
+                if result.0.statusCode == 403 { throw WebDAVFailure.authentication }
+                if (300...399).contains(result.0.statusCode) { throw WebDAVFailure.redirect }
+                return result
+            }
+            guard settings.authentication == .digest, attempt < 2,
+                  let challenge = result.0.value(forHTTPHeaderField: "WWW-Authenticate") else { throw WebDAVFailure.authentication }
+            let digest = try WebDAVDigest(header: challenge)
+            guard previousNonce == nil || (digest.stale && digest.nonce != previousNonce) else { throw WebDAVFailure.authentication }
+            authorization = try digest.authorization(method: method, url: url, username: settings.username, password: settings.password)
+            previousNonce = digest.nonce
+        }
+        throw WebDAVFailure.authentication
+    }
+    private func requestHTTPS(_ method: String, url: URL, data: Data?, headers: [String: String], authorization: String?) throws -> (HTTPURLResponse, Data) {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = method; request.httpBody = data
-        request.setValue("Basic " + Data((settings.username + ":" + settings.password).utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
+        if settings.authentication == .basic { request.setValue("Basic " + Data((settings.username + ":" + settings.password).utf8).base64EncodedString(), forHTTPHeaderField: "Authorization") }
+        else if let authorization { request.setValue(authorization, forHTTPHeaderField: "Authorization") }
         request.setValue("OShell", forHTTPHeaderField: "User-Agent")
         headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
-        let delegate = DAVRequest(endpoint: directory, pinned: settings.trustedServerCertificate), queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
+        let delegate = DAVRequest(endpoint: directory, settings: settings), queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
         let config = URLSessionConfiguration.ephemeral; config.urlCache = nil; config.urlCredentialStorage = nil; config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.timeoutIntervalForResource = 45
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
         lock.lock(); let stopped = cancelled; if !stopped { active = session }; lock.unlock()
@@ -178,10 +225,9 @@ public final class WebDAVClient: FontSyncTransport {
         guard !stopped else { throw WebDAVFailure.network }
         session.dataTask(with: request).resume()
         guard delegate.done.wait(timeout: .now() + 50) == .success else { session.invalidateAndCancel(); throw WebDAVFailure.network }
+        if let response = delegate.authenticationResponse { return (response, Data()) }
         if let error = delegate.error { throw error }
         guard let response = delegate.response else { throw WebDAVFailure.network }
-        if [401, 403].contains(response.statusCode) { throw WebDAVFailure.authentication }
-        if (300...399).contains(response.statusCode) { throw WebDAVFailure.redirect }
         return (response, delegate.data)
     }
     private func collectionExists(_ url: URL) throws -> Bool {

@@ -23,6 +23,8 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.install() }
     }
     static func run(_ controller: WorkspaceController) {
+        if CommandLine.arguments.contains("--ssh-reconnect-test") { SSHReconnectTest.run(controller); return }
+        if CommandLine.arguments.contains("--quicksend-history-test") { QuickSendHistoryTest.run(controller); return }
         if CommandLine.arguments.contains("--focus-repaint-test") { FocusRepaintTest.run(controller); return }
         if CommandLine.arguments.contains("--host-key-test") { SSHHostKeyChangeTest.run(controller); return }
         if CommandLine.arguments.contains("--font-library-test") { FontLibraryTest.run(controller); return }

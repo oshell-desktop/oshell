@@ -14,6 +14,7 @@ public struct EndedSessionInput {
     private var localEditor = LocalPromptInput()
     private var overflow = false
     public init(allowsLocalTools: Bool = false) { self.allowsLocalTools = allowsLocalTools }
+    public var isEmptyForReconnect: Bool { allowsLocalTools && localEditor.isEmptyForReconnect }
     public struct Result {
         public var echo: [UInt8]
         public var close: Bool

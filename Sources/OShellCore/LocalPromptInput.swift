@@ -19,6 +19,7 @@ struct LocalPromptInput {
     }
     private var search: Search?
     private var killed = ""
+    var isEmptyForReconnect: Bool { line.isEmpty && utf8.isEmpty && !overflow && search == nil && escape == .none }
 
     // Searching does not mutate the draft. Ctrl+G can restore its exact cursor,
     // history navigation position and overflow state without a second snapshot.

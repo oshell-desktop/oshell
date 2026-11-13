@@ -886,6 +886,42 @@ open class Terminal {
         normalBuffer.fillViewportRows()
         normalBuffer.setupTabStops(tabStopWidth: tabStopWidth)
     }
+
+    /// Move a stopped terminal's normal-screen history into a fresh connection.
+    /// Transport/parser modes stay fresh; archived cells keep colors and graphemes.
+    public func takeScrollbackForReconnect(from source: Terminal) {
+        precondition(source !== self)
+        source.endSynchronizedOutput()
+        source.clearKittyImages(in: source.altBuffer, isAlternateBuffer: true)
+        resize(cols: source.cols, rows: source.rows)
+        let previous = source.normalBuffer
+        source.resetNormalBuffer()
+        if source.buffer === previous { source.buffer = source.normalBuffer }
+        normalBuffer = previous; buffer = previous
+        charToIndexMap = source.charToIndexMap; indexToCharMap = source.indexToCharMap; lastCharIndex = source.lastCharIndex
+        // Payload atoms and inline images belong to the archived cells, not the
+        // retired terminal; transfer ownership before that terminal is released.
+        payloadCodes.formUnion(source.payloadCodes); source.payloadCodes.removeAll()
+        kittyGraphicsState = source.kittyGraphicsState; kittyGraphicsState.pending = nil
+        source.kittyGraphicsState = KittyGraphicsState()
+        normalBuffer.scroll = { [weak self] wrapped in self?.scroll(isWrapped: wrapped) }
+        normalBuffer.scrollTop = 0; normalBuffer.scrollBottom = rows - 1
+        normalBuffer.marginLeft = 0; normalBuffer.marginRight = cols - 1
+        normalBuffer.setupTabStops(tabStopWidth: tabStopWidth)
+        normalBuffer.savedX = 0; normalBuffer.savedY = 0
+        normalBuffer.savedAttr = CharData.defaultAttr; normalBuffer.savedCharset = nil
+        normalBuffer.savedOriginMode = false; normalBuffer.savedMarginMode = false
+        normalBuffer.savedWraparound = true; normalBuffer.savedReverseWraparound = false
+        resetSemanticPromptState(clearingScreenMarks: true)
+        changeScrollback(options.scrollback)
+        // Put the previous viewport into scrollback, so the new shell may clear
+        // its screen without erasing the last screenful of the old connection.
+        buffer.y = rows - 1
+        for _ in 0..<rows { scroll() }
+        buffer.x = 0; buffer.y = 0; buffer.yDisp = buffer.yBase
+        refresh(startRow: 0, endRow: rows - 1)
+        tdel?.bufferActivated(source: self)
+    }
     
     private func activateNormalBuffer(clearAlt: Bool) {
         if buffer === normalBuffer {

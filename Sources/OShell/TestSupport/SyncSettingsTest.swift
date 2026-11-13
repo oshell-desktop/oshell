@@ -103,11 +103,16 @@ enum SyncSettingsTest {
             checks["applyDoesNotPublishBeforeFirstSync"] = !FileManager.default.fileExists(atPath: target.appendingPathComponent("configuration.json").path)
             let switchPage = StorageSettingsView(workspace: workspace)
             select(switchPage, 2); setDAV(switchPage)
+            let auth = views(switchPage).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "webdav.authentication" }!
+            checks["webDAVAuthenticationDefaultsToBasic"] = auth.titleOfSelectedItem == "Basic" && auth.numberOfItems == 2
+            auth.selectItem(at: 1); _ = NSApp.sendAction(auth.action!, to: auth.target, from: auth)
             checks["switchDraftKeepsActiveDirectory"] = windows.webDAV.directory != nil && !windows.webDAV.enabled
             try switchPage.applySelection(); windows.webDAV.cancel()
             checks["webDAVReplacesDirectoryOnApply"] = windows.webDAV.enabled && windows.webDAV.directory == nil
             checks["savedCredentialsRetained"] = try windows.webDAV.settings(master: master)?.password == "synthetic-password"
+            checks["digestModeSavedEncrypted"] = try windows.webDAV.settings(master: master)?.authentication == .digest
             let loaded = StorageSettingsView(workspace: workspace)
+            checks["digestModeRestoredInSettings"] = views(loaded).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "webdav.authentication" }?.titleOfSelectedItem == "Digest"
             checks["existingWebDAVDetected"] = picker(loaded).indexOfSelectedItem == 2
             select(loaded, 0)
             checks["disabledDraftKeepsConnectionUntilApplied"] = windows.webDAV.enabled

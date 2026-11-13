@@ -10,7 +10,7 @@ enum Dialogs {
         guard let result = editor.run() else { return nil }
         titleSelection?(result.id, editor.selectedTitleMode); return result
     }
-    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, imagePasteView: ImagePasteSettingsControl? = nil, fileManagementView: FileManagementSettingsView? = nil, clockView: TerminalClockSettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil, sidebarVisible: Bool = SessionSidebarPreferences.visible, sidebarSelection: ((Bool) -> Void)? = nil, windowSizeView: WindowSizeSettingsControl? = nil) -> Preferences? {
+    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, imagePasteView: ImagePasteSettingsControl? = nil, fileManagementView: FileManagementSettingsView? = nil, clockView: TerminalClockSettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil, sidebarVisible: Bool = SessionSidebarPreferences.visible, sidebarSelection: ((Bool) -> Void)? = nil, windowSizeView: WindowSizeSettingsControl? = nil, quickHistoryView: QuickSendHistorySettingsControl? = nil) -> Preferences? {
         let font = NSPopUpButton()
         TerminalFontCatalog.populate(font, selected: current.fontName)
         let size = NSPopUpButton(); [11, 12, 13, 14, 15, 16, 18, 20, 24, 26].forEach { size.addItem(withTitle: String($0)) }
@@ -21,6 +21,7 @@ enum Dialogs {
         sidebar.state = sidebarVisible ? .on : .off; sidebar.identifier = .init("settings.sessionSidebar.visible")
         sidebar.toolTip = "默认收起；记住本机选择，作为新窗口及下次启动的状态。也可使用工具栏按钮或会话列表快捷键切换。"
         let windowSize = windowSizeView ?? WindowSizeSettingsControl(currentSize: nil)
+        let quickHistory = quickHistoryView ?? QuickSendHistorySettingsControl()
         let clock = clockView ?? TerminalClockSettingsView(current)
         defer { clock.dispose() }
         let zmodem = NSButton(checkboxWithTitle: "自动识别 rz/sz 文件传输", target: nil, action: nil); zmodem.state = current.autoZmodem ? .on : .off
@@ -68,6 +69,12 @@ enum Dialogs {
             windowSize.leadingAnchor.constraint(equalTo: windowPage.leadingAnchor, constant: 24),
             windowSize.trailingAnchor.constraint(equalTo: windowPage.trailingAnchor, constant: -24)])
         let windowTab = NSTabViewItem(identifier: "window"); windowTab.label = "窗口"; windowTab.view = windowPage; tabs.addTabViewItem(windowTab)
+        let quickPage = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 520))
+        quickHistory.translatesAutoresizingMaskIntoConstraints = false; quickPage.addSubview(quickHistory)
+        NSLayoutConstraint.activate([quickHistory.topAnchor.constraint(equalTo: quickPage.topAnchor, constant: 24),
+            quickHistory.leadingAnchor.constraint(equalTo: quickPage.leadingAnchor, constant: 24),
+            quickHistory.trailingAnchor.constraint(equalTo: quickPage.trailingAnchor, constant: -24)])
+        let quickTab = NSTabViewItem(identifier: "quickSend"); quickTab.label = "快速发送"; quickTab.view = quickPage; tabs.addTabViewItem(quickTab)
         let about = NSTabViewItem(identifier: "about"); about.label = "关于"; about.view = AboutSettingsView(preferences: current); tabs.addTabViewItem(about)
         if storageSelected, storageView != nil { tabs.selectTabViewItem(withIdentifier: "storage") }
         else { tabs.selectTabViewItem(at: updatesSelected ? 2 : (appearanceSelected ? 1 : 0)) }
@@ -75,7 +82,7 @@ enum Dialogs {
         var prefs = current
         while true {
             guard dialog.runModal() == .OK else { return nil }
-            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); try imagePasteView?.validate(); _ = try fileManagementView?.values(); _ = try selection.values(); _ = try windowSize.value(); break }
+            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); try imagePasteView?.validate(); _ = try fileManagementView?.values(); _ = try selection.values(); _ = try windowSize.value(); _ = try quickHistory.value(); break }
             catch { Dialogs.message(error.localizedDescription) }
         }
         prefs.fontName = font.selectedItem?.representedObject as? String ?? ""

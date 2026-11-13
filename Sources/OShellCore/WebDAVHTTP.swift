@@ -19,13 +19,15 @@ final class WebDAVHTTPRequest {
     private static func quote(_ text: String) -> String {
         "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\t", with: "\\t") + "\""
     }
-    func perform(_ method: String, url: URL, body: Data?, headers: [String: String]) throws -> (HTTPURLResponse, Data) {
+    func perform(_ method: String, url: URL, body: Data?, headers: [String: String], settings: WebDAVSettings) throws -> (HTTPURLResponse, Data) {
         guard url.scheme == "http" else { throw WebDAVFailure.network }
         try checkCancellation()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("oshell-dav-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: directory) }
         var config = "url = \(Self.quote(url.absoluteString))\nrequest = \(Self.quote(method))\n"
+        if settings.authentication == .digest { config += "digest\nuser = \(Self.quote(settings.username + ":" + settings.password))\n" }
+        let responseHeaders = directory.appendingPathComponent("headers")
         for (name, value) in headers.sorted(by: { $0.key < $1.key }) { config += "header = \(Self.quote(name + ": " + value))\n" }
         if let body {
             let file = directory.appendingPathComponent("body")
@@ -46,7 +48,7 @@ final class WebDAVHTTPRequest {
         }
         task.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
         task.arguments = ["--disable", "--config", "-", "--silent", "--globoff", "--proto", "=http", "--noproxy", "*",
-                          "--http1.1", "--include", "--header", "Expect:", "--connect-timeout", "15", "--max-time", "45",
+                          "--http1.1", "--dump-header", responseHeaders.path, "--header", "Expect:", "--connect-timeout", "15", "--max-time", "45",
                           "--max-filesize", String(SharedVault.maximumSize)]
         task.environment = ["PATH":"/usr/bin:/bin:/usr/sbin:/sbin", "LANG":"C"]
         task.standardInput = input; task.standardOutput = output; task.standardError = errors
@@ -82,16 +84,20 @@ final class WebDAVHTTPRequest {
             if count < 0 && (errno == EINTR || errno == EAGAIN) { continue }
             if count == 0 { break }
             guard count > 0 else { throw WebDAVFailure.network }
-            guard data.count + count <= SharedVault.maximumSize + 65536 else { throw WebDAVFailure.tooLarge }
+            guard data.count + count <= SharedVault.maximumSize else { throw WebDAVFailure.tooLarge }
             data.append(contentsOf: bytes.prefix(count))
         }
         guard exited.wait(timeout: .now() + 2) == .success else { throw WebDAVFailure.network }
         finished = true
         if task.terminationStatus == 63 { throw WebDAVFailure.tooLarge }
         guard task.terminationStatus == 0 else { throw WebDAVFailure.network }
-        return try Self.response(data, url: url)
+        let file = try FileHandle(forReadingFrom: responseHeaders)
+        defer { try? file.close() }
+        let headerData = try file.read(upToCount: 65537) ?? Data()
+        return try Self.response(headerData, body: data, url: url)
     }
-    static func response(_ data: Data, url: URL) throws -> (HTTPURLResponse, Data) {
+    private static func response(_ data: Data, body: Data, url: URL) throws -> (HTTPURLResponse, Data) {
+        guard data.count <= 65536 else { throw WebDAVFailure.tooLarge }
         let separator = Data("\r\n\r\n".utf8)
         var offset = 0
         while let range = data.range(of: separator, in: offset..<data.count) {
@@ -107,9 +113,15 @@ final class WebDAVHTTPRequest {
                 let name = String(line[..<colon]).lowercased(), value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
                 headers[name] = headers[name].map { $0 + ", " + value } ?? value
             }
-            guard data.count - offset <= SharedVault.maximumSize else { throw WebDAVFailure.tooLarge }
+            // Digest can produce several 401 challenges before the final reply.
+            // Headers are separate from the body, so arbitrary payload bytes can
+            // never be mistaken for another HTTP response.
+            if offset < data.count {
+                guard status == 401 else { throw WebDAVFailure.network }
+                continue
+            }
             guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: String(first[0]), headerFields: headers) else { throw WebDAVFailure.network }
-            return (response, data.subdata(in: offset..<data.count))
+            return (response, body)
         }
         throw WebDAVFailure.network
     }

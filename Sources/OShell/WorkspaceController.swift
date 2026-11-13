@@ -716,6 +716,7 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         pane.onCloseRequested = { [weak self] pane in
             self?.closeSessionPane(pane)
         }
+        pane.onReconnectRequested = { [weak self] pane in self?.reconnectPane(pane) }
         pane.onUserInput = { [weak self] pane, bytes in self?.routeKeyboard(pane, bytes: bytes) ?? false }
         pane.onPaste = { [weak self] pane, text in self?.pasteText(text, from: pane) }
         pane.onPasteImage = { [weak self] pane, image in self?.pasteImage(image, from: pane) }
@@ -1021,17 +1022,22 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             let pane = makePane(old.profile, terminalType: old.externalTerminalType)
             try change.removeConfirmedRecords()
             if tab.restoreZoom() { rebuildWorkspace() }
-            old.shutdown(); tab.layout = tab.layout.replacing(old.id, with: .pane(pane)); tab.activePane = pane
+            old.shutdown(); pane.preserveScrollback(from: old)
+            tab.layout = tab.layout.replacing(old.id, with: .pane(pane)); tab.activePane = pane
             rebuildWorkspace(); select(tab)
         } catch { Dialogs.message(error.localizedDescription) }
     }
     @objc func reconnect() {
         guard let tab = selectedTab else { return }
-        let old = tab.activePane
+        reconnectPane(tab.activePane)
+    }
+    private func reconnectPane(_ old: TerminalPane) {
+        guard isSecurityUnlocked, !old.isShutdown, let tab = tabs.first(where: { $0.layout.panes.contains(where: { $0 === old }) }) else { return }
         if old.hasActiveProcess, !Dialogs.confirm("重新连接？", text: "当前连接或本机工具将结束，并重新建立原会话连接。", action: "重新连接") { return }
         guard let pane = replica(of: old) else { return }
         if tab.restoreZoom() { rebuildWorkspace() }
         old.shutdown()
+        pane.preserveScrollback(from: old)
         tab.layout = tab.layout.replacing(old.id, with: .pane(pane)); tab.activePane = pane
         rebuildWorkspace(); select(tab)
     }
@@ -1063,13 +1069,14 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         let imagePasteView = ImagePasteSettingsControl()
         let fileManagementView = FileManagementSettingsView()
         let clockSettings = TerminalClockSettingsView(configuration.preferences)
+        let quickHistorySettings = QuickSendHistorySettingsControl()
         let windowSizeSettings = WindowSizeSettingsControl(currentSize: window.map { $0.contentRect(forFrameRect: $0.frame).size })
         var selectionView: TerminalSelectionSettingsView?
         var localShortcut: ShortcutOverride?
         var sidebarVisible = sessionSidebarVisible
         guard let preferences = Dialogs.preferences(configuration.preferences, appearanceSelected: appearanceSelected, updatesSelected: updatesSelected, storageSelected: storageSelected, storageView: storageView, securityView: securityView, titleView: titleView, imagePasteView: imagePasteView, fileManagementView: fileManagementView, clockView: clockSettings, selectionView: { autoCopy, trim in
             let view = TerminalSelectionSettingsView(autoCopy: autoCopy, trimOptions: trim); selectionView = view; return view
-        }, localShortcutSelection: { localShortcut = $0 }, sidebarVisible: sessionSidebarVisible, sidebarSelection: { sidebarVisible = $0 }, windowSizeView: windowSizeSettings) else { return }
+        }, localShortcutSelection: { localShortcut = $0 }, sidebarVisible: sessionSidebarVisible, sidebarSelection: { sidebarVisible = $0 }, windowSizeView: windowSizeSettings, quickHistoryView: quickHistorySettings) else { return }
         if appUpdater.isBusy && preferences.updateRepository != configuration.preferences.updateRepository { Dialogs.message("更新正在进行，请完成或取消后再修改更新仓库。"); return }
         var value = configuration; value.preferences = preferences
         guard saveConfiguration(value) else { return }
@@ -1084,6 +1091,8 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         if let selection = try? selectionView?.values() { selection.save() }
         do { WindowSizePreferences.save(try windowSizeSettings.value()) }
         catch { Dialogs.message("启动窗口大小未保存：" + error.localizedDescription) }
+        do { try quickHistorySettings.apply() }
+        catch { Dialogs.message("快速发送历史设置未保存：" + error.localizedDescription) }
         SessionSidebarPreferences.saveShortcut(localShortcut)
         ShortcutRuntime.install(preferences.keyboardShortcuts); setSessionSidebarVisible(sidebarVisible)
         do { try appUpdater.configure() } catch { Dialogs.message(error.localizedDescription) }
