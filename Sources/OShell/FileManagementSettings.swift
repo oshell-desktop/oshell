@@ -86,7 +86,7 @@ final class FileManagementSettingsView: NSView {
 extension WorkspaceController {
     func terminalFileCommandBlockReason(_ pane: TerminalPane?) -> String? {
         guard isSecurityUnlocked, let pane, pane.agentEligible, pane.acceptsManagedInput else { return "请先选择已连接的 SSH 终端或运行中的本地 Shell。" }
-        if let grant = AgentCoordinator.shared.grants[pane.id], grant.task != nil || grant.integrationPending { return "当前终端由 MCP 任务占用，请先在 MCP 控制中心接管。" }
+        if AgentCoordinator.shared.grants[pane.id]?.controlActive == true { return "当前终端由 MCP 控制，请先终止接入。" }
         guard pane.agentCanInitialize else { return "当前终端正在输入、传输、认证或运行交互程序。请先回到空闲 Shell，避免将文件管理命令输入到其他程序。" }
         return nil
     }

@@ -68,14 +68,19 @@ public struct RemoteHostIdentity: Equatable {
 /// output is replayed unchanged; never swallow server output while awaiting a reply.
 public struct HostProbeEcho {
     private let expected: [UInt8]
+    private let shellEditing: Bool
     private var pending = Data()
     private var index = 0
     private var escape = false
     private var csi = false
     private var pendingSpace = false
     private var awaitingLineFeed = false
+    private var afterCarriageReturn = false
+    private var csiParameters = [UInt8]()
+    private var preservedModes = Data()
     public private(set) var finished = false
-    public init(command: String) { expected = Array(command.utf8) }
+    public private(set) var matched = false
+    public init(command: String, shellEditing: Bool = false) { expected = Array(command.utf8); self.shellEditing = shellEditing }
     public mutating func consume(_ bytes: Data) -> Data {
         guard !finished else { return bytes }
         var result = Data()
@@ -88,6 +93,7 @@ public struct HostProbeEcho {
             if finished { result.append(byte); continue }
             pending.append(byte)
             if pending.count > 8192 { finished = true; result.append(pending); pending = Data(); continue }
+            let paddingWrap = pendingSpace && (byte == 13 || byte == 10)
             // Readline forces autowrap using a padding space followed by CR.
             // Delay a space by one byte so only that exact padding is removed.
             if pendingSpace {
@@ -102,31 +108,42 @@ public struct HostProbeEcho {
             if byte == 32 && !escape && !csi { pendingSpace = true; continue }
             if escape {
                 escape = false
-                if byte == 91 { csi = true; continue }
+                if byte == 91 { csi = true; csiParameters.removeAll(keepingCapacity: true); continue }
                 finished = true; result.append(pending); pending = Data(); continue
             }
             if csi {
                 if (0x40...0x7e).contains(byte) {
                     csi = false
+                    if shellEditing, [104, 108].contains(byte), csiParameters == Array("?2004".utf8) {
+                        preservedModes.append(contentsOf: [27, 91] + csiParameters + [byte]); continue
+                    }
                     // Preserve mode changes and other protocol traffic. Only
                     // readline cursor movement/erase/style can be part of echo.
                     if ![65, 66, 67, 68, 71, 72, 74, 75, 102, 109].contains(byte) {
                         finished = true; result.append(pending); pending = Data()
                     }
-                }
+                } else { csiParameters.append(byte) }
                 continue
             }
             if byte == 27 { escape = true; continue }
+            if shellEditing, byte == 8, index > 0 { index -= 1; afterCarriageReturn = false; continue }
             if index == expected.count {
                 if byte == 13 || byte == 10 {
                     // The command is ours and its full echo has been verified.
+                    matched = true
                     // Redraw the next prompt on the current line instead of
                     // displaying a second empty prompt for this hidden probe.
+                    result.append(preservedModes)
                     result.append(contentsOf: [13, 27, 91, 50, 75]) // CR + CSI 2 K
                     awaitingLineFeed = byte == 13
                     finished = !awaitingLineFeed; pending = Data()
                 } else { finished = true; result.append(pending); pending = Data() }
-            } else if byte == expected[index] { index += 1 }
+            } else if shellEditing, afterCarriageReturn, index > 0, byte == expected[index - 1] {
+                // ZLE forces wrapping with one character, CR, then redraws that character.
+                afterCarriageReturn = false
+            }
+            else if byte == expected[index] { index += 1; afterCarriageReturn = false }
+            else if byte == 13 { afterCarriageReturn = !paddingWrap }
             else if byte != 13 && byte != 10 {
                 finished = true; result.append(pending); pending = Data()
             }

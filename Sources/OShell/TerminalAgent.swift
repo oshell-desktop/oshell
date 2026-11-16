@@ -4,6 +4,18 @@ import SwiftTerm
 import OShellCore
 
 extension TerminalPane {
+    func refreshAgentControlStatus() {
+        let coordinator = AgentCoordinator.shared
+        let grant = coordinator.grants[id]
+        let visible = grant?.controlActive == true
+        agentControlBar.isHidden = !visible
+        agentControlHeight.constant = visible ? 28 : 0
+        if let grant, visible {
+            agentControlLabel.stringValue = coordinator.accessStatus(grant)
+            agentControlLabel.toolTip = coordinator.accessDetail(grant) + "。终止接入后恢复人工输入；SSH 连接和存档保留。"
+        }
+    }
+    @objc func stopAgentAccess() { AgentCoordinator.shared.revoke(id, reason: "用户终止 MCP 接入") }
     var agentEligible: Bool { !isBlank && connectionIsActive && (profile.kind == .local || profile.kind == .ssh && sessionReady) && !isTransferring }
     func agentScreen() -> String {
         let model = terminal.getTerminal()
@@ -19,7 +31,7 @@ extension TerminalPane {
     func agentWillSend(_ bytes: Data, writeID: Int) -> Bool {
         let grant = AgentCoordinator.shared.grants[id]
         // The final PTY gate also catches quick-send, broadcasts, mouse reports and background probes.
-        if agentInputKind == nil, grant?.task != nil || grant?.integrationPending == true { return false }
+        if agentInputKind == nil, grant?.controlActive == true { return false }
         if agentInputKind == nil, let grant, grant.integrated {
             grant.integrated = false; AgentCoordinator.shared.notify()
         }

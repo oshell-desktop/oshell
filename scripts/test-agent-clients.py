@@ -46,8 +46,6 @@ def run_clients(root, fixture, action):
                 has_tools=bool(body.get('tools'))
                 choices=[('sessions_list',{}),('session_state',{'session_id':fixture['pane']}),('task_start',{'session_id':fixture['pane'],'generation':fixture['generation']}),('command_submit',{'task_id':observed['task'],'command':"printf 'CLIENT_中文\\n'; sleep 0.2",'idempotency_key':kind+'-'+str(uuid.uuid4())})]
                 tool=None;args={};namespace=None
-                if phase==3 and any(o.get('state')=='waiting_for_shell_integration_approval' for o in all_objects):
-                    action('integrate');time.sleep(.2)
                 if not has_tools:pass
                 elif phase<4:tool,args=choices[phase];observed['phase']+=1
                 elif phase==4 and len(observed['calls']) < 80:

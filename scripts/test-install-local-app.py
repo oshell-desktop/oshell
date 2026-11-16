@@ -36,4 +36,18 @@ with tempfile.TemporaryDirectory() as raw:
     except OSError: pass
     else: raise AssertionError('expected failure')
     assert old.read_text() == 'replacement' and source.exists()
-print('local app publication: running app preserved, no inode truncation, rollback passed')
+    source=root/'stage4/OShell.app'; app(source,'helper-only upgrade')
+    helper=target/'Contents/Helpers/OShell-MCP'; helper.parent.mkdir(); helper.write_text('old helper')
+    with helper.open() as mapped_helper:
+        assert module.publish(source,target,[str(helper)]) == target
+        assert mapped_helper.read() == 'old helper'
+    assert old.read_text() == 'helper-only upgrade'
+    source=root/'stage5/OShell.app'; app(source,'other helper running')
+    assert module.publish(source,target,[str(helper)+'-other']) != target
+    source=root/'stage6/OShell.app'; app(source,'helper rollback')
+    try:
+        with patch.object(module.os,'rename',fail): module.publish(source,target,[str(helper)])
+    except OSError: pass
+    else: raise AssertionError('expected helper-only rollback')
+    assert old.read_text() == 'helper-only upgrade' and source.exists()
+print('local app publication: app/other helpers preserved, MCP-only upgrade, inode safety and rollback passed')

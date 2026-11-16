@@ -15,11 +15,13 @@
 
 仅需编译时，在 **Run workflow** 中关闭 **publish**。流程不创建版本标签、不发布 Release，也不读取更新签名私钥；安装包仍使用固定代码签名身份。两种 DMG 保存在本次运行的 `dmg-*` Artifacts，可分别下载。
 
+本次源码已完成相关测试、只需重新构建发布时，可在手动运行中启用 **skip_tests**。它默认关闭；启用后跳过重复的脚本回归、增量编译实验、核心测试和更新站点测试，仍执行源码公开检查、实际编译、固定签名检查、两种 DMG 的完整性/架构/最低系统版本校验，以及更新元数据验签。该选项会传递到后续更新站点工作流；推送标签触发的常规发布仍默认运行测试。
+
 发布步骤：
 
 1. 更新 `scripts/Info.plist` 的 `CFBundleShortVersionString`，递增 `CFBundleVersion`，在 `CHANGELOG.md` 中添加对应版本的变更内容，再提交所有源码和流水线文件。Release 说明会自动提取该版本章节，放在“本次变更”中；缺失、空白或重复的版本章节会阻止发布。
 2. 将提交推送到 GitHub。手动发布时进入 **Actions → Build and publish macOS DMGs → Run workflow**，选择默认分支，**tag 留空**。流程读取该提交的 Info.plist，例如版本 `0.2.61` 会创建 `v0.2.61`；也可明确填写匹配版本。已有同名标签必须指向所选提交，流程不会移动或覆盖它。若需重试旧版本，请选择原标签作为运行来源。标签与源码版本不匹配时，会在创建标签和编译前报错。也可以自行创建并推送匹配的 `vX.Y.Z` 标签来触发发布。
-3. 标签确定后，Actions 会运行两个独立构建任务。两个任务全部完成核心测试、DMG 挂载检查、全部 Mach-O 的架构/最低系统检查和签名完整性检查后，才进入发布阶段。
+3. 标签确定后，Actions 会运行两个独立构建任务。两个任务完成所选测试步骤、DMG 挂载检查、全部 Mach-O 的架构/最低系统检查和签名完整性检查后，才进入发布阶段。
 4. Release 先以草稿创建，上传两个 DMG 和对应源码包，并在 Release 说明中嵌入两种目标的签名更新信息。`SHA256SUMS.txt` 和 `release-manifest.json` 放在每个 DMG 内，不再单独上传为 Release 附件。确认远端附件完整后才公开发布并设为 Latest。
 
 GitHub API 只使用自动提供的 `GITHUB_TOKEN`，无需额外 PAT。发布前还需在仓库 **Settings → Secrets and variables → Actions** 配置 `OSHELL_UPDATE_SIGNING_KEY`，内容为现有 Sparkle Ed25519 私钥文件中的 Base64 种子。该密钥必须与应用的 `SUPublicEDKey` 匹配，不能重新生成替代。密钥仅在签名步骤写入临时 0600 文件，完成后清理；不写入源码、日志或发布附件。缺少密钥时停止发布，避免生成会导致检查更新失败的不完整 Release。仓库需允许 Actions 运行；构建阶段仅有 `contents: read`，准备标签和发布 job 申请 `contents: write`。如果组织策略禁止写权限，需要仓库管理员允许该工作流发布 Release。工作流不读取开发者本机 `.release-private`，由维护者配置加密 Secret，也不设置默认更新仓库。

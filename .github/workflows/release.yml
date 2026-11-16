@@ -16,6 +16,10 @@ on:
         description: '发布 GitHub Release（需配置更新签名 Secret）；关闭则仅编译两种 DMG'
         type: boolean
         default: true
+      skip_tests:
+        description: '本次源码已经验证：跳过重复回归测试；仍检查签名、架构和安装包完整性'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -81,9 +85,11 @@ jobs:
               git checkout --detach "refs/tags/$RELEASE_TAG"
             fi
           fi
-      - name: Validate release scripts and source
+      - name: Validate public source
+        run: python3 scripts/check-public-source.py --history HEAD
+      - name: Run release regression tests
+        if: ${{ !inputs.skip_tests }}
         run: |
-          python3 scripts/check-public-source.py --history HEAD
           python3 scripts/test-ci-release.py
           python3 scripts/test-development-tools.py
           python3 scripts/test-code-signing.py
@@ -150,7 +156,7 @@ jobs:
           key: ${{ steps.toolchain.outputs.cache-key }}
           restore-keys: ${{ steps.toolchain.outputs.cache-prefix }}-
       - name: Validate incremental dependency rebuilds
-        if: matrix.flavor == 'arm64'
+        if: matrix.flavor == 'arm64' && !inputs.skip_tests
         run: python3 scripts/test-incremental-cache.py --swift-integration
       - name: Validate fixed code signing identity
         env:
@@ -162,11 +168,17 @@ jobs:
             exit 1
           fi
           python3 scripts/sign-app.py --preflight
-      - name: Build application, run core checks and create DMG
+      - name: Build application and create DMG
         env:
           OSHELL_CODESIGN_P12: ${{ secrets.OSHELL_CODESIGN_P12 }}
           OSHELL_CODESIGN_PASSWORD: ${{ secrets.OSHELL_CODESIGN_PASSWORD }}
-        run: python3 scripts/package-release.py --flavor "$FLAVOR" --format dmg --test-core
+          SKIP_TESTS: ${{ inputs.skip_tests }}
+        run: |
+          if [ "$SKIP_TESTS" = true ]; then
+            python3 scripts/package-release.py --flavor "$FLAVOR" --format dmg
+          else
+            python3 scripts/package-release.py --flavor "$FLAVOR" --format dmg --test-core
+          fi
       - name: Verify DMG payload, architectures and deployment targets
         run: python3 scripts/verify-installers.py --flavor "$FLAVOR" --format dmg
       - name: Stage the verified artifact
@@ -180,13 +192,13 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: scripts/requirements-release.txt
-      - name: Prepare and test update signing tools
-        # Also run in build-only validation, so timing does not hide dependency
-        # compilation; tests use synthetic keys and cannot publish anything.
+      - name: Prepare update signing tools
         run: |
           python3 -m venv work/update-signing
           work/update-signing/bin/python -m pip install -r scripts/requirements-release.txt
-          work/update-signing/bin/python scripts/test-update-pages.py
+      - name: Test update signing tools
+        if: ${{ !inputs.skip_tests }}
+        run: work/update-signing/bin/python scripts/test-update-pages.py
       - name: Sign verified DMG update metadata
         if: needs.metadata.outputs.publish == 'true'
         env:
@@ -358,6 +370,9 @@ jobs:
         run: |
           python3 -m venv work/compat-tools
           work/compat-tools/bin/python -m pip install -r scripts/requirements-release.txt
+      - name: Test original-repository update tools
+        if: ${{ !inputs.skip_tests }}
+        run: |
           work/compat-tools/bin/python scripts/test-legacy-updates.py
           work/compat-tools/bin/python scripts/test-update-migration.py
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -400,3 +415,5 @@ jobs:
       pages: write
       id-token: write
     uses: ./.github/workflows/update-pages.yml
+    with:
+      skip_tests: ${{ inputs.skip_tests }}

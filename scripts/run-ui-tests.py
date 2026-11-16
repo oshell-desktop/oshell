@@ -128,7 +128,7 @@ def require_unlocked_desktop():
         return False
     if locked(tree): raise RuntimeError('Desktop is locked; native fullscreen regression requires an unlocked desktop. No test app was launched.')
 
-def run_case(source, case, timeout):
+def run_case(source, case, timeout, agent_suite='protocol'):
     info = plistlib.loads((source/'Contents/Info.plist').read_bytes())
     if info.get('OShellTestHarness') is not True:
         raise RuntimeError('Build the test app first: bash scripts/build.sh --tests')
@@ -165,7 +165,7 @@ def run_case(source, case, timeout):
                 '--env', CASES[case]+'='+str(destination), '--stdout', str(log), '--stderr', str(log),
                 str(app), '--args', '--'+case+'-test']
         if case == 'agent-control':
-            args[1:1] = ['--env', 'OSHELL_AGENT_RUNNER='+str(ROOT/'scripts/test-agent-protocol.py'), '--env', 'OSHELL_AGENT_REAL_CLIENTS='+os.environ.get('OSHELL_AGENT_REAL_CLIENTS','0')]
+            args[1:1] = ['--env', 'OSHELL_AGENT_RUNNER='+str(ROOT/'scripts'/f'test-agent-{agent_suite}.py'), '--env', 'OSHELL_AGENT_REAL_CLIENTS='+os.environ.get('OSHELL_AGENT_REAL_CLIENTS','0')]
             if os.environ.get('OSHELL_AGENT_REAL_CLIENTS') == '1': args[1:1] = ['--env', 'PATH='+os.environ.get('PATH','')]
         if case in ['activation-latency', 'fullscreen-activation'] and os.environ.get('OSHELL_ACTIVATION_METAL') == '1':
             args[1:1] = ['--env', 'OSHELL_ACTIVATION_METAL=1']
@@ -214,11 +214,12 @@ def main():
     parser.add_argument('--list', action='store_true')
     parser.add_argument('--app', type=Path, default=ROOT/'work/test-app/OShell.app')
     parser.add_argument('--timeout', type=int, default=120)
+    parser.add_argument('--agent-suite', choices=['protocol', 'reading'], default='protocol')
     args = parser.parse_args()
     if args.list:
         print('\n'.join(sorted(CASES))); return
     selected = list(dict.fromkeys((GROUPS[args.group] if args.group else []) + args.cases))
     if not selected: parser.error('choose cases or --group; use --list to see available cases')
-    for case in selected: run_case(args.app.resolve(), case, args.timeout)
+    for case in selected: run_case(args.app.resolve(), case, args.timeout, args.agent_suite)
 
 if __name__ == '__main__': main()

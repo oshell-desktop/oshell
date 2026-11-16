@@ -39,6 +39,7 @@ public final class AgentAudit: @unchecked Sendable {
     private var indexedTasks = [AgentValue]()
     private var digest = Data(repeating: 0, count: 32)
     public var onDrain: (@Sendable () -> Void)?
+    public var onCommit: (@Sendable () -> Void)?
     public var peakQueuedBytes: Int { lock.lock(); defer { lock.unlock() }; return highWater }
     public var pendingBytes: Int { lock.lock(); defer { lock.unlock() }; return queued }
     public var onFailure: (@Sendable (String) -> Void)?
@@ -156,6 +157,7 @@ public final class AgentAudit: @unchecked Sendable {
             lock.lock(); let crossed = queued >= 131_072 && queued - size < 131_072; queued -= size; lock.unlock()
             if crossed { onDrain?() }
             completion?(success)
+            if success { onCommit?() }
         }; return true
     }
     public func finish(reason: String) {

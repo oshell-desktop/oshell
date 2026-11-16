@@ -168,6 +168,9 @@ extension WorkspaceController {
         }
         menu.addItem(.separator())
         let reconnect = menu.addItem(withTitle: "重新连接", action: #selector(reconnectTabFromMenu(_:)), keyEquivalent: "")
+        let agent = menu.addItem(withTitle: "交给 Agent…", action: #selector(authorizeAgentFromTab(_:)), keyEquivalent: "")
+        agent.target = self; agent.representedObject = id; agent.identifier = .init("mcp.quick.authorize")
+        agent.isEnabled = isSecurityUnlocked && tab?.activePane.agentEligible == true
         reconnect.target = self; reconnect.representedObject = id; reconnect.isEnabled = tab.map { !$0.activePane.isBlank } ?? false
         let close = menu.addItem(withTitle: "关闭标签页", action: #selector(closeTabFromMenu(_:)), keyEquivalent: "")
         close.target = self; close.representedObject = id; close.isEnabled = tab != nil
@@ -311,18 +314,21 @@ extension WorkspaceController {
             switch target {
             case .folder(let child):
                 let item = menu.addItem(withTitle: String(child.split(separator: "/").last ?? ""), action: nil, keyEquivalent: "")
-                item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil); item.submenu = sessionLinkMenu(folder: child)
+                item.image = SessionListIcon.directory.menuImage(); item.submenu = sessionLinkMenu(folder: child)
             case .session(let id):
                 guard let profile = configuration.profiles.first(where: { $0.id == id }) else { continue }
                 let detail = "实际会话 · " + profile.kind.title + "\n" + profile.host
                 let item = menu.addItem(withTitle: profile.name, action: #selector(connectLinkBarSession(_:)), keyEquivalent: "")
                 item.target = self; item.representedObject = id; item.toolTip = detail
-                item.view = sessionLinkBar.makeMenuLinkButton(.session(id), title: profile.name, detail: detail) { [weak self] in self?.openLinkBarSession(id) }
+                item.image = SessionListIcon.session(profile.kind, shortcut: false).menuImage()
+                item.view = sessionLinkBar.makeMenuLinkButton(.session(id), title: profile.name, detail: detail, icon: .session(profile.kind, shortcut: false)) { [weak self] in self?.openLinkBarSession(id) }
             case .link(let id):
-                guard let link = links.entries.first(where: { $0.id == id }) else { continue }
+                guard let link = links.entries.first(where: { $0.id == id }),
+                      let profile = configuration.profiles.first(where: { $0.id == link.profileID }) else { continue }
                 let item = menu.addItem(withTitle: link.name, action: #selector(connectSessionLink(_:)), keyEquivalent: "")
                 item.target = self; item.representedObject = link.id; item.toolTip = linkDetail(link)
-                item.view = sessionLinkBar.makeMenuLinkButton(.link(id), title: link.name, detail: linkDetail(link)) { [weak self] in self?.openSessionLink(id) }
+                item.image = SessionListIcon.session(profile.kind, shortcut: true).menuImage()
+                item.view = sessionLinkBar.makeMenuLinkButton(.link(id), title: link.name, detail: linkDetail(link), icon: .session(profile.kind, shortcut: true)) { [weak self] in self?.openSessionLink(id) }
             }
         }
         if menu.items.isEmpty { let item = menu.addItem(withTitle: "暂无快捷链接", action: nil, keyEquivalent: ""); item.isEnabled = false }

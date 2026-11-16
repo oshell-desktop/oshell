@@ -563,17 +563,26 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
     private func rebuildQuickLinks() {
         rebuildSessionLinkBar()
         let catalog = SessionCatalogPresentation.visibleConfiguration(configuration)
+        let profilesByID = Dictionary(uniqueKeysWithValues: catalog.profiles.map { ($0.id, $0) })
+        // Explicit references are quick connections even when the source profile
+        // is not starred. Resolve the original profile without copying its identity.
+        let entries: [(profile: SessionProfile, title: String, directory: String, shortcut: Bool)] =
+            catalog.profiles.filter(\.quickConnect).map { ($0, $0.name, $0.group, false) }
+            + catalog.sessionLinks.entries.compactMap { link in
+                guard let profile = profilesByID[link.profileID] else { return nil }
+                return (profile, link.name, SessionLinks.directory(for: link.folder), true)
+            }
+        let directories = SessionDirectory.all(catalog)
         func populate(_ menu: NSMenu, directory: String) {
-            let profiles = catalog.profiles.filter(\.quickConnect)
-            for child in SessionDirectory.all(catalog) where SessionDirectory.parent(child) == directory && profiles.contains(where: { SessionDirectory.contains($0.group, in: child) }) {
+            for child in directories where SessionDirectory.parent(child) == directory && entries.contains(where: { SessionDirectory.contains($0.directory, in: child) }) {
                 let item = NSMenuItem(title: String(child.split(separator: "/").last!), action: nil, keyEquivalent: "")
                 item.image = (child == SessionLinks.rootDirectory ? SessionListIcon.linksDirectory : .directory).menuImage()
                 let submenu = NSMenu(); item.submenu = submenu; menu.addItem(item); populate(submenu, directory: child)
             }
-            for profile in profiles.filter({ $0.group == directory }).sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) {
-                let item = NSMenuItem(title: profile.name, action: #selector(connectQuick(_:)), keyEquivalent: "")
-                item.image = SessionListIcon.session(profile.kind, shortcut: false).menuImage()
-                item.target = self; item.representedObject = profile.id; item.toolTip = profile.host; menu.addItem(item)
+            for entry in entries.filter({ $0.directory == directory }).sorted(by: { $0.title.localizedStandardCompare($1.title) == .orderedAscending }) {
+                let item = NSMenuItem(title: entry.title, action: #selector(connectQuick(_:)), keyEquivalent: "")
+                item.image = SessionListIcon.session(entry.profile.kind, shortcut: entry.shortcut).menuImage()
+                item.target = self; item.representedObject = entry.profile.id; item.toolTip = entry.profile.host; menu.addItem(item)
             }
         }
         let menu = NSMenu(); menu.addItem(withTitle: "快捷连接", action: nil, keyEquivalent: "").image = WorkspaceToolbarIcon.quickConnect.image
@@ -1188,6 +1197,9 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
         if menuItem.action == #selector(editCurrentSessionProfile) { return canEditCurrentSessionProfile }
         if [#selector(splitVertical), #selector(splitHorizontal)].contains(menuItem.action) { return isSecurityUnlocked && selectedTab != nil }
         if menuItem.action == #selector(showCurrentSessionProperties) { return selectedTab?.activePane.canEditLiveKeepAlive == true }
+        if menuItem.action == #selector(authorizeAgentFromTab(_:)) {
+            return isSecurityUnlocked && NSApp.modalWindow == nil && window?.attachedSheet == nil && tabs.first(where: { $0.id == menuItem.representedObject as? UUID })?.activePane.agentEligible == true
+        }
         if menuItem.action == #selector(toggleSessionSidebar) { menuItem.state = sessionSidebarVisible ? .on : .off; return isSecurityUnlocked && !isFocusFullscreen && NSApp.modalWindow == nil }
         if menuItem.action == #selector(toggleSessionLinkBar) { menuItem.state = configuration.sessionLinks.visible ? .on : .off; return true }
         if menuItem.action == #selector(toggleQuickSendBar) { menuItem.state = quickSendBar.isHidden ? .off : .on; return !isDeepFocus }

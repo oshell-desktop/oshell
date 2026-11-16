@@ -26,4 +26,13 @@ public final class AgentOutputCursor {
         }
         position += result.count; return result
     }
+    public func hasMore(watermark: Int) throws -> Bool {
+        while pending.isEmpty {
+            guard let event = try reader.next(through: watermark) else { return false }
+            guard event.kind == "output", event.fields["operation"]?.string == operation.uuidString, let bytes = event.bytes else { continue }
+            if skipped >= bytes.count { skipped -= bytes.count; continue }
+            pending = Data(bytes.dropFirst(skipped)); skipped = 0
+        }
+        return true
+    }
 }

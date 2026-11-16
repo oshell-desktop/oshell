@@ -76,7 +76,8 @@ final class AgentControlView: InterfaceSurfaceView {
         permissions.target = self; permissions.action = #selector(choiceChanged)
         authorization.add(field("终端", sessions)); authorization.add(field("权限", permissions))
         authorization.add(permissionHint)
-        grantButton = AppUI.button("授权此终端", symbol: "checkmark.shield", primary: true) { [weak self] in self?.authorize() }
+        authorization.add(AppUI.label("请确认当前 Bash/Zsh 空闲，没有未提交的输入或密码提示。授权后自动准备 Shell 并持续交由 MCP 控制，直到你终止接入；不修改远端启动文件。", size: 11, secondary: true))
+        grantButton = AppUI.button("确认空闲并授权接入", symbol: "checkmark.shield", primary: true) { [weak self] in self?.authorize() }
         grantButton.identifier = .init("mcp.authorize")
         authorization.add(AppUI.row([sessionHint, NSView(), grantButton])); addCard(authorization); setupSections.append(authorization)
 
@@ -167,6 +168,27 @@ final class AgentControlView: InterfaceSurfaceView {
             sections.selectedSegment = 1; sectionChanged()
         }
     }
+    func quickAuthorize(_ pane: TerminalPane) {
+        guard coordinator.enabled, !coordinator.clients.isEmpty, coordinator.grants[pane.id] == nil, pane.agentAudit == nil else {
+            show(); bind(pane)
+            sections.selectedSegment = coordinator.grants[pane.id] == nil ? 0 : 1; sectionChanged(); return
+        }
+        guard pane.agentEligible else { return }
+        let generation = pane.agentGeneration
+        let alert = PopupAlert(); alert.messageText = "将此会话交给 Agent"
+        alert.informativeText = "目标：\(pane.title)\n\(pane.profile.username)\(pane.profile.host.isEmpty ? "本地 Shell" : "@" + pane.profile.host)\n\n请确认 Bash/Zsh 空闲，没有未提交的输入或密码提示。授权仅作用于此会话；可在终端点击“终止接入”或双击 Esc 接管。"
+        let client = NSPopUpButton(), permission = NSPopUpButton()
+        client.identifier = .init("mcp.quick.client"); permission.identifier = .init("mcp.quick.permission")
+        for item in coordinator.clients { client.addItem(withTitle: item.name + " · " + item.id.uuidString.prefix(8)); client.lastItem?.representedObject = item.id }
+        if let remembered = UserDefaults.standard.string(forKey: "OShell.mcp.lastClient"), let item = client.itemArray.first(where: { ($0.representedObject as? UUID)?.uuidString == remembered }) { client.select(item) }
+        permission.addItems(withTitles: AgentPermission.allCases.map(\.title)); permission.selectItem(at: 1)
+        let fields = NSStackView(views: [AppUI.row([NSTextField(labelWithString: "客户端"), client]), AppUI.row([NSTextField(labelWithString: "权限"), permission]), NSTextField(wrappingLabelWithString: "默认自动批准常见查询；修改和复杂命令仍需确认。")])
+        fields.orientation = .vertical; fields.alignment = .leading; fields.spacing = 10; fields.frame = NSRect(x: 0, y: 0, width: 380, height: 100)
+        alert.accessoryView = fields; alert.addButton(withTitle: "确认空闲并授权"); alert.addButton(withTitle: "取消")
+        alert.buttons[0].identifier = .init("mcp.quick.confirm")
+        guard alert.runModal() == .alertFirstButtonReturn, pane.agentGeneration == generation, let id = client.selectedItem?.representedObject as? UUID else { return }
+        attempt { try coordinator.grant(pane: pane, client: id, permission: AgentPermission.allCases[permission.indexOfSelectedItem]) }
+    }
     private func refreshChoices() {
         let clientID = clients.selectedItem?.representedObject as? UUID, paneID = sessions.selectedItem?.representedObject as? UUID
         let clientKeys = coordinator.clients.map { $0.id.uuidString + $0.name }
@@ -228,17 +250,18 @@ final class AgentControlView: InterfaceSurfaceView {
         for (id, grant) in coordinator.grants.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             guard let pane = grant.pane else { continue }
             let card = AppCard(); card.identifier = .init("mcp.grant." + id.uuidString)
-            let take = AppUI.button("接管", symbol: "hand.raised") { [weak self] in self?.coordinator.takeover(id, reason: "用户点击接管", interrupt: false) }
+            let take = AppUI.button("终止接入", symbol: "hand.raised") { [weak self] in self?.coordinator.revoke(id, reason: "用户终止 MCP 接入") }
             take.toolTip = "停止 Agent 后续输入；当前命令不会因此被中断。Ctrl+C 可中断前台命令。"
             card.add(AppUI.heading(pane.title, trailing: take))
-            card.add(AppUI.label((coordinator.clients.first { $0.id == grant.client }?.name ?? "客户端") + " · " + pane.id.uuidString.prefix(8) + " · " + (grant.task == nil ? "人工控制" : "Agent 执行中"), size: 11, secondary: true))
+            card.add(AppUI.label(coordinator.accessStatus(grant), size: 12, weight: .medium))
+            card.add(AppUI.label(coordinator.accessDetail(grant), size: 11, secondary: true))
             let mode = NSPopUpButton(); mode.addItems(withTitles: AgentPermission.allCases.map(\.title)); mode.selectItem(withTitle: grant.permission.title)
             mode.identifier = .init(id.uuidString); mode.setAccessibilityLabel("此会话的授权权限"); mode.target = self; mode.action = #selector(changePermission(_:))
             card.add(field("权限", mode))
-            if grant.integrated { card.add(AppUI.label("✓ Shell 已就绪", size: 11, secondary: true)) }
-            else {
-                let integrate = AppUI.button(grant.integrationPending ? "等待 Shell 确认…" : "确认 Shell 集成…") { [weak self, weak pane] in if let pane { self?.approveIntegration(pane) } }
-                integrate.isEnabled = !grant.integrationPending; card.add(integrate)
+            if !grant.controlActive {
+                card.add(AppUI.button("确认空闲并重新接入") { [weak self, weak pane] in
+                    guard let self, let pane else { return }; self.attempt { try self.coordinator.integration(pane) }
+                })
             }
             if let operation = coordinator.operations.values.filter({ $0.paneID == id && !["completed", "denied", "cancelled_before_send"].contains($0.state) }).max(by: { $0.created < $1.created }) {
                 let states = ["pending_approval": "等待你批准", "preparing": "准备命令", "persisting_intent": "正在保存执行记录", "sent": "已发送至终端", "running": "正在执行", "finishing": "正在保存结果", "unknown_waiting_human": "等待人工处理", "unknown_prior_intent": "执行结果未确认，请检查存档", "audit_failed": "存档失败，已停止自动执行"]
@@ -254,10 +277,7 @@ final class AgentControlView: InterfaceSurfaceView {
             }
             let auditState = AppUI.label(grant.audit.error ?? "● 加密记录中 · 接管后继续存档", size: 11, secondary: true)
             if grant.audit.error != nil { auditState.textColor = .systemRed }; card.add(auditState)
-            card.add(AppUI.row([
-                AppUI.button("敏感输入…", symbol: "lock") { [weak self, weak pane] in if let pane { self?.sensitive(pane) } },
-                NSView(), AppUI.button("撤销授权") { [weak self] in self?.coordinator.revoke(id) }
-            ]))
+            card.add(AppUI.button("敏感输入…", symbol: "lock") { [weak self, weak pane] in if let pane { self?.sensitive(pane) } })
             AppUI.add(card, to: records)
         }
         for pane in recordingOnly {
@@ -279,12 +299,6 @@ final class AgentControlView: InterfaceSurfaceView {
         needsLayout = true
     }
     @objc private func changePermission(_ sender: NSPopUpButton) { if let text = sender.identifier?.rawValue, let id = UUID(uuidString: text) { coordinator.setPermission(AgentPermission.allCases[sender.indexOfSelectedItem], pane: id) } }
-    private func approveIntegration(_ pane: TerminalPane) {
-        let alert = PopupAlert(); alert.messageText = "确认当前终端是空闲的 Bash / Zsh"
-        alert.informativeText = "目标：\(pane.title)\n请确认没有正在运行的命令、未提交的输入或密码提示。批准后将向此窗口输入可见的临时集成命令；不修改远端启动文件。其他 Shell 仅支持观察和人工操作。"
-        alert.addButton(withTitle: "确认空闲并启用"); alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }; attempt { try coordinator.integration(pane) }
-    }
     private func sensitive(_ pane: TerminalPane) {
         coordinator.takeover(pane.id, reason: "用户进入敏感输入", interrupt: false)
         let alert = PopupAlert(); alert.messageText = "敏感输入 · " + pane.title; alert.informativeText = "仅用于已出现的密码提示。输入值不会提供给 Agent 或写入审计正文。"

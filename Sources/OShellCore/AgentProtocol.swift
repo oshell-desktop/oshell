@@ -43,6 +43,17 @@ public struct AgentResponse: Codable, Sendable {
     public init(result: AgentValue = .null, error: String? = nil) { self.result = result; self.error = error }
 }
 public enum AgentIPC {
+    /// Only connection failures are retryable. Framing, decoding, peer identity
+    /// and application errors must not trigger automatic request replay.
+    public enum TransportFailure: Error, LocalizedError {
+        case unavailable, disconnected
+        public var errorDescription: String? {
+            switch self {
+            case .unavailable: return "无法连接 OShell Agent 服务；服务开启后，下次请求会自动重连，无需重新配对。"
+            case .disconnected: return "Agent 通道已关闭或超时；不能据此判断命令是否执行或停止。"
+            }
+        }
+    }
     public static let maxFrame = 262_144
     public static func directory(root: URL) throws -> URL {
         let hash = SHA256.hash(data: Data(root.standardizedFileURL.path.utf8)).prefix(10).map { String(format: "%02x", $0) }.joined()
@@ -62,7 +73,7 @@ public enum AgentIPC {
             while sent < bytes.count {
                 let n = Darwin.write(fd, ptr.baseAddress!.advanced(by: sent), bytes.count - sent)
                 if n < 0 && errno == EINTR { continue }
-                guard n > 0 else { throw ModelError.invalid("Agent 通道已断开；不能据此判断命令停止。") }
+                guard n > 0 else { throw TransportFailure.disconnected }
                 sent += n
             }
         }
@@ -74,7 +85,7 @@ public enum AgentIPC {
             while read < count {
                 let n = Darwin.read(fd, ptr.baseAddress!.advanced(by: read), count - read)
                 if n < 0 && errno == EINTR { continue }
-                guard n > 0 else { throw ModelError.invalid("Agent 通道已关闭或超时。") }
+                guard n > 0 else { throw TransportFailure.disconnected }
                 read += n
             }
         }; return data
@@ -97,7 +108,8 @@ public enum AgentIPC {
         var address = try AuthIPC.address(path)
         let result = withUnsafePointer(to: &address) { p in p.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         var uid: uid_t = 0, gid: gid_t = 0
-        guard result == 0, getpeereid(fd, &uid, &gid) == 0, uid == geteuid() else { throw ModelError.invalid("请在 OShell 中开启 Agent 服务；辅助程序不会自动开启服务。") }
+        guard result == 0 else { throw TransportFailure.unavailable }
+        guard getpeereid(fd, &uid, &gid) == 0, uid == geteuid() else { throw ModelError.invalid("Agent 服务身份不匹配，已拒绝连接。") }
         ok = true; return fd
     }
 }
@@ -120,6 +132,7 @@ public enum AgentCommandPolicy {
             return .human("交互程序、密码提示或主机上下文变化需要人工接管。")
         }
         if permission == .ask { return .approve }
+        if AgentQueryPolicy.allows(command) { return .automatic }
         // No expansion, redirects, quoting, pipelines, assignments, comments or substitutions in the automatic subset.
         guard command.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./- \t").contains($0) }),
               let name = words.first, !name.contains("/") else { return .approve }
@@ -135,10 +148,14 @@ public enum AgentCommandPolicy {
     }
     public static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     public static func integration(token: String) -> String {
-        // Explicit user confirmation of an idle Bash/Zsh is required before sending this visible probe.
-        "if [ -n \"${BASH_VERSION-}${ZSH_VERSION-}\" ]; then printf '\\033]779;OSHELL;\(token);ready\\007'; else printf '\\033]779;OSHELL;\(token);unsupported\\007'; fi\n"
+        // Authorization includes confirmation of an idle shell. Install once in the
+        // current process; never write startup files or replace existing prompt hooks.
+        AgentShellIntegration.bootstrap(token: token)
     }
-    public static func execution(command: String, token: String, operation: UUID) -> String {
-        "printf '\\033]779;OSHELL;\(token);start;\(operation.uuidString)\\007'; eval -- \(quote(command)); printf '\\033]779;OSHELL;\(token);end;\(operation.uuidString);%s\\007' \"$?\"\n"
+    public static func integrationPayload(token: String) -> String { AgentShellIntegration.payload(token: token) }
+    public static func execution(command: String) -> String {
+        // A multiline submission must reach one prompt boundary, while retaining
+        // current-shell changes such as cd and variables. Single lines stay verbatim.
+        command.contains("\n") ? "{\n\(command)\n}\n" : command + "\n"
     }
 }

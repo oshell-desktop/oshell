@@ -27,6 +27,8 @@ private final class SessionLinkDragFixture: NSObject, NSDraggingInfo {
 enum SessionLinksTest {
     static func run(_ controller: WorkspaceController) {
         var checks = [String: Bool]()
+        var titles = (try? SessionTitleSettings.load()) ?? .init()
+        titles.confirmTabClose = false; try? titles.save()
         var first = SessionProfile.local; first.name = "开发终端"
         var second = SessionProfile.local; second.name = "运维终端"
         var config = controller.configuration; config.preferences.metal = false
@@ -193,10 +195,85 @@ enum SessionLinksTest {
         var deleted = controller.configuration; deleted.profiles.removeAll { $0.id == second.id }; _ = controller.saveConfiguration(deleted)
         checks["deletedProfilesRemoveStaleLinks"] = !controller.configuration.sessionLinks.entries.contains { $0.profileID == second.id }
         checks["restartPreservesLinks"] = (try? controller.store.load().sessionLinks.entries) == controller.configuration.sessionLinks.entries
+        checkConnectionMenus(controller, checks: &checks)
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 }, "checks": checks]
         if let path = ProcessInfo.processInfo.environment["OSHELL_SESSION_LINKS_OUTPUT"] {
             try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
         }
         print(report); controller.shutdown(); NSApp.terminate(nil)
+    }
+
+    private static func checkConnectionMenus(_ controller: WorkspaceController, checks: inout [String: Bool]) {
+        let sources: [SessionProfile] = [SessionKind.ssh, .sftp, .ftp, .local].map { kind in
+            var profile = SessionProfile(name: kind.title + " 原会话", group: "来源", kind: kind, host: "192.0.2.10")
+            profile.quickConnect = kind != .ftp
+            return profile
+        }
+        let actual = sources.map { source -> SessionProfile in
+            var profile = source; profile.id = UUID(); profile.group = "Links/混合"; profile.quickConnect = true
+            return profile
+        }
+        var config = controller.configuration; config.profiles = sources + actual; config.directories = []
+        config.sessionLinks = SessionLinks(); config.sessionLinks.folders = ["空目录"]
+        for profile in sources {
+            config.sessionLinks.add(profileID: profile.id, name: profile.kind.title + " 引用", folder: "仅引用/内层")
+            config.sessionLinks.add(profileID: profile.id, name: profile.kind.title + " 引用", folder: "混合")
+        }
+        config.sessionLinks.add(profileID: sources[3].id, name: "根目录引用")
+        controller.quickMenu = NSMenu()
+        checks["menuFixtureSaved"] = controller.saveConfiguration(config)
+        let savedData = try? Data(contentsOf: controller.store.url)
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func submenu(_ menu: NSMenu?, _ path: [String]) -> NSMenu? {
+            path.reduce(menu) { parent, title in parent?.items.first(where: { $0.title == title })?.submenu }
+        }
+        let toolbar = controller.window?.contentView.flatMap { root in
+            descendants(root).first { $0.identifier?.rawValue == "toolbar.quickConnect" } as? NSPopUpButton
+        }
+        for (name, menu) in [("menubar", controller.quickMenu), ("toolbar", toolbar?.menu)] {
+            let links = submenu(menu, ["Links"]), nested = submenu(menu, ["Links", "仅引用", "内层"])
+            checks[name + "IncludesReferenceOnlyTree"] = nested?.items.count == sources.count
+            checks[name + "IncludesRootReference"] = links?.items.contains { $0.title == "根目录引用" } == true
+            checks[name + "OmitsEmptyDirectories"] = links != nil && links?.items.contains { $0.title == "空目录" } == false
+            checks[name + "KeepsOriginalQuickConnectFilter"] = submenu(menu, ["来源"])?.items.contains { $0.title == sources[2].name } == false
+            for source in sources {
+                let item = nested?.items.first { $0.title == source.kind.title + " 引用" }
+                checks[name + "Reference-" + source.kind.rawValue] = item?.representedObject as? UUID == source.id && item?.image === SessionListIcon.session(source.kind, shortcut: true).menuImage()
+            }
+        }
+        let mixed = controller.sessionLinkMenu(folder: "混合")
+        for source in sources {
+            let original = mixed.items.first { $0.title == source.name }, link = mixed.items.first { $0.title == source.kind.title + " 引用" }
+            for (label, item, shortcut) in [("original", original, false), ("reference", link, true)] {
+                let expected = SessionListIcon.session(source.kind, shortcut: shortcut).menuImage()
+                let row = item?.view as? SessionLinkBar.LinkButton
+                checks["folderMenuIcon-" + label + "-" + source.kind.rawValue] = item?.image === expected && row?.image === expected && row!.bounds.height >= expected.size.height
+            }
+        }
+        // Render the actual draggable menu rows for light/dark visual inspection.
+        if let output = ProcessInfo.processInfo.environment["OSHELL_SESSION_LINKS_OUTPUT"] {
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                let preview = NSImage(size: NSSize(width: 440, height: CGFloat(mixed.items.count) * 32 + 16))
+                NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
+                    preview.lockFocus(); NSColor.windowBackgroundColor.setFill(); NSRect(origin: .zero, size: preview.size).fill()
+                    for (index, item) in mixed.items.enumerated() {
+                        guard let row = item.view else { continue }
+                        row.setFrameSize(NSSize(width: 420, height: 32))
+                        NSGraphicsContext.saveGraphicsState()
+                        let transform = NSAffineTransform(); transform.translateX(by: 10, yBy: preview.size.height - CGFloat(index + 1) * 32 - 8); transform.concat()
+                        row.draw(row.bounds); NSGraphicsContext.restoreGraphicsState()
+                    }
+                    preview.unlockFocus()
+                }
+                if let tiff = preview.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: output).deletingPathExtension().appendingPathExtension(appearance.rawValue + ".png"))
+                }
+            }
+        }
+        let item = submenu(controller.quickMenu, ["Links"])?.items.first { $0.title == "根目录引用" }
+        let tabCount = controller.tabs.count
+        if let item, let action = item.action { _ = NSApp.sendAction(action, to: item.target, from: item) }
+        checks["quickReferenceConnectsOriginalProfile"] = controller.tabs.count == tabCount + 1 && controller.selectedTab?.activePane.profile.id == sources[3].id
+        checks["menuPresentationDoesNotRewriteConfiguration"] = savedData != nil && savedData == (try? Data(contentsOf: controller.store.url))
     }
 }

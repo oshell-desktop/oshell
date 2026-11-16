@@ -58,6 +58,9 @@ final class AgentPanelTest {
                     test.capture("ready-light", width: 520, appearance: .aqua)
                     test.button("mcp.authorize")?.performClick(nil)
                     test.checks["grantCreatedByUI"] = test.coordinator.grants[pane.id]?.permission == .assist
+                    test.checks["authorizationStartsShellWithoutSecondDialog"] = test.coordinator.grants[pane.id]?.integrationPending == true
+                    test.checks["terminalNamesControllingClient"] = pane.agentControlLabel.stringValue == "MCP 客户端：Codex · 本机开发 接入中" && !pane.agentControlBar.isHidden
+                    test.checks["noSeparateShellApprovalButton"] = !test.views(test.panel).compactMap { $0 as? NSButton }.contains { $0.title == "确认 Shell 集成…" }
                     test.checks["duplicateGrantDisabled"] = test.button("mcp.authorize")?.isEnabled == false
                     test.capture("authorized", width: 520, appearance: .darkAqua)
                     test.capture("authorized-narrow", width: 340, appearance: .aqua)

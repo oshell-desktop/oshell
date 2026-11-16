@@ -44,20 +44,28 @@ class Fixture:
         child,fd=pty.fork()
         if child==0:
             os.chdir(self.root)
-            os.execve('/bin/bash',['bash','--noprofile','--norc','-i'],dict(HOME=str(self.root),PATH='/usr/bin:/bin',TERM='xterm-256color',PS1='oshell-agent-fixture$ ',LC_ALL='en_US.UTF-8'))
+            shell=os.environ.get('OSHELL_AGENT_TEST_BASH','/bin/bash')
+            os.execve(shell,['bash','--noprofile','--norc','-i'],dict(HOME=str(self.root),PATH='/usr/bin:/bin',TERM='xterm-256color',PS1='oshell-agent-fixture$ ',PROMPT_COMMAND='__fixture_prompt_status=$?',LC_ALL='en_US.UTF-8'))
         self.children.append(child)
         fcntl.ioctl(fd,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0))
+        # Long readline input can block writing while the shell is blocked on
+        # echo output. Drain both directions like sshd instead of serial writes.
+        os.set_blocking(fd,False);pending=b''
         try:
             while not self.closed and not channel.closed:
-                ready,_,_=select.select([fd,channel],[],[],.1)
+                ready,writable,_=select.select([fd]+([channel] if len(pending)<65536 else []),[fd] if pending else [],[],.1)
                 if fd in ready:
-                    data=os.read(fd,65536)
+                    try:data=os.read(fd,65536)
+                    except BlockingIOError:continue
                     if not data:break
                     channel.sendall(data)
                 if channel in ready:
-                    data=channel.recv(65536)
+                    data=channel.recv(65536-len(pending))
                     if not data:break
-                    os.write(fd,data)
+                    pending+=data
+                if fd in writable:
+                    try:pending=pending[os.write(fd,pending):]
+                    except BlockingIOError:pass
         except (OSError,EOFError):pass
         finally:
             os.close(fd);channel.close()

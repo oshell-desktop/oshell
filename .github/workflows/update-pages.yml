@@ -5,6 +5,11 @@ name: Publish static update site
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      skip_tests:
+        description: 'Skip previously completed regression tests; retain signed metadata verification'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,10 +35,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Validate static-site generation
+      - name: Prepare static-site tools
         run: |
           python3 -m venv work/pages-tools
           work/pages-tools/bin/python -m pip install -r scripts/requirements-release.txt
+      - name: Validate static-site generation
+        if: ${{ !inputs.skip_tests }}
+        run: |
           work/pages-tools/bin/python scripts/test-update-pages.py
           work/pages-tools/bin/python scripts/test-update-migration.py
       - name: Configure Pages

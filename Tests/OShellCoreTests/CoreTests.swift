@@ -23,6 +23,134 @@ private func XCTAssertThrowsError<T>(_ value: @autoclosure () throws -> T, file:
 }
 
 final class CoreTests {
+    func testAgentTextReading() throws {
+        let token = UUID().uuidString
+        let start = "\u{1b}]779;OSHELL;\(token);start\u{7}", end = "\u{1b}]779;OSHELL;\(token);end;0\u{1b}\\"
+        let wire = Data(("echo SECRET_COMMAND\r\n" + start + "\u{1b}[31m中文🙂\u{1b}[0m\r\n\u{1b}]0;TITLE\u{7}keep\ttext\rnext\r\n" + "\u{1b}Pignored\u{7}still ignored\u{1b}\\" + end + "PROMPT>").utf8)
+        let expected = Data("中文🙂\nkeep\ttext\nnext\n".utf8)
+        for split in 0...wire.count {
+            var filter = AgentTextFilter(token: token)
+            XCTAssertEqual(filter.consume(wire.prefix(split)) + filter.consume(wire.dropFirst(split)), expected)
+            XCTAssertTrue(filter.started && filter.ended)
+        }
+        for mark in ["%", "#"] {
+            let decoration = "\u{1b}[1m\u{1b}[7m" + mark + "\u{1b}[27m\u{1b}[1m\u{1b}[0m" + String(repeating: " ", count: 80) + "\r \r"
+            let zsh = Data((start + "no newline" + decoration + end + "PROMPT").utf8)
+            for split in 0...zsh.count {
+                var filter = AgentTextFilter(token: token)
+                XCTAssertEqual(filter.consume(zsh.prefix(split)) + filter.consume(zsh.dropFirst(split)), Data("no newline".utf8))
+            }
+            var notPrompt = AgentTextFilter(token: token)
+            XCTAssertEqual(notPrompt.consume(Data((start + decoration + "actual output" + end).utf8)), Data((mark + String(repeating: " ", count: 80) + "\n \nactual output").utf8))
+        }
+        var byteFilter = AgentTextFilter(token: token), single = Data()
+        for byte in wire { single.append(byteFilter.consume(Data([byte]))) }
+        XCTAssertEqual(single, expected)
+        var missing = AgentTextFilter(token: token)
+        XCTAssertEqual(missing.consume(Data("no marker\u{1b}]779;OSHELL;other;start\u{7}still echo".utf8)), Data())
+        var hugeOSC = AgentTextFilter(token: token)
+        XCTAssertEqual(hugeOSC.consume(Data((start + "\u{1b}]" + String(repeating: "x", count: 100_000) + "\u{7}OK" + end).utf8)), Data("OK".utf8))
+
+        var window = AgentTextWindow()
+        window.append(Data("first\nERROR 中文\nignored\nERROR 🙂\n".utf8))
+        let chosen = window.select(lines: 1, contains: "ERROR", limit: 64)
+        XCTAssertEqual(String(decoding: chosen.data, as: UTF8.self), "ERROR 🙂\n"); XCTAssertTrue(chosen.truncated)
+        XCTAssertEqual(window.select(lines: 10, contains: "error", limit: 64).data, Data())
+        let short = window.select(lines: 10, contains: nil, limit: 3)
+        XCTAssertTrue(short.data.count <= 3 && String(data: short.data, encoding: .utf8) != nil && short.truncated)
+        var bounded = AgentTextWindow()
+        bounded.append(Data(String(repeating: "old line\n", count: 100_000).utf8)); bounded.append(Data("latest\n".utf8))
+        XCTAssertEqual(bounded.select(lines: 1, contains: nil, limit: 100).data, Data("latest\n".utf8))
+        XCTAssertTrue(bounded.truncated)
+        var invalidUTF8 = AgentTextWindow(); invalidUTF8.append(Data([65, 255]))
+        XCTAssertTrue(invalidUTF8.select(lines: 1, contains: nil, limit: 10).lossy)
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agent-text-check-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let audit = try AgentAudit(directory: root, metadata: [:]), operation = UUID()
+        for byte in wire { audit.append(.init(kind: "output", fields: ["operation": .string(operation.uuidString)], bytes: Data([byte]))) }
+        audit.finish(reason: "fixture"); audit.flush()
+        let key = try AgentAudit.key(directory: root, create: false)
+        let cursor = try AgentTextOutputCursor(url: audit.url, key: key, operation: operation, token: token, start: 0, watermark: audit.durableSequence)
+        var text = Data()
+        while try cursor.hasMore(watermark: audit.durableSequence) { text.append(try cursor.read(limit: 7, watermark: audit.durableSequence)) }
+        XCTAssertEqual(text, expected); XCTAssertEqual(cursor.position, wire.count)
+        let offset = Data(("echo SECRET_COMMAND\r\n" + start).utf8).count + 2
+        var prefix = AgentTextFilter(token: token)
+        _ = prefix.consume(wire.prefix(offset))
+        let seek = try AgentTextOutputCursor(url: audit.url, key: key, operation: operation, token: token, start: offset, watermark: audit.durableSequence)
+        XCTAssertEqual(try seek.read(limit: 65_536, watermark: audit.durableSequence), prefix.consume(wire.dropFirst(offset)))
+        XCTAssertThrowsError(try AgentTextOutputCursor(url: audit.url, key: key, operation: operation, token: token, start: wire.count + 1, watermark: audit.durableSequence))
+        let raw = try AgentOutputCursor(url: audit.url, key: key, operation: operation, start: 0)
+        XCTAssertEqual(try raw.read(limit: 65_536, watermark: audit.durableSequence), wire)
+    }
+    func testAgentQueryAndOutputUsability() throws {
+        let queries = ["free", "free -h", "free --mebi --total", "docker ps", "docker ps -a --no-trunc",
+            "docker ps --format '{{.ID}}\\t{{.Names}}\\t{{.Image}}'", "docker ps --format \"table {{.Names}} {{.Status}}\"",
+            "docker ps --format json", "docker ps --format=json", "docker ps -n 10 --filter name=fixture --filter status=running"]
+        for query in queries {
+            XCTAssertEqual(AgentCommandPolicy.decide(query, permission: .assist), .automatic)
+            XCTAssertEqual(AgentCommandPolicy.decide(query, permission: .full), .automatic)
+            XCTAssertEqual(AgentCommandPolicy.decide(query, permission: .ask), .approve)
+        }
+        for command in ["docker restart fixture", "docker exec fixture pwd", "docker -H remote ps", "docker --context other ps",
+            "docker ps --format '{{json .}}'", "docker ps --format '{{.Names}}'suffix", "docker ps --format '{{.Names}}",
+            "docker ps --format \"$(touch /tmp/fixture)\"", "docker ps --format \"`pwd`\"", "docker ps --format \"$HOME\"",
+            "docker ps --format \"{{.Names}}\\\"; touch /tmp/fixture\"", "docker ps; touch /tmp/fixture", "docker ps\nuptime",
+            "docker ps | cat", "docker ps > /tmp/fixture", "docker ps --filter name=*.log", "docker ps --last=-1",
+            "docker ps --last=1001", "docker ps --last 999999999999999999999", "docker ps --format", "docker ps --unknown",
+            "free -s 1", "free --seconds=1", "free -h; touch /tmp/fixture", "free $(pwd)", "free\nfree", "free --unknown"] {
+            XCTAssertTrue(AgentCommandPolicy.decide(command, permission: .assist) != .automatic)
+            XCTAssertTrue(AgentCommandPolicy.decide(command, permission: .full) != .automatic)
+        }
+        let longText = String(repeating: "中文🙂row\r\n", count: 3500)
+        let encoded = AgentOutputEncoding.compact(Data(longText.utf8))
+        XCTAssertEqual(encoded["encoding"], .string("utf8")); XCTAssertEqual(encoded["output_text"], .string(longText))
+        XCTAssertNil(encoded["output_base64"])
+        let ascii = AgentOutputEncoding.compact(Data(repeating: 65, count: 65_536))
+        XCTAssertEqual(ascii["encoding"], .string("utf8")); XCTAssertEqual(ascii["output_text"]?.string?.utf8.count, 65_536)
+        for bytes in [Data([0xff, 0xfe]), Data("中".utf8).prefix(1), Data("中".utf8).suffix(2), Data(repeating: 0, count: 38_000), Data(repeating: 0, count: 65_536)] {
+            let result = AgentOutputEncoding.compact(bytes)
+            XCTAssertEqual(result["encoding"], .string("base64")); XCTAssertNil(result["output_text"])
+            XCTAssertEqual(Data(base64Encoded: result["output_base64"]!.string!), bytes)
+            let payload = try JSONEncoder().encode(AgentResponse(result: .object(result)))
+            XCTAssertTrue(payload.count < AgentIPC.maxFrame)
+            let envelope = try JSONEncoder().encode(["content": [["type": "text", "text": String(decoding: payload, as: UTF8.self)]]])
+            XCTAssertTrue(envelope.count < AgentIPC.maxFrame)
+        }
+        XCTAssertEqual(AgentOutputEncoding.compact(Data())["output_text"], .string(""))
+        let token = UUID().uuidString, bootstrap = AgentCommandPolicy.integration(token: token)
+        let payload = AgentCommandPolicy.integrationPayload(token: token)
+        XCTAssertTrue(bootstrap.utf8.count < 1024 && !bootstrap.contains("__oshell_mcp_supported=1"))
+        XCTAssertTrue(payload.split(separator: "\n").allSatisfy { $0.hasPrefix(": ") && $0.utf8.count < 512 })
+        XCTAssertTrue(payload.contains(": OSHELL_END_" + token))
+        let echoBytes = Data((bootstrap.dropLast() + "\r\n" + "unexpected diagnostic\r\n").utf8)
+        for boundary in 0...echoBytes.count {
+            var filter = HostProbeEcho(command: String(bootstrap.dropLast()))
+            let visible = filter.consume(echoBytes.prefix(boundary)) + filter.consume(echoBytes.dropFirst(boundary)) + filter.flush()
+            XCTAssertEqual(String(decoding: visible, as: UTF8.self), "\r\u{1b}[2Kunexpected diagnostic\r\n")
+        }
+        let zleEcho = Data("\u{1b}[K\u{1b}[?2004hi\u{8}if co \r\u{1b}[Km\rmmand\u{1b}[?2004l\r\nRESULT\r\n".utf8)
+        for boundary in 0...zleEcho.count {
+            var filter = HostProbeEcho(command: "if command", shellEditing: true)
+            let visible = filter.consume(zleEcho.prefix(boundary)) + filter.consume(zleEcho.dropFirst(boundary)) + filter.flush()
+            XCTAssertEqual(String(decoding: visible, as: UTF8.self), "\u{1b}[?2004h\u{1b}[?2004l\r\u{1b}[2KRESULT\r\n")
+        }
+        for unknown in ["\u{1b}[?1049hif command\r\n", "\u{1b}[?2004hi\u{8}if ERROR\r\n"] {
+            var filter = HostProbeEcho(command: "if command", shellEditing: true)
+            XCTAssertEqual(filter.consume(Data(unknown.utf8)) + filter.flush(), Data(unknown.utf8))
+        }
+        let prompt = "^C\r\n\u{1b}]779;OSHELL;old;end;130\u{7}fixture% "
+        let mixed = Data(prompt.utf8) + zleEcho
+        for boundary in 0...mixed.count {
+            var filter = AgentIntegrationEcho(command: "if command")
+            let visible = filter.consume(mixed.prefix(boundary)) + filter.consume(mixed.dropFirst(boundary)) + filter.flush()
+            XCTAssertEqual(String(decoding: visible, as: UTF8.self), prompt + "\u{1b}[K\u{1b}[?2004h\u{1b}[?2004l\r\u{1b}[2KRESULT\r\n")
+        }
+        var unmatched = AgentIntegrationEcho(command: "if command")
+        let unexpected = Data(("if ERROR\r\n" + String(repeating: "i", count: 20_000)).utf8)
+        XCTAssertEqual(unmatched.consume(unexpected) + unmatched.flush(), unexpected)
+    }
     func testAgentAuditAndPolicy() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agent-audit-test-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2330,6 +2458,10 @@ extension CoreTests {
 
 @main struct CheckRunner {
     static func main() throws {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--agent-shell-fixture", let token = UUID(uuidString: CommandLine.arguments[2]) {
+            let fixture = ["bootstrap": AgentCommandPolicy.integration(token: token.uuidString), "payload": AgentCommandPolicy.integrationPayload(token: token.uuidString)]
+            print(String(decoding: try JSONEncoder().encode(fixture), as: UTF8.self)); return
+        }
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--global-proxy-fixture" {
             struct Fixture: Decodable { let global: [ProxySettings]; let session: [ProxySettings] }
             let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2])))
@@ -2358,9 +2490,24 @@ extension CoreTests {
             }
             print("PASS: encrypted session interoperability"); return
         }
+        if CommandLine.arguments.contains("--agent-reading-checks") {
+            try CoreTests().testAgentTextReading()
+            if failures.isEmpty { print("PASS: Agent text filtering, queries, bounded window and byte cursors") }
+            else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
+            return
+        }
+        if CommandLine.arguments.contains("--agent-usability-checks") {
+            try CoreTests().testAgentQueryAndOutputUsability()
+            try CoreTests().testRemoteIdentityAndEcho()
+            if failures.isEmpty { print("PASS: Agent query policy and compact output checks") }
+            else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
+            return
+        }
         try FontLibraryChecks.run()
         if CommandLine.arguments.contains("--font-library-checks") { return }
         let tests = CoreTests()
+        try tests.testAgentTextReading()
+        try tests.testAgentQueryAndOutputUsability()
         try tests.testAgentAuditAndPolicy()
         try tests.testUpdateSource()
         try tests.testGitHubReleaseMetadata()

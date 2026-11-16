@@ -75,6 +75,11 @@ extension WorkspaceController {
         else { getAIAssistant().show() }
     }
     @objc func showAISettings() { getAIAssistant().show() }
+    @objc func authorizeAgentFromTab(_ sender: NSMenuItem) {
+        guard isSecurityUnlocked, window?.attachedSheet == nil, NSApp.modalWindow == nil,
+              let id = sender.representedObject as? UUID, let pane = tabs.first(where: { $0.id == id })?.activePane, pane.agentEligible else { return }
+        getAIAssistant().quickAuthorize(pane)
+    }
     func showAI(for pane: TerminalPane) {
         pane.onFocus?(pane)
         let view = getAIAssistant(); view.show(); view.bind(pane)

@@ -37,7 +37,15 @@ final class SessionLinkBar: NSView {
             guard let item = enclosingMenuItem else { super.draw(dirtyRect); return }
             if item.isHighlighted { NSColor.selectedMenuItemColor.setFill(); bounds.fill() }
             let color: NSColor = item.isHighlighted ? .selectedMenuItemTextColor : .labelColor
-            (title as NSString).draw(in: bounds.insetBy(dx: 10, dy: 5), withAttributes: [.font: font ?? NSFont.menuFont(ofSize: 0), .foregroundColor: color])
+            if let image {
+                let rect = NSRect(x: 10 + (44 - image.size.width) / 2, y: (bounds.height - image.size.height) / 2, width: image.size.width, height: image.size.height)
+                image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            }
+            let font = font ?? NSFont.menuFont(ofSize: 0)
+            let textHeight = (title as NSString).size(withAttributes: [.font: font]).height
+            let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
+            let rect = NSRect(x: 62, y: (bounds.height - textHeight) / 2, width: max(0, bounds.width - 72), height: textHeight)
+            (title as NSString).draw(in: rect, withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
         }
     }
     private final class Canvas: NSView {
@@ -99,10 +107,11 @@ final class SessionLinkBar: NSView {
     override func menu(for event: NSEvent) -> NSMenu? { makeContextMenu?(nil) }
     func invalidateDragSources() { generation = UUID(); clearDropIndicator() }
     /// Native menu rows keep keyboard selection, while this view supplies mouse dragging.
-    func makeMenuLinkButton(_ target: Target, title: String, detail: String, open: @escaping () -> Void) -> LinkButton {
-        let button = LinkButton(frame: NSRect(x: 0, y: 0, width: min(420, max(180, (title as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width + 24)), height: 28))
+    func makeMenuLinkButton(_ target: Target, title: String, detail: String, icon: SessionListIcon, open: @escaping () -> Void) -> LinkButton {
+        let button = LinkButton(frame: NSRect(x: 0, y: 0, width: min(420, max(180, (title as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width + 72)), height: 32))
         button.bar = self; button.generation = generation; button.destination = target
         button.title = title; button.font = .menuFont(ofSize: 0); button.isBordered = false
+        button.image = icon.menuImage(); button.imagePosition = .imageLeading; button.imageScaling = .scaleNone
         button.autoresizingMask = [.width]; button.toolTip = detail + "\n按住拖动到链接栏可移动此项目"
         button.setAccessibilityLabel(title); button.target = button; button.action = #selector(LinkButton.activate)
         button.clicked = { [weak button] in

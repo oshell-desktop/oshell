@@ -39,7 +39,7 @@ final class OShellTerminal: LocalProcessTerminalView {
     override func layout() { super.layout(); owner?.resizeLocalTool() }
     override func keyDown(with event: NSEvent) {
         if owner?.reconnectOnReturn(event) == true { return }
-        if event.isARepeat, event.keyCode == 53, let owner, AgentCoordinator.shared.grants[owner.id]?.task != nil { return }
+        if event.isARepeat, event.keyCode == 53, let owner, AgentCoordinator.shared.grants[owner.id]?.controlActive == true { return }
         wordClickSeed = nil; userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyDown(with: event) }
     override func keyUp(with event: NSEvent) { userInputDepth += 1; defer { userInputDepth -= 1 }; super.keyUp(with: event) }
     override func insertText(_ string: Any, replacementRange: NSRange) { wordClickSeed = nil; userInputDepth += 1; defer { userInputDepth -= 1 }; super.insertText(string, replacementRange: replacementRange) }
@@ -274,6 +274,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     let id = UUID()
     var agentGeneration = UUID()
     var agentAudit: AgentAudit?
+    var agentIntegrationEcho: AgentIntegrationEcho?
     var agentInputKind: String?
     var agentSensitiveObservationBlocked = false
     var agentLastEscape: TimeInterval = 0
@@ -290,6 +291,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     let terminal: OShellTerminal
     let view = NSView()
     private let header = NSTextField(labelWithString: "")
+    let agentControlBar = NSView(), agentControlLabel = NSTextField(labelWithString: "")
+    var agentControlHeight: NSLayoutConstraint!
     private let headerBar = NSView()
     private var headerHeight: NSLayoutConstraint!
     let closeButton = PaneCloseButton()
@@ -638,7 +641,17 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         header.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(header); headerBar.addSubview(closeButton)
         header.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(focusHeader)))
-        [headerBar, searchPanel, terminal, transferProgress].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; view.addSubview($0) }
+        let stopAgent = NSButton(title: "终止接入", target: self, action: #selector(stopAgentAccess))
+        stopAgent.bezelStyle = .rounded; stopAgent.controlSize = .small
+        stopAgent.identifier = .init("terminal.mcp.stop")
+        stopAgent.toolTip = "停止 MCP 后续输入；当前命令继续运行。Ctrl+C 可终止接入并中断前台命令。"
+        agentControlLabel.font = .systemFont(ofSize: 11, weight: .medium); agentControlLabel.textColor = .controlAccentColor
+        agentControlLabel.lineBreakMode = .byTruncatingMiddle
+        agentControlLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        agentControlBar.identifier = .init("terminal.mcp.status"); agentControlBar.isHidden = true
+        agentControlHeight = agentControlBar.heightAnchor.constraint(equalToConstant: 0)
+        for item in [agentControlLabel, stopAgent] { item.translatesAutoresizingMaskIntoConstraints = false; agentControlBar.addSubview(item) }
+        [headerBar, agentControlBar, searchPanel, terminal, transferProgress].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; view.addSubview($0) }
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: headerBar.leadingAnchor),
             header.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
@@ -648,7 +661,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             headerBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
             headerBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
             headerBar.topAnchor.constraint(equalTo: view.topAnchor), headerHeight,
-            searchPanel.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
+            agentControlBar.topAnchor.constraint(equalTo: headerBar.bottomAnchor), agentControlHeight,
+            agentControlBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8), agentControlBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            agentControlLabel.leadingAnchor.constraint(equalTo: agentControlBar.leadingAnchor), agentControlLabel.centerYAnchor.constraint(equalTo: agentControlBar.centerYAnchor),
+            agentControlLabel.trailingAnchor.constraint(lessThanOrEqualTo: stopAgent.leadingAnchor, constant: -8),
+            stopAgent.trailingAnchor.constraint(equalTo: agentControlBar.trailingAnchor), stopAgent.centerYAnchor.constraint(equalTo: agentControlBar.centerYAnchor),
+            searchPanel.topAnchor.constraint(equalTo: agentControlBar.bottomAnchor),
             searchPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor), searchPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             transferProgress.topAnchor.constraint(equalTo: terminal.topAnchor, constant: 8),
             transferProgress.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
@@ -888,6 +906,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         var bytes = incoming
         receivedBytes += UInt64(incoming.count)
         bytes = identityOutput(bytes)
+        if var echo = agentIntegrationEcho {
+            bytes = echo.consume(bytes); agentIntegrationEcho = echo.finished ? nil : echo
+        }
         if var drain = abortDrain {
             bytes = drain.consume(bytes)
             abortDrain = drain.finished ? nil : drain
@@ -903,7 +924,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             return
         }
         // Agent command output cannot implicitly start a file transfer.
-        guard preferences.autoZmodem, AgentCoordinator.shared.grants[id]?.task == nil else { display(bytes); return }
+        guard preferences.autoZmodem, AgentCoordinator.shared.grants[id]?.controlActive != true else { display(bytes); return }
         let result = detector.consume(bytes)
         display(result.text)
         if finishingTransfer, !result.text.isEmpty { completeFinishing() }
@@ -914,6 +935,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 sendAbortSequence()
             } else { chooseTransfer(direction, initial: result.protocolBytes) }
         }
+    }
+    func finishAgentIntegrationEcho() {
+        guard var echo = agentIntegrationEcho else { return }
+        agentIntegrationEcho = nil
+        // Fail open: retain anything not verified as our exact bootstrap echo.
+        display(echo.flush())
     }
     private func display(_ bytes: Data) {
         guard !bytes.isEmpty else { return }
@@ -1154,7 +1181,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }; self.promptScan = nil
             let model = self.terminal.getTerminal()
-            guard self.observesHostIdentity, AgentCoordinator.shared.grants[self.id]?.task == nil, !model.isCurrentBufferAlternate else { return }
+            guard self.observesHostIdentity, AgentCoordinator.shared.grants[self.id]?.controlActive != true, !model.isCurrentBufferAlternate else { return }
             let text = model.getCursorLineText()
             guard let host = TerminalHostname.fromPrompt(text) else { return }
             self.startIdleTimer()
@@ -1162,7 +1189,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 // Bind the actual prompt alias to the just-reported identity.
                 self.integratedPromptPending = false; self.hostAliases.insert(host); self.lastPromptText = text
             } else if text != self.lastPromptText { self.lastPromptText = text; self.updateHostname(host) }
-            guard AgentCoordinator.shared.grants[self.id]?.task == nil, self.allowsActiveHostProbe, self.matchesCurrentHost(host), !self.userEditingLine, self.hostProbeToken == nil,
+            guard AgentCoordinator.shared.grants[self.id]?.controlActive != true, self.allowsActiveHostProbe, self.matchesCurrentHost(host), !self.userEditingLine, self.hostProbeToken == nil,
                   self.attemptedHostEpoch != self.hostEpoch, self.hostProbeWork == nil,
                   self.identityShellReady, !self.isTransferring else { return }
             let epoch = self.hostEpoch
@@ -1178,7 +1205,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
     var canRefreshHostIdentity: Bool {
         if !isShutdown && ended && interactiveTool == nil { return true }
-        return observesHostIdentity && identityShellReady && AgentCoordinator.shared.grants[id]?.task == nil
+        return observesHostIdentity && identityShellReady && AgentCoordinator.shared.grants[id]?.controlActive != true
             && !isTransferring && !userEditingLine && !terminal.getTerminal().isCurrentBufferAlternate && hostProbeToken == nil
             && !RemoteHostIdentity.isAuthenticationPrompt(terminal.getTerminal().getCursorLineText())
     }

@@ -15,10 +15,14 @@ def publish(source: Path, target: Path, running: list[str]) -> Path:
     if not (source/'Contents/MacOS/OShell').is_file():
         raise ValueError('The staged OShell app is incomplete.')
     target.parent.mkdir(parents=True, exist_ok=True)
-    if any(path.startswith(str(target) + '/') for path in running):
+    helper = str(target / 'Contents/Helpers/OShell-MCP')
+    if any(path.startswith(str(target) + '/') and path != helper for path in running):
         target = target.with_name('OShell-preview-' + uuid.uuid4().hex[:8] + '.app')
     # Rename entire directories; never truncate an executable mapped by another
     # process. Preserve the original on failure. Staging is on the same volume.
+    # OShell-MCP is statically linked against our code/SDK and reads no bundle
+    # resources. Unlinking its old image leaves the kernel's mapped vnode alive;
+    # never terminate it or overwrite its inode. Its STDIO belongs to the client.
     previous = source.parent / ('previous-' + uuid.uuid4().hex + '.app')
     existed = target.exists()
     if existed:
