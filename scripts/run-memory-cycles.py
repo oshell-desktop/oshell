@@ -20,6 +20,8 @@ parser.add_argument('--visible', action='store_true')
 parser.add_argument('--fullscreen', action='store_true')
 parser.add_argument('--capture-vm', action='store_true', help='Capture vmmap summaries before, during and after a >120 MiB peak')
 parser.add_argument('--idle-seconds', type=int, default=0, help='Keep fixed SSH tabs idle this many seconds per round (requires --background-tabs)')
+parser.add_argument('--active-seconds', type=int, default=0, help='Continuous output, input, tab/tile switching and resize per round (0...3600)')
+parser.add_argument('--lines-per-second', type=int, default=50, help='Synthetic output rate per SSH session during active soak (1...500)')
 parser.add_argument('--background-tabs', action='store_true', help='Visit every tab, leave the remaining tabs hidden, then verify background output and input')
 parser.add_argument('--editor', action='store_true', help='Open and cancel the new-session editor after each SSH connection settles')
 parser.add_argument('--display-index', type=int, help='Run fullscreen/geometry tests on this NSScreen index; default keeps the current display')
@@ -28,6 +30,9 @@ parser.add_argument('--steady-cursor', action='store_true', help='Use a steady c
 parser.add_argument('--geometry-cycles', type=int, choices=range(0,6), default=0, help='Repeat native fullscreen, rapid tab switches and return to the original window size')
 parser.add_argument('--switch-count', type=int, choices=range(1,101), default=20, help='Tab switches per geometry cycle')
 args = parser.parse_args()
+if not 0 <= args.active_seconds <= 3600 or args.active_seconds and not args.background_tabs: parser.error('--active-seconds requires --background-tabs and must be 0...3600')
+if not 1 <= args.lines_per_second <= 500: parser.error('--lines-per-second must be 1...500')
+if args.active_seconds and not args.visible: parser.error('--active-seconds requires --visible so a non-rendering run cannot pass')
 if args.display_index is not None and (args.display_index < 0 or not (args.fullscreen or args.geometry_cycles)): parser.error('--display-index requires --fullscreen or --geometry-cycles and a nonnegative index')
 if args.geometry_cycles and (args.fullscreen or args.minimize or not args.background_tabs or os.environ.get('OSHELL_MEMORY_SOFTWARE') == '1'): parser.error('--geometry-cycles requires Metal background tabs, starting in a normal window without --minimize')
 if args.minimize and (args.fullscreen or not args.background_tabs): parser.error('--minimize requires --background-tabs without --fullscreen')
@@ -49,14 +54,15 @@ libproc = ctypes.CDLL('/usr/lib/libproc.dylib')
 with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as directory:
     root = pathlib.Path(directory).resolve(); key = paramiko.RSAKey.generate(2048); password = secrets.token_hex(20)
     listener = socket.socket(); listener.bind(('127.0.0.1', 0)); listener.listen(32); port = listener.getsockname()[1]
-    facts = dict(authenticated=0, activeTransports=0, shells=0, connections=0, rejectedAuthentications=0); lock = threading.Lock()
+    facts = dict(authenticated=0, activeTransports=0, shells=0, connections=0, rejectedAuthentications=0, streamedLines=0); lock = threading.Lock()
     payload = ''.join(f'\x1b[3{i%7+1}m{i:04d} 主机内存测试 error warning '+ 'x'*100+'\x1b[0m\r\n' for i in range(args.lines)).encode() + b'MEMORY_OUTPUT_COMPLETE\r\n'
     if args.idle_seconds: payload += b'\x1b[2 q' if args.steady_cursor else b'\x1b[1 q'
     def session(channel, round_number):
         try:
             channel.sendall(payload)
             if args.background_tabs:
-                channel.settimeout(0.1); pending = b''; background_sent = False
+                channel.settimeout(0.05); pending = b''; background_sent = False
+                stream_line = 0; next_output = 0.0
                 while not channel.closed:
                     try: phase = json.loads((root/'phase.json').read_text())
                     except (FileNotFoundError, json.JSONDecodeError): phase = {}
@@ -64,6 +70,11 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
                         channel.sendall(f'\r\nBG_LOG_{round_number} 中文后台日志\r\n'.encode()); background_sent = True
                     if phase.get('phase') == f'open_{round_number}':
                         channel.send_exit_status(0); return
+                    if args.active_seconds and str(phase.get('phase', '')).startswith(f'active_{round_number}_') and time.monotonic() >= next_output:
+                        batch = max(1, args.lines_per_second // 10)
+                        text = ''.join(f'\x1b[38;5;{(stream_line+i)%256}mSOAK {stream_line+i:08d} {chr(0x4e00+(stream_line+i)%2048)} 中文 é🙂 abcdef 0123456789\x1b[0m\r\n' for i in range(batch))
+                        channel.sendall(text.encode()); stream_line += batch; next_output = time.monotonic() + batch/args.lines_per_second
+                        with lock: facts['streamedLines'] += batch
                     try:
                         data = channel.recv(4096)
                         if not data: return
@@ -131,6 +142,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
     if args.editor: env['OSHELL_MEMORY_OPEN_EDITOR']='1'
     if args.background_tabs: env['OSHELL_MEMORY_BACKGROUND_TABS']='1'
     if args.idle_seconds: env['OSHELL_MEMORY_IDLE_SECONDS']=str(args.idle_seconds)
+    if args.active_seconds: env['OSHELL_MEMORY_ACTIVE_SECONDS']=str(args.active_seconds)
     app=None; target=None
     captures=[]; captured=set()
     bundle='app.oshell.memory-cycles.'+uuid.uuid4().hex
@@ -155,7 +167,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
             started=time.monotonic()
             while app.poll() is None:
                 now=time.monotonic()
-                if now-started>240+args.rounds*(args.idle_seconds+args.geometry_cycles*(35+args.switch_count*.5)): raise TimeoutError('SSH memory profile exceeded its run limit')
+                if now-started>240+args.rounds*(args.idle_seconds+args.active_seconds+args.geometry_cycles*(35+args.switch_count*.5)): raise TimeoutError('SSH memory profile exceeded its run limit')
                 if now-last_phase_read>.1:
                     try: phase=json.loads((root/'phase.json').read_text())['phase']
                     except (FileNotFoundError,json.JSONDecodeError): pass
@@ -185,6 +197,15 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
         result['checks']['allTransportsClosed']=facts['activeTransports']==0
         result['highFrequency']=timeline; result['outputLinesPerSession']=args.lines; result['idleSecondsPerRound']=args.idle_seconds; result['rounds']=args.rounds
         result['idleCursorStyle']='steady' if args.steady_cursor else 'blinking'
+        result['activeSecondsPerRound']=args.active_seconds
+        result['linesPerSecondPerSession']=args.lines_per_second
+        if args.active_seconds:
+            result['checks']['continuousOutputObserved']=facts['streamedLines'] >= args.rounds*args.sessions*args.active_seconds*args.lines_per_second*.7
+            closed=[next((s for s in reversed(result['samples']) if s['phase']==f'closed_{r}'),None) for r in range(1,args.rounds+1)]
+            result['checks']['allActiveCyclesClosed']=all(s is not None for s in closed)
+            if len(closed)>1 and all(s is not None for s in closed):
+                for field, budget in [('heapInUseMiB',16),('footprintMiB',64),('metalDeviceAllocatedMiB',16),('openFDsBelow1024',4)]:
+                    result['checks']['postWarmupBounded-'+field]=max(s[field] for s in closed[1:])-closed[0][field] <= budget
         result['geometryCycles']=args.geometry_cycles
         result['testWindow']='panel' if env.get('OSHELL_MEMORY_PANEL')=='1' else 'workspace'
         if not timeline: raise RuntimeError('No per-process memory samples were available')
@@ -203,6 +224,13 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
                 (project/'validation'/f'{label}-{log_file.name}').write_text(log_file.read_text(errors='replace').replace(password, '[redacted]'))
         (project/'validation'/f'{label}.json').write_text(json.dumps(result,indent=2))
         print(json.dumps({k:v for k,v in result.items() if k!='highFrequency'},indent=2)); sys.exit(0 if result['passed'] else 1)
+    except Exception as error:
+        # Preserve a failed run as failed evidence even when the app never wrote
+        # its final report. The temporary clone and synthetic fixture still exit.
+        partial = dict(passed=False, error=str(error), phase=locals().get('phase'),
+                       highFrequency=locals().get('timeline',[]), server=facts)
+        (project/'validation'/f'{label}-aborted.json').write_text(json.dumps(partial,indent=2))
+        raise
     finally:
         listener.close()
         for capture in captures:
@@ -219,3 +247,6 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
             try: app.wait(timeout=5)
             except subprocess.TimeoutExpired: app.kill(); app.wait()
         subprocess.run(['defaults','delete',bundle],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        registrar='/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+        if (root/'OShell Memory Test.app').exists():
+            subprocess.run([registrar,'-u',str(root/'OShell Memory Test.app')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

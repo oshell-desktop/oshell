@@ -7,6 +7,15 @@ import OShellCore
 /// before opening any terminal, and keep these directories runtime-only.
 final class FinderDirectoryServices: NSObject {
     private let openDirectories: ([URL]) throws -> Void
+    var openWindow: ((WindowLauncher) -> Void)?
+    @objc(openOShellWindow:userData:error:)
+    func openOShellWindow(_ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
+        guard let value = userData, let mode = WindowLauncher(rawValue: value), let openWindow else {
+            error?.pointee = "无法识别 OShell 窗口启动入口。"; return
+        }
+        // Return to the Services caller before any workspace authentication dialog.
+        DispatchQueue.main.async { openWindow(mode) }
+    }
     init(open: @escaping ([URL]) throws -> Void) { openDirectories = open }
     static func directories(from pasteboard: NSPasteboard) throws -> [URL] {
         var urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [NSURL])?.map { $0 as URL } ?? []

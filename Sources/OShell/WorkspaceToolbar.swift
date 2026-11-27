@@ -156,12 +156,18 @@ extension WorkspaceController {
             showCurrentSessionProperties()
             return
         }
-        let source = credentialProfiles.first { $0.id == pane.profile.id } ?? pane.profile
+        if configuration.profiles.contains(where: { $0.id == pane.profile.id }) {
+            editSavedSession(profileID: pane.profile.id)
+            return
+        }
+        let source = pane.profile
+        var sshMode: SSHSessionMode?
+        var targetChange: TargetPasswordChange?
         var titleChoice: (UUID, SessionTitleDisplayMode)?
-        guard let profile = Dialogs.session(source, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor, titleSelection: { titleChoice = ($0, $1) }) else { return }
+        guard let profile = Dialogs.session(source, profiles: credentialProfiles, directories: SessionDirectory.all(configuration), defaults: configuration.sessionDefaults, proxies: configuration.proxies, manageProxies: manageProxiesForEditor, localSelection: { sshMode = $0; targetChange = $1 }, titleSelection: { titleChoice = ($0, $1) }) else { return }
         var value = configuration
-        if let index = value.profiles.firstIndex(where: { $0.id == source.id }) { value.profiles[index] = profile }
-        else { value.profiles.append(profile) }
-        if saveConfiguration(value) { saveSessionTitleChoice(titleChoice) }
+        guard !value.profiles.contains(where: { $0.id == source.id }) else { Dialogs.message("会话已在其他窗口保存，请重新打开属性。"); return }
+        value.profiles.append(profile)
+        if saveConfiguration(value, targetEdit: targetChange.map { .init(id: profile.id, expectedRevision: nil, change: $0) }, modeUpdates: sshMode.map { [profile.id: $0] } ?? [:]) { saveSessionTitleChoice(titleChoice) }
     }
 }

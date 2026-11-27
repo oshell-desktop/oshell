@@ -33,9 +33,11 @@ final class AgentPanelTest {
         } else { checks[name + "-snapshot"] = false }
     }
     static func run(_ workspace: WorkspaceController) {
-        guard let path = ProcessInfo.processInfo.environment["OSHELL_AGENT_PANEL_OUTPUT"] else { return }
+        let maintenance = CommandLine.arguments.contains("--agent-maintenance-test")
+        guard let path = ProcessInfo.processInfo.environment[maintenance ? "OSHELL_AGENT_MAINTENANCE_OUTPUT" : "OSHELL_AGENT_PANEL_OUTPUT"] else { return }
         let test = AgentPanelTest(workspace, output: URL(fileURLWithPath: path)); retained = test
         test.window.center(); test.window.makeKeyAndOrderFront(nil)
+        if maintenance { test.maintenancePreview(); test.finish(); return }
         test.configurationPreview()
         test.checks["serviceDefaultsOff"] = !test.coordinator.enabled
         test.checks["disabledPrerequisites"] = test.button("mcp.pair")?.isEnabled == false && test.button("mcp.authorize")?.isEnabled == false
@@ -59,7 +61,7 @@ final class AgentPanelTest {
                     test.button("mcp.authorize")?.performClick(nil)
                     test.checks["grantCreatedByUI"] = test.coordinator.grants[pane.id]?.permission == .assist
                     test.checks["authorizationStartsShellWithoutSecondDialog"] = test.coordinator.grants[pane.id]?.integrationPending == true
-                    test.checks["terminalNamesControllingClient"] = pane.agentControlLabel.stringValue == "MCP 客户端：Codex · 本机开发 接入中" && !pane.agentControlBar.isHidden
+                    test.checks["terminalNamesControllingClient"] = pane.agentControlLabel.stringValue.hasPrefix("MCP 客户端：Codex · 本机开发 ") && !pane.agentControlBar.isHidden
                     test.checks["noSeparateShellApprovalButton"] = !test.views(test.panel).compactMap { $0 as? NSButton }.contains { $0.title == "确认 Shell 集成…" }
                     test.checks["duplicateGrantDisabled"] = test.button("mcp.authorize")?.isEnabled == false
                     test.capture("authorized", width: 520, appearance: .darkAqua)
@@ -71,6 +73,44 @@ final class AgentPanelTest {
                 } else if Date() > deadline { timer.invalidate(); test.checks["localShellReady"] = false; test.finish() }
             }
         } catch { test.checks["setup"] = false; test.finish() }
+    }
+    private func maintenancePreview() {
+        let saved = UserDefaults.standard.data(forKey: AgentAuditRetentionPreferences.key)
+        checks["recoveryEntryAvailableWithServiceOff"] = button("mcp.recovery")?.isEnabled == true && !coordinator.enabled
+        checks["retentionEntryAvailableWithServiceOff"] = button("mcp.retention")?.isEnabled == true
+        for (name, width, appearance) in [("maintenance-dark", 520.0, NSAppearance.Name.darkAqua), ("maintenance-light", 520.0, .aqua), ("maintenance-narrow", 340.0, .darkAqua)] { capture(name, width: width, appearance: appearance) }
+        do {
+            let fields = AgentAuditRetentionSettingsView(policy: try AgentAuditRetentionPolicy(), result: "容量目标暂未达到：正在记录、回放或导出的文件受到保护，不会中断当前会话。")
+            checks["defaultFieldsUnlimited"] = try !fields.value().enabled
+            fields.days.stringValue = "30"; fields.capacity.stringValue = "5"
+            checks["customFieldsParsed"] = try fields.value() == AgentAuditRetentionPolicy(days: 30, maximumBytes: 5 * 1_073_741_824)
+            fields.capacity.stringValue = "999999999999999999999999"
+            do { _ = try fields.value(); checks["overflowRejected"] = false } catch { checks["overflowRejected"] = true }
+            fields.capacity.stringValue = "5"
+            let preview = NSWindow(contentRect: fields.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            preview.isReleasedWhenClosed = false; preview.title = "审计保留设置 · 合成数据"; preview.contentView = fields
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                preview.appearance = NSAppearance(named: appearance); preview.makeKeyAndOrderFront(nil)
+                fields.layoutSubtreeIfNeeded(); preview.display()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+                checks["settingsBounds-" + appearance.rawValue] = views(fields).filter { $0 is NSControl }.allSatisfy {
+                    let frame = $0.convert($0.bounds, to: fields)
+                    let inside = frame.minX >= -1 && frame.maxX <= fields.bounds.width + 1 && frame.minY >= -1 && frame.maxY <= fields.bounds.height + 1
+                    if !inside { print("Maintenance field outside bounds: \($0.identifier?.rawValue ?? String(describing: type(of: $0)))) \(frame) / \(fields.bounds)") }
+                    return inside
+                }
+                if let bitmap = fields.bitmapImageRepForCachingDisplay(in: fields.bounds) {
+                    fields.cacheDisplay(in: fields.bounds, to: bitmap)
+                    try? bitmap.representation(using: .png, properties: [:])?.write(to: output.deletingPathExtension().appendingPathExtension("settings-" + appearance.rawValue + ".png"))
+                }
+            }
+            preview.close()
+            let archive = AgentArchiveWindow()
+            checks["archiveRetentionEntry"] = archive.window?.contentView.map { views($0).contains { $0.identifier?.rawValue == "mcp.retention" } } == true
+            archive.close()
+        } catch { checks["settingsConstruction"] = false }
+        checks["previewDidNotChangeRetentionPolicy"] = UserDefaults.standard.data(forKey: AgentAuditRetentionPreferences.key) == saved
+        checks["noServiceOrGrantCreated"] = !coordinator.enabled && coordinator.grants.isEmpty
     }
     private func configurationPreview() {
         do {

@@ -60,6 +60,8 @@ final class AuthBroker {
     private var source: DispatchSourceRead?
     private var stopped = false
     private var policy: SavedPasswordPolicy?
+    private var bastionCredential: ((String) -> SessionProfile?)?
+    private var sawKeyboardInteractive = false
     private var proxyAttempted = false
     private var routeAttempts = Set<UUID>()
     private var routePolicies = [UUID: SavedPasswordPolicy]()
@@ -67,6 +69,8 @@ final class AuthBroker {
     private let permitsSaving: Bool
     private lazy var loginIdentity: SSHIdentity? = try? SSHIdentity.resolve(profile)
     private let profile: SessionProfile
+    private(set) var authenticatedHash = ""
+    var terminalStartNonce: UUID?
     var onAuthenticated: (() -> Void)?
     var onSavePassword: ((SessionProfile, String, SSHIdentity) -> Void)?
     var manualPrompt: ((AuthRequest, @escaping (AuthResponse) -> Void) -> Void)?
@@ -74,7 +78,7 @@ final class AuthBroker {
         guard profile.runtimeProxyRoute.count <= ProxyCatalog.maximumHops, Set(profile.runtimeProxyRoute.map(\.id)).count == profile.runtimeProxyRoute.count else { throw ModelError.invalid("代理链重复或过长。") }
         for proxy in profile.runtimeProxyRoute { try proxy.validate() }
         self.profile = profile; self.permitsSaving = permitsSaving && oneTimePassword == nil
-        if let oneTimePassword { policy = SavedPasswordPolicy(identity: try SSHIdentity.resolve(profile), password: oneTimePassword) }
+        if let oneTimePassword { policy = SavedPasswordPolicy(identity: try SSHIdentity.resolve(profile), password: oneTimePassword, mode: profile.runtimeSSHMode) }
         directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("oa-" + String(UUID().uuidString.prefix(8)))
         endpoint = directory.appendingPathComponent("s")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -117,9 +121,46 @@ final class AuthBroker {
         }
         reader.setCancelHandler { close(fd) }; reader.resume(); source = reader
     }
+    /// Keep using Apple SSH when a host needs options unavailable in the bundled client.
+    private static func compatibleBastionClient(arguments: [String]) -> URL? {
+        let client = ZmodemTransfer.helperDirectory.appendingPathComponent("OShell-SSH")
+        let probe = Process()
+        probe.executableURL = client
+        probe.arguments = ["-G"] + arguments
+        probe.standardOutput = FileHandle.nullDevice
+        probe.standardError = FileHandle.nullDevice
+        do { try probe.run() } catch { return nil }
+        probe.waitUntilExit()
+        return probe.terminationStatus == 0 ? client : nil
+    }
+
+    func bastionClient(arguments: inout [String], destination: (identity: SSHIdentity, connectionHash: String),
+                       savedProfile: @escaping () -> SessionProfile?) -> URL? {
+        guard permitsSaving, profile.runtimeSSHMode != .terminal, let saved = savedProfile(),
+              saved.id == profile.id, saved.encryptedPassword?.identity == destination.identity,
+              saved.sshAuthenticationMethods?.contains(.keyboardInteractive) != false else { return nil }
+
+        var clientArguments = arguments
+        if profile.sshAuthenticationMethods?.contains(.publicKey) == false {
+            // Apple's UseKeychain config controls private-key passphrases only.
+            clientArguments = ["-o", "IgnoreUnknown=UseKeychain"] + clientArguments
+        }
+        guard let client = Self.compatibleBastionClient(arguments: clientArguments) else { return nil }
+        arguments = clientArguments
+        bastionCredential = { hash in
+            guard !hash.isEmpty, hash == destination.connectionHash,
+                  let current = savedProfile(), current.id == saved.id,
+                  current.sshAuthenticationMethods?.contains(.keyboardInteractive) != false,
+                  current.encryptedPassword?.identity == destination.identity,
+                  let resolved = try? SSHIdentity.resolution(current), resolved == destination else { return nil }
+            return current
+        }
+        return client
+    }
+
     var environment: [String: String] {
         ["SSH_ASKPASS": ZmodemTransfer.helperDirectory.appendingPathComponent("OShellAskpass").path,
-                      "SSH_ASKPASS_REQUIRE": "force", "OSHELL_AUTH_PROXY_ID": "", "OSHELL_AUTH_SOCKET": endpoint.path, "OSHELL_AUTH_TOKEN": token]
+                      "SSH_ASKPASS_REQUIRE": "force", "SSH_ASKPASS_PROMPT": "", "OSHELL_AUTH_PROXY_ID": "", "OSHELL_AUTH_SOCKET": endpoint.path, "OSHELL_AUTH_TOKEN": token]
     }
     private func enqueue(_ request: AuthRequest, client: Int32, completion: @escaping (AuthResponse) -> Void) {
         // These are protocol notifications, never prompts. In particular a ready
@@ -152,8 +193,9 @@ final class AuthBroker {
             respondProxy(proxy, request: request, completion: completion); return
         }
         if request.hint == "oshell-session-ready" {
+            authenticatedHash = request.prompt
             let pending = pendingPassword; pendingPassword = nil
-            onAuthenticated?(); completion(AuthResponse(success: true))
+            onAuthenticated?(); completion(AuthResponse(success: true, answer: terminalStartNonce?.uuidString ?? ""))
             if let pending {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, !self.stopped else { return }
@@ -175,7 +217,7 @@ final class AuthBroker {
                 }
             } else if let manualPrompt { manualPrompt(request, completion) }
             else {
-                let alert = PopupAlert(); alert.messageText = "代理身份验证"; alert.informativeText = "\(profile.proxy.username)@\(profile.proxy.host):\(profile.proxy.port)"
+                let alert = PopupAlert.terminalOperation(); alert.messageText = "代理身份验证"; alert.informativeText = "\(profile.proxy.username)@\(profile.proxy.host):\(profile.proxy.port)"
                 alert.addButton(withTitle: "连接"); alert.addButton(withTitle: "取消")
                 let password = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 330, height: 26))
                 alert.accessoryView = password; alert.window.initialFirstResponder = password
@@ -185,9 +227,30 @@ final class AuthBroker {
             return
         }
         if request.hint == "none" { completion(AuthResponse(success: true)); return }
+        if let hash = request.keyboardInteractiveHash {
+            let first = !sawKeyboardInteractive
+            sawKeyboardInteractive = true
+            guard first, policy == nil, permitsSaving, authenticatedHash.isEmpty,
+                  !hash.isEmpty, let current = bastionCredential?(hash),
+                  current.id == profile.id, let envelope = current.encryptedPassword,
+                  envelope.identity == request.keyboardInteractiveIdentity else {
+                promptForSSH(request, saveIdentity: nil, completion: completion)
+                return
+            }
+            PasswordVault.shared.decrypt(current) { [weak self] result in
+                guard let self, !self.stopped else { completion(AuthResponse(success: false)); return }
+                guard case .success(let (password, identity)) = result, identity == envelope.identity,
+                      self.bastionCredential?(hash)?.encryptedPassword == envelope else {
+                    self.promptForSSH(request, saveIdentity: nil, completion: completion)
+                    return
+                }
+                completion(AuthResponse(success: true, answer: password))
+            }
+            return
+        }
         let saveIdentity: SSHIdentity? = {
             guard permitsSaving, profile.kind == .ssh, onSavePassword != nil, let identity = loginIdentity else { return nil }
-            var match = SavedPasswordPolicy(identity: identity, password: "probe")
+            var match = SavedPasswordPolicy(identity: identity, password: "probe", mode: profile.runtimeSSHMode)
             return match.reply(prompt: request.prompt, hint: request.hint) == nil ? nil : identity
         }()
         // A repeated password prompt means the preceding attempt was rejected.
@@ -195,14 +258,14 @@ final class AuthBroker {
         if var policy, let answer = policy.reply(prompt: request.prompt, hint: request.hint) {
             self.policy = policy; completion(AuthResponse(success: true, answer: answer)); return
         }
-        if policy == nil, let envelope = profile.encryptedPassword, request.hint != "confirm" {
-            var check = SavedPasswordPolicy(identity: envelope.identity, password: "probe")
+        if policy == nil, !sawKeyboardInteractive, let envelope = profile.encryptedPassword, request.hint != "confirm" {
+            var check = SavedPasswordPolicy(identity: envelope.identity, password: "probe", mode: profile.runtimeSSHMode)
             if check.reply(prompt: request.prompt, hint: request.hint) != nil {
                 PasswordVault.shared.decrypt(profile) { [weak self] result in
                     guard let self, !self.stopped else { completion(AuthResponse(success: false)); return }
                     switch result {
                     case .success(let value):
-                        var policy = SavedPasswordPolicy(identity: value.1, password: value.0)
+                        var policy = SavedPasswordPolicy(identity: value.1, password: value.0, mode: self.profile.runtimeSSHMode)
                         let answer = policy.reply(prompt: request.prompt, hint: request.hint)
                         self.policy = policy; completion(AuthResponse(success: answer != nil, answer: answer ?? ""))
                     case .failure(let error): Dialogs.message(error.localizedDescription); completion(AuthResponse(success: false))
@@ -211,9 +274,13 @@ final class AuthBroker {
                 return
             }
         }
+        promptForSSH(request, saveIdentity: saveIdentity, completion: completion)
+    }
+
+    private func promptForSSH(_ request: AuthRequest, saveIdentity: SSHIdentity?, completion: @escaping (AuthResponse) -> Void) {
         if let manualPrompt { manualPrompt(request, completion); return }
-        let alert = PopupAlert(); alert.messageText = "SSH 身份验证"; alert.informativeText = profile.name + "\n" + request.prompt
-        if request.hint == "confirm" || request.prompt.contains("(yes/no") {
+        let alert = PopupAlert.terminalOperation(); alert.messageText = "SSH 身份验证"; alert.informativeText = profile.name + "\n" + request.prompt
+        if request.keyboardInteractiveHash == nil && (request.hint == "confirm" || request.prompt.contains("(yes/no")) {
             alert.addButton(withTitle: "确认连接"); alert.addButton(withTitle: "取消")
             completion(AuthResponse(success: true, answer: runPrompt(alert) == .alertFirstButtonReturn ? "yes" : "no")); return
         }
@@ -273,7 +340,7 @@ final class AuthBroker {
             }
         }
         if let manualPrompt { manualPrompt(request, completion); return }
-        let alert = PopupAlert(); alert.messageText = proxy.kind == .jump ? "SSH 跳板机认证" : "代理身份验证"
+        let alert = PopupAlert.terminalOperation(); alert.messageText = proxy.kind == .jump ? "SSH 跳板机认证" : "代理身份验证"
         alert.informativeText = "\(proxy.username)@\(proxy.host):\(proxy.port)\n" + (proxy.kind == .jump ? request.prompt : "请输入代理密码。")
         if request.hint == "confirm" || request.prompt.contains("(yes/no") {
             alert.addButton(withTitle: "确认连接"); alert.addButton(withTitle: "取消")

@@ -21,6 +21,10 @@ public final class AgentAudit: @unchecked Sendable {
     private final class WeakAudit { weak var value: AgentAudit?; init(_ value: AgentAudit) { self.value = value } }
     private static let registryLock = NSLock()
     private static var registry = [WeakAudit]()
+    public static var liveURLs: Set<URL> {
+        registryLock.lock(); defer { registryLock.unlock() }
+        return Set(registry.compactMap { $0.value?.url.standardizedFileURL })
+    }
     public static func flushAll() {
         registryLock.lock(); let values = registry.compactMap(\.value); registryLock.unlock()
         values.forEach { $0.flush() }
@@ -148,7 +152,9 @@ public final class AgentAudit: @unchecked Sendable {
             if overflow { failed(ModelError.invalid("记录队列达到上限，已停止新的自动执行；此后存在输出缺口。")) }
             completion?(false); return false
         }
-        queued += size; highWater = max(highWater, queued); lock.unlock()
+        queued += size; highWater = max(highWater, queued)
+        // Admission and enqueue are one operation: finish cannot overtake an
+        // accepted event while its caller is waiting to submit to the queue.
         queue.async { [self] in
             var success = false
             if error == nil {
@@ -158,13 +164,21 @@ public final class AgentAudit: @unchecked Sendable {
             if crossed { onDrain?() }
             completion?(success)
             if success { onCommit?() }
-        }; return true
+        }
+        lock.unlock(); return true
     }
     public func finish(reason: String) {
-        lock.lock(); let finished = closed; lock.unlock(); if finished { return }
-        _ = append(.init(kind: "seal", fields: ["reason": .string(reason)]))
-        lock.lock(); closed = true; lock.unlock()
-        queue.async { [self] in do { try handle.close() } catch { failed(error) } }
+        lock.lock(); defer { lock.unlock() }
+        guard !closed else { return }; closed = true
+        queue.async { [self] in
+            do {
+                if error == nil {
+                    try write(.init(kind: "seal", fields: ["reason": .string(reason)]))
+                    onCommit?()
+                }
+                try handle.close()
+            } catch { failed(error); try? handle.close() }
+        }
     }
     public func flush() { queue.sync {} }
     deinit { try? handle.close() }
@@ -172,23 +186,28 @@ public final class AgentAudit: @unchecked Sendable {
     /// Bounded streaming decode, never returns an unauthenticated or out-of-sequence event.
     /// A missing seal is an incomplete recording, including a cleanly truncated crash tail.
     public final class Reader {
-        private let file: FileHandle, id: UUID, key: SymmetricKey
+        private let retentionLease: AgentAuditRetention.Lease
+        private let file: FileHandle, key: SymmetricKey, header: Data
+        let id: UUID
         private var digest = Data(repeating: 0, count: 32), sequence = 1, sealed = false, gap = false
         public var complete: Bool { sealed && !gap }
         public init(url: URL, key: SymmetricKey) throws {
-            let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            retentionLease = AgentAuditRetention.protect(url)
+            let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
             guard fd >= 0 else { throw ModelError.invalid("无法打开审计记录。") }
             file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            var info = stat()
+            guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw ModelError.invalid("审计记录必须为普通文件。") }
             let magic = Data("OSHELL-AUDIT-1\n".utf8)
             guard try file.read(upToCount: magic.count) == magic,
                   let idData = try file.read(upToCount: 36), let id = UUID(uuidString: String(decoding: idData, as: UTF8.self)) else { throw ModelError.invalid("不支持或损坏的审计格式。") }
-            self.id = id; self.key = AgentAudit.archiveKey(master: key, id: id)
+            self.id = id; self.key = AgentAudit.archiveKey(master: key, id: id); header = magic + idData
         }
         /// Live readers must stop at the writer's durable watermark, never parse an in-flight tail.
         public func next(through watermark: Int = .max) throws -> AgentAuditEvent? {
             try autoreleasepool { try decodeNext(through: watermark) }
         }
-        private func decodeNext(through watermark: Int) throws -> AgentAuditEvent? {
+        private func decodeNext(through watermark: Int, copyingTo output: FileHandle? = nil) throws -> AgentAuditEvent? {
             guard sequence <= watermark else { return nil }
             guard let header = try file.read(upToCount: 4), !header.isEmpty else { return nil }
             guard !sealed, header.count == 4 else { throw ModelError.invalid("审计尾部损坏。") }
@@ -197,8 +216,21 @@ public final class AgentAudit: @unchecked Sendable {
             let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: cipher), using: key, authenticating: AgentAudit.associated(id: id, sequence: sequence, digest: digest))
             let event = try JSONDecoder().decode(AgentAuditEvent.self, from: AgentAudit.unpack(plain))
             guard event.sequence == sequence else { throw ModelError.invalid("审计序号不连续。") }
+            // Export exactly the authenticated bytes from this descriptor. Never
+            // reopen a path after validation or trust a second unverified read.
+            try output?.write(contentsOf: header + cipher)
             digest = Data(SHA256.hash(data: cipher)); sequence += 1; sealed = event.kind == "seal"; gap = gap || event.kind == "gap"
             return event
+        }
+        func copyAuthenticated(to output: FileHandle, cancelled: () -> Bool) throws {
+            precondition(sequence == 1)
+            try output.write(contentsOf: header)
+            while true {
+                if cancelled() { throw CancellationError() }
+                let more = try autoreleasepool { try decodeNext(through: .max, copyingTo: output) != nil }
+                if !more { break }
+            }
+            guard complete else { throw ModelError.invalid("记录未完整封口，不能作为完整记录导出。") }
         }
         deinit { try? file.close() }
     }

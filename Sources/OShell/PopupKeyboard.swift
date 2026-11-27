@@ -23,7 +23,7 @@ enum PopupPresentation {
     /// Keep native controls and custom drawing in the same appearance domain,
     /// including an already-open color panel during a settings preview.
     static func applyAppearance(_ appearance: NSAppearance?, to window: NSWindow) {
-        window.appearance = appearance
+        window.appearance = (window.windowController as? WorkspaceController)?.localTerminalAppearance ?? appearance
         func redraw(_ view: NSView) {
             view.needsDisplay = true
             view.subviews.forEach(redraw)
@@ -32,7 +32,9 @@ enum PopupPresentation {
         for child in window.childWindows ?? [] { applyAppearance(appearance, to: child) }
     }
     static func prepare(_ window: NSWindow, over owner: NSWindow?) {
-        applyAppearance(owner?.appearance ?? ApplicationAppearance.appearance, to: window)
+        let terminalOwner = (owner?.windowController as? WorkspaceController)?.isLocalTerminalWindow == true
+        let appearance = terminalOwner ? ApplicationAppearance.appearance : (owner?.appearance ?? ApplicationAppearance.appearance)
+        applyAppearance(appearance, to: window)
         window.collectionBehavior.subtract([.fullScreenPrimary, .fullScreenNone, .canJoinAllSpaces])
         window.collectionBehavior.formUnion([.fullScreenAuxiliary, .moveToActiveSpace])
         let attachesToOwner = (window as? PopupWindow)?.attachesToOwner ?? true
@@ -117,18 +119,26 @@ final class PopupWindow: NSWindow {
 /// All app-owned modal alerts use the same cancellation path, including when
 /// an editable text view would normally consume Esc for completion.
 final class PopupAlert: NSAlert {
+    private var explicitDismissal = false
+    static func terminalOperation() -> PopupAlert {
+        let alert = PopupAlert()
+        alert.explicitDismissal = true
+        return alert
+    }
     @discardableResult override func runModal() -> NSApplication.ModalResponse {
         if let view = accessoryView { accessoryView = AppUI.formCard(view) }
         if let url = Bundle.main.url(forResource: "OShell", withExtension: "icns"), let bundledIcon = NSImage(contentsOf: url) { icon = bundledIcon }
         PopupKeyboard.install()
         let cancel = buttons.first { $0.title == "取消" }
-        cancel?.keyEquivalent = "\u{1b}"
+        cancel?.keyEquivalent = explicitDismissal ? "" : "\u{1b}"
         cancel?.keyEquivalentModifierMask = []
         let modalWindow = window
         let owner = PopupPresentation.owner(excluding: modalWindow)
         layout()
         PopupPresentation.prepare(modalWindow, over: owner)
+        let explicit = explicitDismissal
         let token = PopupKeyboard.register(window: modalWindow) { [weak cancel] in
+            if explicit { return }
             if let cancel { cancel.performClick(nil) }
             else { NSApp.abortModal() } // Never activate a sole affirmative button.
         }

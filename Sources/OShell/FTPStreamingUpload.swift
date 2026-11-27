@@ -48,7 +48,7 @@ final class FTPStreamingUpload {
         }
         defer { Darwin.close(fd) }
         _ = fcntl(fd, F_SETNOSIGPIPE, 1)
-        let input = try FileHandle(forReadingFrom:source); defer { try? input.close() }
+        let input = try ResumableFileTransfer.openLocal(source, flags: O_RDONLY); defer { try? input.close() }
         var total: UInt64 = 0
         while let data = try input.read(upToCount:32768), !data.isEmpty {
             try limiter.paced(data, checkCancellation: process.checkCancelled) { bytes in

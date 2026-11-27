@@ -199,7 +199,13 @@ final class AgentCoordinator {
     var enabled: Bool { server != nil }
     var socketPath: String { server?.path ?? "" }
     var eligible: [TerminalPane] { (workspaceProvider?() ?? []).filter(\.isSecurityUnlocked).flatMap(\.inputPanes).filter(\.agentEligible) }
+    private var seenClients = Set<UUID>()
     private init() {}
+    func clientConnected(_ client: UUID) -> Bool { identities.values.contains(client) }
+    func connectionStatus(_ client: UUID?) -> String {
+        AgentRecoveryGuidance.status(serviceEnabled: enabled, paired: client != nil,
+            connected: client.map(clientConnected) ?? false, previouslyConnected: client.map { seenClients.contains($0) } ?? false)
+    }
     func notify() {
         // Shortcut tasks end only after their operation has reached a final state.
         for grant in grants.values {
@@ -216,12 +222,13 @@ final class AgentCoordinator {
     func accessStatus(_ grant: Grant) -> String {
         let name = clients.first { $0.id == grant.client }?.name ?? "客户端"
         if grant.controlActive && grant.integrationPending { return "MCP 客户端：\(name) 正在准备 Shell…" }
+        if grant.controlActive && !clientConnected(grant.client) { return "MCP 客户端：\(name) 等待连接 · 授权保留" }
         return "MCP 客户端：\(name) " + (grant.controlActive ? "接入中" : "接入已暂停")
     }
     func accessDetail(_ grant: Grant) -> String {
         if !grant.controlActive { return "自动输入已停止，请处理终端后重新授权接入。" }
         if grant.integrationPending { return "正在准备 Shell…" }
-        if grant.currentOperation != nil { return "命令执行中" }
+        if grant.currentOperation != nil { return clientConnected(grant.client) ? "命令执行中" : "本机通道暂未连接；原命令仍可能执行，请勿重复提交。" }
         if !identities.values.contains(grant.client) { return "等待客户端连接 · 授权保持" }
         return grant.task == nil ? "等待下一项任务" : "任务已就绪"
     }
@@ -482,6 +489,7 @@ final class AgentCoordinator {
             guard let client = clients.first(where: { $0.tokenDigest == digest }), identities[connection] == nil || identities[connection] == client.id else { throw ModelError.invalid("客户端未配对或凭据失效。") }
             let newlyConnected = identities[connection] == nil
             identities[connection] = client.id
+            seenClients.insert(client.id)
             if newlyConnected { notify() }
             let args = request.arguments
             var requestFields: [String: AgentValue] = ["tool": .string(String(request.tool.prefix(80))), "connection": .string(connection.uuidString)]

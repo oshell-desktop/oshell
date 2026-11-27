@@ -11,6 +11,7 @@ BUILD_NAME = re.compile(r'build(?:-amd64|-arm64|-tests|-legacy|-compat-(?:arm64|
 OLD_WORK = {
     'agent-build', 'memory-investigation', 'migration-old-source', 'migration-live-check', 'release-050-diagnostics',
     'legacy-validation', 'presentation-flush', 'fullscreen-chrome',
+    'window-zoom-preview', 'quick-connect-preview',
     'release','test-release','test-app','command-editor-modules','public-source-checkout',
     'size-review','brand-preview','deep-memory-baseline','memory-baseline','settings-preview','link-drag-native',
     'private-prepublish','privacy-audit','pages-bootstrap-preview','sparkle-inspect','fonts','touch-id',
@@ -47,13 +48,19 @@ def exclude_kept(paths, keep):
 
 def candidates(root, keep=()):
     paths = [root/'.build', root/'.swiftpm', root/'.DS_Store', root/'Assets/.DS_Store', root/'Assets/Brand/.DS_Store', root/'scripts/__pycache__', root/'work/ci-tools/gocache', root/'work/ci-tools/gomod']
+    # Retired validation checkouts retain their source; only their known compiler
+    # output directories belong to this cleanup.
+    paths += [root/name for name in (
+        'work/upgrade-bridge/work/build-tests', 'work/release-0.6.5/work/build-tests',
+        'work/release-0.6.6/work/build-tests', 'work/session-menu-validation/work-build',
+    )]
     work = root/'work'
     if work.is_dir():
         paths += [p for p in work.iterdir() if p.name in OLD_WORK or BUILD_NAME.fullmatch(p.name)
                   or p.name.startswith(('ui-check-','settings-check-','release-diagnostics-'))
                   or (p.name.startswith('running-app-') and retained_app_copy(p))]
     dist = root/'dist'
-    if dist.is_dir(): paths += [p for p in dist.iterdir() if p.name != 'OShell.app']
+    if dist.is_dir(): paths += [p for p in dist.iterdir() if p.name not in {'OShell.app', 'oTerm.app'}]
     validation = root/'validation'
     if validation.is_dir(): paths += [p for p in validation.iterdir() if p.name not in KEEP_REPORTS]
     paths = {p for p in paths if p.exists() or p.is_symlink()}
@@ -64,10 +71,33 @@ def fingerprint(path):
     return {str(p.relative_to(path)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in path.rglob('*') if p.is_file() and not p.is_symlink()}
 
+def retained_app(root, installed=Path('/Applications/OShell.app')):
+    app = root/'dist/OShell.app'
+    if not app.exists(): app = installed
+    info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
+    if info.get('OShellTestHarness') or info.get('CFBundleIdentifier') != 'app.oshell.mac':
+        raise RuntimeError('The retained application must be a production OShell app')
+    return app, info
+
+def generated_apps(paths):
+    # Walk only already-approved cleanup targets, never symlinks or dependencies
+    # inside app packages. Unregister exact OShell paths, not an entire domain.
+    for path in paths:
+        if path.is_symlink() or not path.is_dir(): continue
+        for folder, dirs, _ in os.walk(path, followlinks=False):
+            current = Path(folder)
+            if current.suffix != '.app': continue
+            dirs[:] = []
+            try:
+                info = plistlib.loads((current/'Contents/Info.plist').read_bytes())
+                if str(info.get('CFBundleIdentifier', '')).startswith('app.oshell.'):
+                    yield current
+            except (OSError, ValueError): pass
+
 def validate_targets(root, paths, tracked, processes):
-    keep = root/'dist/OShell.app'
+    retained = [root/'dist/OShell.app', root/'dist/oTerm.app']
     for p in paths:
-        if not p.is_relative_to(root) or p == root or p == keep or keep.is_relative_to(p):
+        if not p.is_relative_to(root) or p == root or any(keep.is_relative_to(p) or p.is_relative_to(keep) for keep in retained):
             raise RuntimeError('Unsafe cleanup target')
         relative = p.relative_to(root).as_posix()
         if any(f == relative or f.startswith(relative+'/') for f in tracked):
@@ -124,10 +154,12 @@ def main():
     keep = [Path(os.path.abspath(root/name)) for name in args.keep]
     if any(not p.is_relative_to(root) for p in keep): parser.error('--keep must stay inside the project')
     paths = candidates(root, keep)
-    print(json.dumps({'remove':[p.relative_to(root).as_posix() for p in paths], 'keep':['dist/OShell.app', *[p.relative_to(root).as_posix() for p in keep]]},indent=2))
+    app_label = 'dist/OShell.app' if (root/'dist/OShell.app').exists() else '/Applications/OShell.app'
+    retained = [app_label]
+    if (root/'dist/oTerm.app').is_dir(): retained.append('dist/oTerm.app')
+    print(json.dumps({'remove':[p.relative_to(root).as_posix() for p in paths], 'keep':[*retained, *[p.relative_to(root).as_posix() for p in keep]]},indent=2,ensure_ascii=False))
     if not args.apply: return
-    app = root/'dist/OShell.app'; info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
-    if info.get('OShellTestHarness'): raise RuntimeError('Build the production app before cleanup')
+    app, info = retained_app(root)
     arches = subprocess.check_output(['lipo','-archs',str(app/'Contents/MacOS/OShell')],text=True).split()
     if arches != [platform.machine()]: raise RuntimeError('The retained app must match the native build host')
     subprocess.run(['codesign','--verify','--deep','--strict',str(app)],check=True)
@@ -138,6 +170,12 @@ def main():
     validate_targets(root, paths, tracked, processes)
     before = usage(root); original = fingerprint(app)
     status = subprocess.check_output(['git','-C',str(root),'status','--porcelain'],text=True)
+    unregister_failures = []
+    lsregister = Path('/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister')
+    if lsregister.exists():
+        for bundle in generated_apps(paths):
+            result = subprocess.run([str(lsregister), '-u', str(bundle)], capture_output=True, text=True)
+            if result.returncode: unregister_failures.append(str(bundle.relative_to(root)))
     for p in paths:
         if p.is_symlink() or p.is_file(): p.unlink()
         else: remove_directory(p)
@@ -145,7 +183,8 @@ def main():
     if subprocess.check_output(['git','-C',str(root),'status','--porcelain'],text=True) != status:
         raise RuntimeError('Working tree status changed during cleanup')
     report = {'removed_roots':len(paths),'reclaimed_gib':round((before-usage(root))/1024/1024,2),
-              'app':'dist/OShell.app','version':info['CFBundleShortVersionString'],'architecture':arches[0],'app_verified':True,
+              'app':str(app),'version':info['CFBundleShortVersionString'],'architecture':arches[0],'app_verified':True,
+              'unregister_failures':unregister_failures,
               'kept_in_use':[p.relative_to(root).as_posix() for p in kept_in_use],
               'kept_explicitly':[p.relative_to(root).as_posix() for p in keep]}
     (root/'validation/latest-cleanup.json').write_text(json.dumps(report,indent=2)+'\n')

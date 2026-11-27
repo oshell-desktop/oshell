@@ -15,7 +15,7 @@ private final class ClipboardUploadState {
 
 extension WorkspaceController {
     func pasteImage(_ image: TerminalClipboardImage, from source: TerminalPane) {
-        guard isSecurityUnlocked, NSApp.modalWindow == nil, inputPanes.contains(where: { $0 === source }),
+        guard canUseTerminalWindow, NSApp.modalWindow == nil, inputPanes.contains(where: { $0 === source }),
               !source.isShutdown, !source.isTransferring else { return }
         let remote = !source.ended && source.profile.kind.usesSSH
         let group = remote ? source.sshConnectionGroup : nil

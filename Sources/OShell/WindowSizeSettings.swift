@@ -4,6 +4,10 @@ import AppKit
 import OShellCore
 
 enum WindowSizePreferences {
+    static var startWithLocalTerminal: Bool {
+        get { UserDefaults.standard.bool(forKey: "OShell.window.startWithLocalTerminal") }
+        set { UserDefaults.standard.set(newValue, forKey: "OShell.window.startWithLocalTerminal") }
+    }
     static let key = "OShell.window.startupSize"
     static let defaultSize = NSSize(width: 1180, height: 760)
     static var customSize: NSSize? {
@@ -34,6 +38,7 @@ enum WindowSizePreferences {
 }
 
 final class WindowSizeSettingsControl: NSStackView {
+    let startLocal = NSButton(checkboxWithTitle: "启动时打开独立本地终端窗口", target: nil, action: nil)
     let enabled = NSButton(checkboxWithTitle: "固定启动窗口大小", target: nil, action: nil)
     let width = NSTextField(), height = NSTextField()
     private let currentSize: NSSize?
@@ -41,6 +46,20 @@ final class WindowSizeSettingsControl: NSStackView {
         self.currentSize = currentSize
         super.init(frame: .zero)
         orientation = .vertical; alignment = .leading; spacing = 6
+        startLocal.state = WindowSizePreferences.startWithLocalTerminal ? .on : .off
+        startLocal.identifier = .init("settings.window.startLocal")
+        addArrangedSubview(startLocal)
+        startLocal.isHidden = OShellAppPair.ownsLocalWindows
+        let explanation = NSTextField(labelWithString: "直接进入本地 shell，打开受保护的工作区时再验证主密码。")
+        explanation.font = .systemFont(ofSize: 11); explanation.textColor = .secondaryLabelColor
+        addArrangedSubview(explanation)
+        explanation.isHidden = OShellAppPair.ownsLocalWindows
+        let export = NSButton(title: "导出两个启动入口…", target: self, action: #selector(exportLaunchers))
+        addArrangedSubview(export)
+        let serviceHint = NSTextField(wrappingLabelWithString: "在系统设置 → 键盘 → 键盘快捷键 → 服务中，可分别为“打开 oTerm”和“打开 OShell 会话工作区”绑定快捷键。")
+        serviceHint.font = .systemFont(ofSize: 11); serviceHint.textColor = .secondaryLabelColor
+        serviceHint.preferredMaxLayoutWidth = 480
+        addArrangedSubview(serviceHint); setCustomSpacing(18, after: serviceHint)
         let saved = WindowSizePreferences.customSize
         enabled.state = saved == nil ? .off : .on
         enabled.identifier = .init("settings.window.fixedSize")
@@ -62,6 +81,14 @@ final class WindowSizeSettingsControl: NSStackView {
         updateEnabled()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func exportLaunchers() {
+        let picker = NSOpenPanel()
+        picker.title = "选择两个 OShell 启动入口的存放位置"; picker.prompt = "导出"
+        picker.canChooseDirectories = true; picker.canChooseFiles = false; picker.canCreateDirectories = true
+        guard picker.runModal() == .OK, let directory = picker.url else { return }
+        do { NSWorkspace.shared.activateFileViewerSelecting(try WindowLauncher.export(to: directory)) }
+        catch { Dialogs.message("导出启动入口失败：" + error.localizedDescription) }
+    }
     @objc private func updateEnabled() { width.isEnabled = enabled.state == .on; height.isEnabled = enabled.state == .on }
     @objc private func useCurrentSize() {
         guard let currentSize else { return }
@@ -69,6 +96,10 @@ final class WindowSizeSettingsControl: NSStackView {
         width.stringValue = String(min(10000, max(760, Int(currentSize.width.rounded()))))
         height.stringValue = String(min(10000, max(460, Int(currentSize.height.rounded()))))
         updateEnabled()
+    }
+    func save() throws {
+        WindowSizePreferences.save(try value())
+        if !OShellAppPair.ownsLocalWindows { WindowSizePreferences.startWithLocalTerminal = startLocal.state == .on }
     }
     func value() throws -> NSSize? {
         guard enabled.state == .on else { return nil }

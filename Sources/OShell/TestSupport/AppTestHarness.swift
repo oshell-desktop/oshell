@@ -11,6 +11,9 @@ enum AppTestHarness {
     && CommandLine.arguments.contains(where: { ["--agent-control-test", "--auth-concurrency-test", "--login-password-save-test", "--third-party-import-test", "--keyboard-shortcuts-test", "--toolbar-actions-test", "--quicksend-groups-test", "--tab-behavior-test", "--layout-test", "--zmodem-progress-test", "--zmodem-regression-test", "--file-feature-test", "--search-test", "--host-identity-test", "--session-links-test", "--session-defaults-test", "--shell-integration-test", "--live-keepalive-test", "--appearance-test", "--quicksend-persistence-test", "--local-password-test", "--management-test", "--startup-protection-test", "--tab-drag-test", "--tab-actions-test", "--master-removal-test", "--update-feature-test", "--update-integration-test", "--terminal-focus-test", "--terminal-symbols-test", "--session-directory-test", "--quicksend-focus-test", "--arrangement-scroll-test", "--tab-number-test", "--links-catalog-test", "--named-tab-groups-test"].contains($0) })
 
     static func prepare() {
+        if let mode = WindowLauncherTest.expected {
+            WindowSizePreferences.startWithLocalTerminal = mode == .workspace
+        }
         // Test fonts are imported from development fixtures into isolated data;
         // neither the production app nor the test app bundles font binaries.
         if !CommandLine.arguments.contains("--font-library-test"), let root = ProcessInfo.processInfo.environment["OSHELL_TEST_FONT_ROOT"], ProcessInfo.processInfo.environment["OSHELL_DATA_DIR"] != nil {
@@ -20,9 +23,16 @@ enum AppTestHarness {
             do { try UserTerminalFonts.importFiles(fonts); UserTerminalFonts.register() } catch { NSLog("Synthetic fonts: %@", error.localizedDescription) }
         }
         if CommandLine.arguments.contains("--terminal-interrupt-test") { TerminalInterruptTest.prepare() }
+        if CommandLine.arguments.contains("--local-startup-test") { EncryptedStartupTest.install(localStartup: true) }
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.install() }
     }
     static func run(_ controller: WorkspaceController) {
+        LocalDockShortcutTest.install(workspace: controller)
+        if let mode = WindowLauncherTest.expected { WindowLauncherTest.run(controller, expected: mode); return }
+        if CommandLine.arguments.contains("--terminal-drag-selection-test") { TerminalDragSelectionTest.run(controller); return }
+        if CommandLine.arguments.contains("--agent-maintenance-test") { AgentPanelTest.run(controller); return }
+        if CommandLine.arguments.contains("--quick-connect-details-test") { QuickConnectDetailsTest.run(controller); return }
+        if CommandLine.arguments.contains("--window-zoom-test") { WindowZoomTest.run(controller); return }
         if CommandLine.arguments.contains("--ssh-reconnect-test") { SSHReconnectTest.run(controller); return }
         if CommandLine.arguments.contains("--quicksend-history-test") { QuickSendHistoryTest.run(controller); return }
         if CommandLine.arguments.contains("--focus-repaint-test") { FocusRepaintTest.run(controller); return }
@@ -83,6 +93,7 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--external-launch-service"), ProcessInfo.processInfo.environment["OSHELL_ZOC_CLONE_TEST_ROOT"] != nil { SSHCloneTest.run(controller) }
         if CommandLine.arguments.contains("--external-launch-service"), ProcessInfo.processInfo.environment["OSHELL_ZOC_TEST_ROOT"] != nil { ZOCLaunchTest.run(controller) }
         if CommandLine.arguments.contains("--external-launch-service"), ProcessInfo.processInfo.environment["OSHELL_FILE_LAUNCH_TEST_ROOT"] != nil { FileLaunchTest.run(controller) }
+        if CommandLine.arguments.contains("--local-startup-test") { EncryptedStartupTest.exerciseLocalStartup(controller); return }
         if CommandLine.arguments.contains("--encrypted-startup-test") { EncryptedStartupTest.complete(controller) }
         if CommandLine.arguments.contains("--command-input-test") { CommandInputTest.run(controller) }
         if CommandLine.arguments.contains("--paste-scroll-test") { PasteScrollTest.run(controller) }
@@ -104,6 +115,7 @@ enum AppTestHarness {
         if CommandLine.arguments.contains("--webdav-test") { WebDAVFeatureTest.run(controller) }
         if CommandLine.arguments.contains("--shared-conflict-test") { SharedConflictTest.run(controller) }
         if CommandLine.arguments.contains("--storage-sync-test") { StorageSyncTest.run(controller) }
+        if CommandLine.arguments.contains("--local-terminal-window-test") { LocalTerminalWindowTest.run(controller) }
         if CommandLine.arguments.contains("--multi-window-test") { MultiWindowTest.run(controller) }
         if CommandLine.arguments.contains("--named-tab-groups-test") { NamedTabGroupsTest.run(controller) }
         if CommandLine.arguments.contains("--links-catalog-test") { LinksCatalogTest.run(controller) }

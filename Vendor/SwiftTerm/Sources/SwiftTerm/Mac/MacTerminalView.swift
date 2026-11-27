@@ -2832,13 +2832,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         return terminal.encodeButton(button: event.buttonNumber, release: isReleaseEvent, shift: flags.contains(.shift), meta: flags.contains(.option), control: flags.contains(.control))
     }
     
-    func calculateMouseHit (with event: NSEvent) -> (grid: Position, pixels: Position)
+    func calculateMouseHit (with event: NSEvent, selectionBoundary: Bool = false) -> (grid: Position, pixels: Position)
     {
         let point = convert(event.locationInWindow, from: nil)
-        return calculateMouseHit(at: point)
+        return calculateMouseHit(at: point, selectionBoundary: selectionBoundary)
     }
 
-    func calculateMouseHit (at point: CGPoint) -> (grid: Position, pixels: Position)
+    func calculateMouseHit (at point: CGPoint, selectionBoundary: Bool = false) -> (grid: Position, pixels: Position)
     {
         func toInt (_ p: NSPoint) -> Position {
 
@@ -2862,6 +2862,18 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
                                                 hostPolicy: bidiHostPolicy),
            colValue < bidiLayout.visualToLogicalCol.count {
             colValue = bidiLayout.visualToLogicalCol[colValue]
+        } else if selectionBoundary, rowValue < displayBuffer.lines.count {
+            // Character selections use half-open insertion boundaries, not the
+            // cell coordinates used by links and remote mouse reporting. Snap
+            // at the glyph midpoint and allow cols (after the last cell).
+            // Keep the existing BiDi visual-to-logical hit policy above intact.
+            let line = displayBuffer.lines[rowValue]
+            if colValue > 0, line[colValue].width == 0, line[colValue - 1].width == 2 {
+                colValue -= 1
+            }
+            let width = max(1, Int(line[colValue].width))
+            let midpoint = (CGFloat(colValue) + CGFloat(width) / 2) * cellDimension.width
+            if point.x >= midpoint { colValue = min(terminal.cols, colValue + width) }
         }
         return (Position(col: colValue, row: rowValue), toInt (point))
     }
@@ -2881,6 +2893,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // to re-extend the selection as the auto-scroll timer advances the viewport
     // while the pointer is held still past the top or bottom edge.
     private var lastSelectionDragPoint: CGPoint?
+    // A press is an insertion anchor, but does not select or copy anything until
+    // a drag actually starts. AppKit may coalesce the first/last drag events.
+    private var selectionPressAnchor: Position?
 
     private func startSelectionAutoScrollTimer() {
         if selectionAutoScrollTimer != nil {
@@ -2916,7 +2931,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         // Extend the selection to the pointer's position under the new viewport.
         if selection.active, let point = lastSelectionDragPoint {
-            let hit = calculateMouseHit(at: point).grid
+            let hit = calculateMouseHit(at: point, selectionBoundary: selection.selectionMode == .character).grid
             selection.dragExtend(bufferPosition: Position(col: hit.col, row: hit.row))
         }
         setNeedsDisplay(bounds)
@@ -2953,6 +2968,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         pendingSemanticClick?.cancel()
         pendingSemanticClick = nil
         didSelectionDrag = false
+        selectionPressAnchor = nil
         pointerPressSnapshot = SemanticPromptPointerSnapshot(
             selectionWasActive: selection.active,
             didDrag: false,
@@ -2968,13 +2984,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
         switch event.clickCount {
         case 1:
+            let boundary = calculateMouseHit(with: event, selectionBoundary: true).grid
             if selection.active == true {
                 if event.modifierFlags.contains(.shift) {
-                    selection.shiftExtend(bufferPosition: Position(col: hit.col, row: hit.row))
+                    selection.shiftExtend(bufferPosition: selection.selectionMode == .character ? boundary : hit)
                 } else {
-                    selection.active = false
+                    selection.selectNone()
+                    selectionPressAnchor = boundary
                 }
-            }
+            } else { selectionPressAnchor = boundary }
         case 2:
             let displayBuffer = terminal.displayBuffer
             selection.selectWordOrExpression(at: Position(col: hit.col, row: hit.row), in: displayBuffer)
@@ -3000,6 +3018,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     open override func mouseUp(with event: NSEvent) {
         defer {
             didSelectionDrag = false
+            selectionPressAnchor = nil
             pointerPressSnapshot.pressWasSemanticEligible = false
         }
         stopSelectionAutoScrollTimer()
@@ -3015,6 +3034,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         if allowMouseReporting && !shiftBypassesMouseReporting(for: event) && terminal.mouseMode.sendButtonRelease() {
             sharedMouseEvent(with: event)
             return
+        }
+
+        if didSelectionDrag, selection.active {
+            let end = calculateMouseHit(with: event, selectionBoundary: selection.selectionMode == .character).grid
+            selection.dragExtend(bufferPosition: end)
+            setNeedsDisplay(bounds)
         }
 
         // The semantic route runs last, after the double-click interval.
@@ -3080,12 +3105,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             }
         }
                 
-        if selection.active {
-            selection.dragExtend(bufferPosition: Position(col: hit.col, row: hit.row))
-        } else {
-            selection.setSoftStart(bufferPosition: Position(col: hit.col, row: hit.row))
+        if !selection.active {
+            selection.setSoftStart(bufferPosition: selectionPressAnchor ?? calculateMouseHit(with: event, selectionBoundary: true).grid)
             selection.startSelection()
         }
+        let end = calculateMouseHit(with: event, selectionBoundary: selection.selectionMode == .character).grid
+        selection.dragExtend(bufferPosition: end)
         didSelectionDrag = true
         lastSelectionDragPoint = convert(event.locationInWindow, from: nil)
         autoScrollDelta = 0

@@ -30,6 +30,7 @@ extension TerminalPane {
     func agentBaseline() -> String { agentOutputRedactor.text(terminal.getTerminal().auditBaselineANSI()) }
     func agentWillSend(_ bytes: Data, writeID: Int) -> Bool {
         let grant = AgentCoordinator.shared.grants[id]
+        if !sendingTargetPassword { targetPrompt?.cancel() }
         // The final PTY gate also catches quick-send, broadcasts, mouse reports and background probes.
         if agentInputKind == nil, grant?.controlActive == true { return false }
         if agentInputKind == nil, let grant, grant.integrated {

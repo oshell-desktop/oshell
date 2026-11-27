@@ -14,6 +14,9 @@ final class AgentControlView: InterfaceSurfaceView {
     private let clients = NSPopUpButton(), sessions = NSPopUpButton(), permissions = NSPopUpButton()
     private let permissionHint = AppUI.label("", size: 11, secondary: true)
     private let clientHint = AppUI.label("", size: 11, secondary: true)
+    private let connectionHint = AppUI.label("", size: 11, secondary: true)
+    private let retentionHint = AppUI.label("", size: 10, secondary: true)
+    private var retentionObserver: NSObjectProtocol?
     private let sessionHint = AppUI.label("", size: 11, secondary: true)
     private let activityTitle = AppUI.label("", size: 13, weight: .semibold)
     private let records = NSStackView()
@@ -67,6 +70,9 @@ final class AgentControlView: InterfaceSurfaceView {
         clients.identifier = .init("mcp.clients"); clients.setAccessibilityLabel("已配对 MCP 客户端")
         clients.target = self; clients.action = #selector(choiceChanged)
         connection.add(clients); connection.add(AppUI.row([clientHint, NSView(), unpairButton])); addCard(connection); setupSections.append(connection)
+        let recovery = AppUI.button("连接恢复指引", symbol: "questionmark.circle") { [weak self] in self?.showRecovery() }
+        recovery.identifier = .init("mcp.recovery")
+        connection.add(connectionHint); connection.add(recovery)
 
         let authorization = AppCard(); authorization.add(AppUI.heading("2  会话授权"))
         sessions.identifier = .init("mcp.sessions"); sessions.setAccessibilityLabel("可授权的已连接终端")
@@ -92,7 +98,11 @@ final class AgentControlView: InterfaceSurfaceView {
         detached.identifier = .init("mcp.detach")
         let footer = NSStackView(); footer.orientation = .vertical; footer.alignment = .leading; footer.spacing = 6
         AppUI.add(AppUI.row([archives, NSView(), detached]), to: footer)
-        AppUI.add(AppUI.label("终端操作加密存档 · 接管后继续记录 · 仅手动清理", size: 10, secondary: true), to: footer)
+        let retention = AppUI.button("审计保留设置…", symbol: "clock.badge.gearshape") { AgentAuditMaintenance.shared.showSettings() }
+        retention.identifier = .init("mcp.retention")
+        AppUI.add(retention, to: footer); AppUI.add(retentionHint, to: footer)
+        retentionObserver = NotificationCenter.default.addObserver(forName: AgentAuditMaintenance.changed, object: nil, queue: .main) { [weak self] _ in self?.updateRetention() }
+        updateRetention()
         footer.translatesAutoresizingMaskIntoConstraints = false; addSubview(footer)
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20), header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20), header.topAnchor.constraint(equalTo: topAnchor, constant: 18),
@@ -107,7 +117,17 @@ final class AgentControlView: InterfaceSurfaceView {
         render()
     }
     required init?(coder: NSCoder) { fatalError() }
-    deinit { if let observer { NotificationCenter.default.removeObserver(observer) }; timer?.invalidate() }
+    deinit { if let observer { NotificationCenter.default.removeObserver(observer) }; if let retentionObserver { NotificationCenter.default.removeObserver(retentionObserver) }; timer?.invalidate() }
+    private func updateRetention() {
+        let retention = AgentAuditMaintenance.shared
+        retentionHint.stringValue = "终端操作加密存档 · " + retention.summary + (retention.policy.enabled ? "\n" + retention.result : "")
+        needsLayout = true
+    }
+    private func showRecovery(client: UUID? = nil) {
+        let alert = PopupAlert(); alert.messageText = "MCP 连接恢复指引"
+        alert.informativeText = coordinator.connectionStatus(client ?? clients.selectedItem?.representedObject as? UUID) + "\n\n" + AgentRecoveryGuidance.instructions
+        alert.addButton(withTitle: "知道了"); alert.runModal()
+    }
     private func addBody(_ view: NSView) {
         stack.addArrangedSubview(view); view.translatesAutoresizingMaskIntoConstraints = false
         view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
@@ -222,6 +242,7 @@ final class AgentControlView: InterfaceSurfaceView {
         permissions.isEnabled = coordinator.enabled; grantButton.isEnabled = coordinator.enabled && hasClient && hasSession
         revokeButton.isEnabled = !coordinator.grants.isEmpty
         clientHint.stringValue = !coordinator.enabled ? "开启服务后添加客户端" : (hasClient ? "已配对 · 尚需逐终端授权" : "添加后可复制 MCP 接入配置")
+        connectionHint.stringValue = coordinator.connectionStatus(clients.selectedItem?.representedObject as? UUID)
         sessionHint.stringValue = !coordinator.enabled ? "请先开启 MCP 服务" : (!hasClient ? "请先添加客户端" : (!hasSession ? "连接终端后在此授权" : "仅此客户端可访问此终端"))
         switch AgentPermission.allCases[max(0, permissions.indexOfSelectedItem)] {
         case .ask: permissionHint.stringValue = "每条命令都需你批准后执行。"
@@ -255,6 +276,9 @@ final class AgentControlView: InterfaceSurfaceView {
             card.add(AppUI.heading(pane.title, trailing: take))
             card.add(AppUI.label(coordinator.accessStatus(grant), size: 12, weight: .medium))
             card.add(AppUI.label(coordinator.accessDetail(grant), size: 11, secondary: true))
+            if !coordinator.clientConnected(grant.client) {
+                card.add(AppUI.button("连接恢复指引", symbol: "questionmark.circle") { [weak self] in self?.showRecovery(client: grant.client) })
+            }
             let mode = NSPopUpButton(); mode.addItems(withTitles: AgentPermission.allCases.map(\.title)); mode.selectItem(withTitle: grant.permission.title)
             mode.identifier = .init(id.uuidString); mode.setAccessibilityLabel("此会话的授权权限"); mode.target = self; mode.action = #selector(changePermission(_:))
             card.add(field("权限", mode))

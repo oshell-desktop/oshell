@@ -60,7 +60,7 @@ extension WorkspaceController {
         guard isSecurityUnlocked else { return }
         if configuration.hasMasterPassword { changeMasterPassword(); return }
         let alert = PopupAlert(); alert.messageText = "设置主密码"
-        alert.informativeText = "设置后，每次打开 OShell 都必须解锁；可在设置 → 安全中启用本机 Touch ID。现有本机保存的密码将改用主密码加密，已连接会话保持连接。请妥善保管，遗忘后无法恢复保存的密码。"
+        alert.informativeText = "设置后，打开工作区时必须解锁；可在设置 → 安全中启用本机 Touch ID。现有本机保存的密码将改用主密码加密，已连接会话保持连接。请妥善保管，遗忘后无法恢复保存的密码。"
         alert.addButton(withTitle: "设置"); alert.addButton(withTitle: "取消")
         let password = NSSecureTextField(), confirmation = NSSecureTextField()
         password.placeholderString = "主密码（至少 8 个字符）"; confirmation.placeholderString = "再次输入主密码"
@@ -80,10 +80,10 @@ extension WorkspaceController {
             } catch let failure { error.stringValue = failure.localizedDescription }
         }
     }
-    func unlockAtStartup() -> Bool {
+    func unlockAtStartup(returnToLocal: Bool = false) -> Bool {
         if isSecurityUnlocked { return true }
         guard !loadFailed else {
-            Dialogs.message("配置文件无法读取，无法确认主密码保护状态。为保护已有数据，本次启动将退出。请检查：\(store.url.path)")
+            Dialogs.message("配置文件无法读取，无法确认主密码保护状态。请检查配置后重试：\(store.url.path)")
             completeStartupUnlock(false); return false
         }
         if store.requiresMasterProtection && !configuration.hasMasterPassword {
@@ -98,8 +98,8 @@ extension WorkspaceController {
             completeStartupUnlock(true); return true
         }
         let alert = PopupAlert(); alert.messageText = "解锁 OShell"
-        alert.informativeText = "请输入主密码以打开工作区。取消或按 Esc 将退出程序。"
-        alert.addButton(withTitle: "解锁"); alert.addButton(withTitle: "退出")
+        alert.informativeText = returnToLocal ? "请输入主密码以打开工作区。取消后可继续使用本地终端。" : "请输入主密码以打开工作区。取消或按 Esc 将退出程序。"
+        alert.addButton(withTitle: "解锁"); alert.addButton(withTitle: returnToLocal ? "取消" : "退出")
         let biometric = BiometricUnlock.shared.enabled
         let password = NSSecureTextField(); password.placeholderString = "主密码"; password.identifier = .init("master.unlock")
         let error = NSTextField(wrappingLabelWithString: ""); error.textColor = .systemRed; error.identifier = .init("master.error")

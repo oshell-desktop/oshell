@@ -12,6 +12,8 @@ for folder, filename in [('tab-a', 'a-only.txt'), ('tab-b', 'b-only.txt')]:
     (remote_root/folder).mkdir(exist_ok=True)
     (remote_root/folder/filename).write_text('tab fixture\n')
 (remote_root/'slow.bin').write_bytes(bytes(range(256)) * 32768)
+for name in ['truncated.bin', 'oversized-block.bin', 'unknown-size.bin']:
+    (remote_root/name).write_bytes(bytes(range(256)) * 512)
 key = paramiko.RSAKey.generate(2048)
 fixture = dict(user='oshell-files', password=secrets.token_urlsafe(20), master=secrets.token_urlsafe(20))
 
@@ -29,7 +31,11 @@ class SFTP(paramiko.SFTPServerInterface):
             return result
         except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
     def stat(self, path):
-        try: return paramiko.SFTPAttributes.from_stat(os.stat(resolve(path)))
+        try:
+            attributes = paramiko.SFTPAttributes.from_stat(os.stat(resolve(path)))
+            if path == '/truncated.bin': attributes.st_size += 64
+            if path == '/unknown-size.bin': attributes.st_size = None
+            return attributes
         except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
     def lstat(self, path):
         try: return paramiko.SFTPAttributes.from_stat(os.lstat(resolve(path)))
@@ -46,6 +52,9 @@ class SFTP(paramiko.SFTPServerInterface):
             handle.stat = lambda: paramiko.SFTPAttributes.from_stat(os.fstat(f.fileno()))
             if flags & (os.O_RDWR | os.O_WRONLY): handle.writefile = f
             if flags & os.O_RDWR or not flags & os.O_WRONLY: handle.readfile = f
+            if path == '/oversized-block.bin':
+                normal_read = handle.read
+                handle.read = lambda offset, length: normal_read(offset, length + 1)
             return handle
         except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
     def remove(self, path): return self.mutate(os.remove, resolve(path))

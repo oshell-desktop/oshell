@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 OShell contributors
 """Run native UI regressions in a disposable app and data directory."""
-import argparse, json, os, plistlib, signal, subprocess, tempfile, uuid
+import argparse, json, os, plistlib, signal, subprocess, tempfile, time, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASES = {
@@ -11,6 +11,7 @@ CASES = {
  'interface-design':'OSHELL_INTERFACE_DESIGN_OUTPUT',
  'file-presentation':'OSHELL_FILE_PRESENTATION_OUTPUT',
  'agent-panel':'OSHELL_AGENT_PANEL_OUTPUT',
+ 'agent-maintenance':'OSHELL_AGENT_MAINTENANCE_OUTPUT',
  'agent-resources':'OSHELL_AGENT_RESOURCES_OUTPUT',
  'agent-control':'OSHELL_AGENT_OUTPUT',
  'agent-replay':'OSHELL_AGENT_REPLAY_OUTPUT',
@@ -39,7 +40,10 @@ CASES = {
  'file-transfer-history':'OSHELL_FILE_HISTORY_OUTPUT',
  'session-sidebar':'OSHELL_SIDEBAR_OUTPUT',
  'window-size':'OSHELL_WINDOW_SIZE_OUTPUT',
+ 'window-zoom':'OSHELL_WINDOW_ZOOM_OUTPUT',
+ 'quick-connect-details':'OSHELL_QUICK_DETAILS_OUTPUT',
  'terminal-selection':'OSHELL_SELECTION_OUTPUT',
+ 'terminal-drag-selection':'OSHELL_DRAG_SELECTION_OUTPUT',
  'local-prompt-editing':'OSHELL_LOCAL_PROMPT_OUTPUT',
  'biometric-local-store':'OSHELL_BIOMETRIC_LOCAL_OUTPUT',
  'session-clipboard':'OSHELL_SESSION_CLIPBOARD_OUTPUT',
@@ -53,6 +57,11 @@ CASES = {
  'command-input': 'OSHELL_COMMAND_INPUT_OUTPUT',
  'directory-picker-stress': 'OSHELL_DIRECTORY_STRESS_OUTPUT',
  'directory-sync': 'OSHELL_DIRECTORY_SYNC_OUTPUT',
+ 'service-launch-local': 'OSHELL_WINDOW_LAUNCH_OUTPUT',
+ 'service-launch-workspace': 'OSHELL_WINDOW_LAUNCH_OUTPUT',
+ 'launch-local': 'OSHELL_WINDOW_LAUNCH_OUTPUT',
+ 'launch-workspace': 'OSHELL_WINDOW_LAUNCH_OUTPUT',
+ 'local-startup': 'OSHELL_STARTUP_VAULT_OUTPUT',
  'encrypted-startup': 'OSHELL_STARTUP_VAULT_OUTPUT',
  'ended-broadcast': 'OSHELL_ENDED_BROADCAST_OUTPUT',
  'session-inline-rename': 'OSHELL_SESSION_INLINE_RENAME_OUTPUT',
@@ -68,6 +77,7 @@ CASES = {
  'links-catalog': 'OSHELL_LINKS_CATALOG_OUTPUT',
  'management': 'OSHELL_MANAGEMENT_OUTPUT',
  'master-removal': 'OSHELL_MASTER_REMOVAL_OUTPUT',
+ 'local-terminal-window': 'OSHELL_LOCAL_TERMINAL_WINDOW_OUTPUT',
  'multi-window': 'OSHELL_MULTI_WINDOW_OUTPUT',
  'navigation-experience': 'OSHELL_NAVIGATION_OUTPUT',
  'operator-input': 'OSHELL_OPERATOR_OUTPUT',
@@ -140,9 +150,25 @@ def run_case(source, case, timeout, agent_suite='protocol'):
         bundle = 'app.oshell.ui-test.' + uuid.uuid4().hex
         info.update(CFBundleIdentifier=bundle, CFBundleName='OShell UI Test', CFBundleDisplayName='OShell UI Test')
         info.pop('SUDefaultsDomain', None)
+        if case == 'update-feature':
+            # This fixture explicitly exercises an unconfigured update source.
+            info.pop('OShellUpdateRepository', None)
+        service_name = None
+        report = ROOT/'validation'/f'ui-{case}.json'
+        registrar = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+        if case in ('service-launch-local', 'service-launch-workspace'):
+            mode = 'local-terminal' if case == 'service-launch-local' else 'workspace'
+            service_name = 'OShellLaunchTest' + uuid.uuid4().hex
+            production = plistlib.loads((ROOT/'scripts/Info.plist').read_bytes())
+            service = next(s for s in production['NSServices'] if s.get('NSUserData') == mode)
+            service.update(NSMenuItem={'default':service_name}, NSPortName=service_name)
+            info.update(CFBundleName=service_name, CFBundleDisplayName=service_name, NSServices=[service],
+                        LSEnvironment={'OSHELL_DATA_DIR':str(data), 'ZDOTDIR':str(data),
+                                       'OSHELL_WINDOW_LAUNCH_TEST_ROOT':str(base), 'OSHELL_WINDOW_LAUNCH_MODE':mode,
+                                       'OSHELL_WINDOW_LAUNCH_OUTPUT':str(report)})
         (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
         subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True, capture_output=True)
-        report = ROOT/'validation'/f'ui-{case}.json'; report.unlink(missing_ok=True)
+        report.unlink(missing_ok=True)
         log = report.with_suffix('.log'); log.write_text('')
         ssh_fixture = None
         if case == 'ssh-reconnect' or (case == 'agent-control' and os.environ.get('OSHELL_AGENT_SSH') == '1'):
@@ -150,7 +176,7 @@ def run_case(source, case, timeout, agent_suite='protocol'):
             spec = importlib.util.spec_from_file_location('agent_ssh', ROOT/'scripts/test-agent-ssh.py'); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
             ssh_fixture = module.Fixture(data)
             if case == 'ssh-reconnect':
-                import threading, time
+                import threading
                 def disconnect_requested():
                     flag = data/'disconnect-ssh'
                     while not ssh_fixture.closed:
@@ -164,6 +190,12 @@ def run_case(source, case, timeout, agent_suite='protocol'):
         args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data), '--env', 'OSHELL_TEST_FONT_ROOT='+str(ROOT/'Vendor'),
                 '--env', CASES[case]+'='+str(destination), '--stdout', str(log), '--stderr', str(log),
                 str(app), '--args', '--'+case+'-test']
+        if case in ('launch-local', 'launch-workspace'):
+            mode = 'local-terminal' if case == 'launch-local' else 'workspace'
+            launcher = base/'Rename freely.oshellwindow'
+            launcher.write_text(mode+'\n')
+            args[args.index(str(app)):args.index(str(app))+1] = ['-a', str(app), str(launcher)]
+            args[1:1] = ['--env', 'OSHELL_WINDOW_LAUNCH_MODE='+mode]
         if case == 'agent-control':
             args[1:1] = ['--env', 'OSHELL_AGENT_RUNNER='+str(ROOT/'scripts'/f'test-agent-{agent_suite}.py'), '--env', 'OSHELL_AGENT_REAL_CLIENTS='+os.environ.get('OSHELL_AGENT_REAL_CLIENTS','0')]
             if os.environ.get('OSHELL_AGENT_REAL_CLIENTS') == '1': args[1:1] = ['--env', 'PATH='+os.environ.get('PATH','')]
@@ -176,7 +208,16 @@ def run_case(source, case, timeout, agent_suite='protocol'):
             subprocess.run(['swiftc', str(ROOT/'scripts/activation-peer.swift'), '-o', str(executable)], check=True, capture_output=True)
             args[1:1] = ['--env', 'OSHELL_ACTIVATION_PEER='+str(executable)]
         try:
+            if service_name:
+                subprocess.run([registrar, '-f', str(app)], check=True, capture_output=True)
+                subprocess.run(['/System/Library/CoreServices/pbs', '-update'], check=True, capture_output=True)
+                call = 'ObjC.import("AppKit"); $.NSApplication.sharedApplication; $.NSUpdateDynamicServices(); ' + (
+                    'if (!$.NSPerformService(' + json.dumps(service_name) + ', $.NSPasteboard.pasteboardWithUniqueName)) throw Error("Service not dispatched")')
+                args = ['osascript', '-l', 'JavaScript', '-e', call]
+            deadline = time.monotonic() + timeout
             subprocess.run(args, timeout=timeout, check=True, capture_output=True)
+            if service_name:
+                while not report.exists() and time.monotonic() < deadline: time.sleep(.1)
             if case == 'session-list': report.write_bytes((destination/'session-list-result.json').read_bytes())
             result = json.loads(report.read_text())
             if case == 'agent-control':
@@ -205,7 +246,11 @@ def run_case(source, case, timeout, agent_suite='protocol'):
                 if len(fields) == 2 and (fields[1] == executable or (case == 'fullscreen-activation' and fields[1] == str(base/'ActivationPeer.app/Contents/MacOS/ActivationPeer'))):
                     try: os.kill(int(fields[0]), signal.SIGTERM)
                     except ProcessLookupError: pass
-            subprocess.run(['defaults','delete',bundle], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for domain in (bundle, bundle+'.terminal-appearance'):
+                subprocess.run(['defaults','delete',domain], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Remove this exact preview registration before TemporaryDirectory
+            # deletes the bundle, so application search does not retain a ghost.
+            if Path(registrar).exists(): subprocess.run([str(registrar), '-u', str(app)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

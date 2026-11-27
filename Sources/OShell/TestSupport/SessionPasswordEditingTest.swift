@@ -26,6 +26,25 @@ enum SessionPasswordEditingTest {
         }
         let secret = "copy-fixture-'\"--中文🔐", replacement = "replacement-fixture-'\"--"
         do {
+            let prefix = "user#UTF-8#2437#SSH#"
+            for (label, login) in [("full", prefix + "root"), ("prefix", prefix)] {
+                let editor = SessionEditor(nil, profiles: [], directories: [], initialDirectory: "", localMode: .bastion)
+                func edit(_ id: String, _ value: String) {
+                    let control = field(editor, id)
+                    control.stringValue = value
+                    NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: control)
+                }
+                edit("session.host", "127.0.0.1")
+                edit("session.user", login)
+                checks[label + "InitialAccount"] = field(editor, "session.targetAccount").stringValue == (label == "full" ? "root" : "")
+                edit("session.targetPassword", replacement)
+                if label == "prefix" {
+                    for value in ["r", "ro", "roo", "root"] { edit("session.targetAccount", value) }
+                }
+                checks[label + "CompleteName"] = finishEditor(editor, save: true)?.username == prefix + "root"
+                if case .replace(let saved)? = editor.targetChange { checks[label + "TargetPassword"] = saved == replacement }
+                else { checks[label + "TargetPassword"] = false }
+            }
             for mode in [PasswordProtection.local, .master] {
                 PasswordVault.shared.unlockForTesting("copy-fixture-master")
                 for kind in [SessionKind.ssh, .sftp, .ftp] {

@@ -8,6 +8,10 @@ public struct AuthRequest: Codable {
     public var token: String
     public var prompt: String
     public var hint: String
+    /// Present only for a structured keyboard-interactive question. An empty
+    /// value denotes a question that must always be answered manually.
+    public var keyboardInteractiveHash: String? = nil
+    public var keyboardInteractiveIdentity: SSHIdentity? = nil
     public var proxyID: UUID?
     public init(token: String, prompt: String, hint: String, proxyID: UUID? = nil) { self.token = token; self.prompt = prompt; self.hint = hint; self.proxyID = proxyID }
 }

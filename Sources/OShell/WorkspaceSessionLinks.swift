@@ -96,6 +96,7 @@ extension WorkspaceController {
     func sessionTabContextMenu(_ id: UUID, groupID: UUID? = nil) -> NSMenu {
         let menu = NSMenu(); menu.autoenablesItems = false
         let tab = tabs.first { $0.id == id }
+        if let pane = tab?.activePane { appendTargetPasswordItems(to: menu, pane: pane) }
         for (title, action, enabled, hint) in [
             ("新建空白标签页", #selector(newBlankFromTab(_:)), true, "打开本机工具提示符，不自动连接"),
             ("复制会话", #selector(copyTabSession(_:)), tab != nil, "使用相同配置建立独立连接，按需重新认证"),

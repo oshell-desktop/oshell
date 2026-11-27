@@ -12,15 +12,11 @@ final class ExternalLaunchServer {
     private var stopped = false
     private let queue = DispatchQueue(label: "OShell.launch.accept")
     private let pending = DispatchSemaphore(value: 8)
-    var workspaceProvider: (() -> WorkspaceController?)?
-    private func targetWorkspace() -> WorkspaceController? {
-        if let workspaceProvider { return workspaceProvider() }
-        return workspace
-    }
-    private weak var workspace: WorkspaceController?
+    private let targetWorkspace: () -> WorkspaceController?
     private var recent = [UUID]() // Deduplicate retries, never retain the password here.
-    init(workspace: WorkspaceController) throws {
-        self.workspace = workspace; directory = try LaunchEndpoint.directory(for: workspace.store.url.deletingLastPathComponent())
+    init(configurationDirectory: URL, targetWorkspace: @escaping () -> WorkspaceController?) throws {
+        self.targetWorkspace = targetWorkspace
+        directory = try LaunchEndpoint.directory(for: configurationDirectory)
         lockFD = try LaunchEndpoint.lock("server.lock", directory: directory, nonblocking: true)
         let path = directory.appendingPathComponent("s").path
         var info = stat()
@@ -51,11 +47,13 @@ final class ExternalLaunchServer {
                         let request = try AuthIPC.read(ExternalLaunchRequest.self, fd: client)
                         try request.validate()
                         DispatchQueue.main.async { [weak self] in
-                            func respond(_ allowed: Bool) {
+                            let server = self
+                            let target = server?.stopped == false ? server?.targetWorkspace() : nil
+                            func respond(to workspace: WorkspaceController?) {
                                 let response: ZOCLaunchResponse
-                                if allowed, let self, !self.stopped, let workspace = self.targetWorkspace() {
-                                    if !self.recent.contains(request.id) {
-                                        self.recent.append(request.id); if self.recent.count > 256 { self.recent.removeFirst() }
+                                if let server, let workspace, workspace.isSecurityUnlocked, !workspace.isLocalTerminalWindow {
+                                    if !server.recent.contains(request.id) {
+                                        server.recent.append(request.id); if server.recent.count > 256 { server.recent.removeFirst() }
                                         if let terminal = request.terminal { workspace.openExternal(terminal) }
                                         if let file = request.file { workspace.openExternalFile(file) }
                                     }
@@ -63,8 +61,8 @@ final class ExternalLaunchServer {
                                 } else { response = ZOCLaunchResponse(accepted: false, message: "OShell 尚未解锁或正在关闭。") }
                                 DispatchQueue.global().async { defer { close(client); pending.signal() }; try? AuthIPC.write(response, fd: client) }
                             }
-                            if let self, !self.stopped, let workspace = self.targetWorkspace() { workspace.whenStartupUnlocked(respond) }
-                            else { respond(false) }
+                            if let target { target.whenStartupUnlocked { [weak target] in respond(to: $0 ? target : nil) } }
+                            else { respond(to: nil) }
                         }
                     } catch {
                         try? AuthIPC.write(ZOCLaunchResponse(accepted: false, message: "启动参数无效或通道读取失败。"), fd: client)

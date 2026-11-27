@@ -87,9 +87,10 @@ public struct FileLaunchRequest: Codable {
         let candidates = ProcessInfo.processInfo.environment["OSHELL_FILEZILLA_CONFIG"].map { [URL(fileURLWithPath: $0)] }
             ?? [home.appendingPathComponent(".config/filezilla/sitemanager.xml"), home.appendingPathComponent(".filezilla/sitemanager.xml")]
         for url in candidates {
-            let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
             if fd < 0 { continue }
             let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            defer { try? handle.close() }
             var info = stat()
             guard fstat(fd, &info) == 0, info.st_uid == geteuid(), info.st_mode & S_IFMT == S_IFREG, info.st_size <= 8 * 1024 * 1024 else { throw ModelError.invalid("站点配置文件属性无效。") }
             let data = try handle.read(upToCount: 8 * 1024 * 1024 + 1) ?? Data()

@@ -57,13 +57,15 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
     private var timelineWork: BlockOperation?, searchWork: BlockOperation?, exportWork: BlockOperation?
     private struct Item { let url: URL, title: String, date: Date, taskIndex: String }
     private let table = NSTableView(), filter = NSSearchField(), search = NSSearchField()
-    private let status = NSTextField(wrappingLabelWithString: "存档长期保留，仅手动删除。"), slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let status = NSTextField(wrappingLabelWithString: "正在读取存档。"), slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let retentionStatus = NSTextField(wrappingLabelWithString: "")
+    private var retentionObserver: NSObjectProtocol?, retentionLease: AgentAuditRetention.Lease?
     private let speed = NSPopUpButton(), idle = NSButton(checkboxWithTitle: "跳过空闲", target: nil, action: nil)
     private let terminal = TerminalView(frame: NSRect(x: 0, y: 0, width: 900, height: 500), options: TerminalOptions(scrollback: 2000, enableSixelReported: false, kittyImageCacheLimitBytes: 0))
     private let replayDelegate = AgentReplayDelegate()
     private var items = [Item](), visible = [Item](), stream: AgentReplayStream?, selected: URL?
     private var timer: Timer?, paused = true, start: Date?, end: Date?, clock: TimeInterval = 0, lastTick: TimeInterval = 0, seekTarget: TimeInterval?
-    private var selectionGeneration = UUID(), scanning = false
+    private var selectionGeneration = UUID(), scanning = false, reloadPending = false
     init() {
         let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 820), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "MCP 审计与只读回放"; window.minSize = NSSize(width: 800, height: 640); window.isReleasedWhenClosed = false
@@ -73,6 +75,12 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
         let content = InterfaceSurfaceView(); window.contentView = content; content.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12), stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 12), stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)])
         AppUI.add(AppUI.pageHeading("存档与回放", subtitle: "查看受控会话的操作记录与终端输出。"), to: stack)
+        let retention = ActionButton("保留设置…", action: { AgentAuditMaintenance.shared.showSettings() })
+        retention.identifier = .init("mcp.retention")
+        stack.addArrangedSubview(NSStackView(views: [retentionStatus, retention]))
+        retentionStatus.font = .systemFont(ofSize: 11); retentionStatus.textColor = .secondaryLabelColor
+        retentionObserver = NotificationCenter.default.addObserver(forName: AgentAuditMaintenance.changed, object: nil, queue: .main) { [weak self] _ in self?.updateRetention(); self?.reload() }
+        updateRetention()
         filter.placeholderString = "按时间、会话、客户端或任务 ID 筛选"; filter.delegate = self
         stack.addArrangedSubview(NSStackView(views: [filter, ActionButton("刷新存档", action: { [weak self] in self?.reload() }), ActionButton("加密导出…", action: { [weak self] in self?.export() }), ActionButton("删除选定记录…", action: { [weak self] in self?.delete() })]))
         let column = NSTableColumn(identifier: .init("archive")); column.title = "时间 · 会话 · 客户端"; column.width = 960; table.addTableColumn(column); table.dataSource = self; table.delegate = self
@@ -89,10 +97,15 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
         reload()
     }
     required init?(coder: NSCoder) { fatalError() }
-    deinit { timer?.invalidate(); stream?.cancel(); workQueue.cancelAllOperations() }
+    deinit { timer?.invalidate(); stream?.cancel(); workQueue.cancelAllOperations(); if let retentionObserver { NotificationCenter.default.removeObserver(retentionObserver) } }
+    private func updateRetention() {
+        let retention = AgentAuditMaintenance.shared
+        retentionStatus.stringValue = retention.summary + (retention.policy.enabled ? "\n" + retention.result : "")
+    }
     func windowWillClose(_ notification: Notification) {
         paused = true; timer?.invalidate(); timer = nil; stream?.cancel(); stream = nil
         selectionGeneration = UUID(); workQueue.cancelAllOperations(); onClose?()
+        retentionLease = nil
     }
     func numberOfRows(in tableView: NSTableView) -> Int { visible.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? { NSTextField(labelWithString: visible[row].title) }
@@ -100,16 +113,16 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
     private func applyFilter() { visible = items.filter { filter.stringValue.isEmpty || $0.title.localizedCaseInsensitiveContains(filter.stringValue) || $0.taskIndex.localizedCaseInsensitiveContains(filter.stringValue) }; table.reloadData() }
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard visible.indices.contains(table.selectedRow) else { return }
-        selected = visible[table.selectedRow].url; startPlayback(); scanTimeline()
+        selected = visible[table.selectedRow].url; retentionLease = AgentAuditRetention.protect(selected!); startPlayback(); scanTimeline()
     }
     private func reload() {
-        guard !scanning else { return }; scanning = true; status.stringValue = "正在读取加密存档索引…"
+        guard !scanning else { reloadPending = true; return }; scanning = true; status.stringValue = "正在读取加密存档索引…"
         let job = BlockOperation()
         job.addExecutionBlock { [weak self, weak job] in
             guard let job, !job.isCancelled else { return }
             do {
                 let root = AgentPrivateStore.root, directory = root.appendingPathComponent("archives")
-                guard FileManager.default.fileExists(atPath: directory.path) else { DispatchQueue.main.async { self?.scanning = false; self?.status.stringValue = "暂无存档。" }; return }
+                guard FileManager.default.fileExists(atPath: directory.path) else { DispatchQueue.main.async { self?.status.stringValue = "暂无存档。"; self?.finishReload() }; return }
                 let key = try AgentAudit.key(directory: root, create: false)
                 let urls = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey]).filter { $0.pathExtension == "oshell-audit" }
                 var entries = [Item](), size: Int64 = 0
@@ -124,10 +137,14 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
                     } catch { entries.append(Item(url: url, title: "损坏 / 无法解密 · " + url.lastPathComponent, date: .distantPast, taskIndex: "")) }
                 }
                 let result = entries.sorted { $0.date > $1.date }
-                DispatchQueue.main.async { guard !job.isCancelled else { return }; self?.items = result; self?.scanning = false; self?.applyFilter(); self?.status.stringValue = "\(result.count) 份记录 · " + ByteCountFormatter.string(fromByteCount: size, countStyle: .file) + (size >= 10_000_000_000 ? " · 容量提醒：超过 10 GB，可手动导出并清理。" : " · 不自动清理。") }
-            } catch { DispatchQueue.main.async { self?.scanning = false; self?.status.stringValue = error.localizedDescription } }
+                DispatchQueue.main.async { guard !job.isCancelled else { return }; self?.items = result; self?.applyFilter(); self?.status.stringValue = "\(result.count) 份记录 · " + ByteCountFormatter.string(fromByteCount: size, countStyle: .file) + (size >= 10_000_000_000 && !AgentAuditMaintenance.shared.policy.enabled ? " · 超过 10 GB，可在保留设置中启用自动清理。" : ""); self?.finishReload() }
+            } catch { DispatchQueue.main.async { guard !job.isCancelled else { return }; self?.status.stringValue = error.localizedDescription; self?.finishReload() } }
         }
         workQueue.addOperation(job)
+    }
+    private func finishReload() {
+        scanning = false
+        if reloadPending { reloadPending = false; reload() }
     }
     private func startPlayback(seek: TimeInterval? = nil) {
         stream?.cancel(); guard let selected else { return }
@@ -198,7 +215,7 @@ final class AgentArchiveWindow: NSWindowController, NSWindowDelegate, NSTableVie
     func skipIdleForTesting(_ enabled: Bool) { idle.state = enabled ? .on : .off }
     func togglePlaybackForTesting() { togglePlayback() }
     func seekForTesting(_ time: TimeInterval) { startPlayback(seek: time) }
-    func selectForTesting(_ url: URL) { selected = url; startPlayback(); scanTimeline() }
+    func selectForTesting(_ url: URL) { selected = url; retentionLease = AgentAuditRetention.protect(url); startPlayback(); scanTimeline() }
     #endif
     private func apply(_ event: AgentAuditEvent) {
         if event.kind == "baseline" || event.kind == "resize" {

@@ -26,13 +26,15 @@ final class UpdateIntegrationTest: NSObject, SPUUserDriver, SPUUpdaterDelegate {
         let root = URL(fileURLWithPath: raw).standardizedFileURL
         guard (root.path.hasPrefix("/tmp/oshell-update-test-") || root.path.hasPrefix("/private/tmp/oshell-update-test-")),
               Bundle.main.bundleURL.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/live/") else { return false }
+        _ = NSApplication.shared
+        LocalTerminalUpdate.shared.start()
         let data: [String: Any] = ["relaunched": true,"build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") ?? ""]
         try? JSONSerialization.data(withJSONObject: data).write(to: root.appendingPathComponent("relaunch.json")); return true
     }
     private func write() { try? JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted,.sortedKeys]).write(to: root.appendingPathComponent("result.json")) }
     private func finish(_ outcome: String) { guard !finished else { return }; finished = true; status["outcome"] = outcome; write(); workspace.shutdown(); NSApp.terminate(nil) }
     private func start() {
-        if mode == "install" { workspace.newLocal() }
+        if mode == "install" { LocalTerminalUpdate.setEnabled(true); workspace.newLocal() }
         do {
             if let path = ProcessInfo.processInfo.environment["OSHELL_UPDATE_INTEGRATION_RELEASE"] {
                 let file = URL(fileURLWithPath: path).standardizedFileURL

@@ -1,0 +1,171 @@
+--- a/misc.h
++++ b/misc.h
+@@ -259,6 +259,8 @@
+ struct notifier_ctx;
+ 
+ char	*read_passphrase(const char *, int);
++struct kbdint_target { const char *hash, *host, *port, *user; };
++char	*read_kbdint_response(const char *, int, const struct kbdint_target *);
+ int	 ask_permission(const char *, ...) __attribute__((format(printf, 1, 2)));
+ struct notifier_ctx *notify_start(int, const char *, ...)
+ 	__attribute__((format(printf, 2, 3)));
+--- a/readpass.c
++++ b/readpass.c
+@@ -45,7 +45,8 @@
+ #include "ssh.h"
+ 
+ static char *
+-ssh_askpass(char *askpass, const char *msg, const char *env_hint)
++ssh_askpass(char *askpass, const char *msg, const char *env_hint,
++    const struct kbdint_target *target)
+ {
+ 	pid_t pid, ret;
+ 	size_t len;
+@@ -74,7 +75,14 @@
+ 			fatal_f("dup2: %s", strerror(errno));
+ 		if (env_hint != NULL)
+ 			setenv("SSH_ASKPASS_PROMPT", env_hint, 1);
+-		execlp(askpass, askpass, msg, (char *)NULL);
++		if (target != NULL && target->hash != NULL)
++			execlp(askpass, askpass, msg, "--oshell-kbdint",
++			    target->hash, target->host, target->port, target->user,
++			    (char *)NULL);
++		else if (target != NULL)
++			execlp(askpass, askpass, msg, "--oshell-kbdint", (char *)NULL);
++		else
++			execlp(askpass, askpass, msg, (char *)NULL);
+ 		fatal_f("exec(%s): %s", askpass, strerror(errno));
+ 	}
+ 	close(p[1]);
+@@ -118,6 +126,12 @@
+  */
+ char *
+ read_passphrase(const char *prompt, int flags)
++{
++	return read_kbdint_response(prompt, flags, NULL);
++}
++
++char *
++read_kbdint_response(const char *prompt, int flags, const struct kbdint_target *target)
+ {
+ 	char cr = '\r', *askpass = NULL, *ret, buf[1024];
+ 	int rppflags, ttyfd, use_askpass = 0, allow_askpass = 0;
+@@ -176,7 +190,7 @@
+ 			askpass = _PATH_SSH_ASKPASS_DEFAULT;
+ 		if ((flags & RP_ASK_PERMISSION) != 0)
+ 			askpass_hint = "confirm";
+-		if ((ret = ssh_askpass(askpass, prompt, askpass_hint)) == NULL)
++		if ((ret = ssh_askpass(askpass, prompt, askpass_hint, target)) == NULL)
+ 			if (!(flags & RP_ALLOW_EOF))
+ 				return xstrdup("");
+ 		return ret;
+--- a/sshconnect.h
++++ b/sshconnect.h
+@@ -89,7 +89,7 @@
+     const struct ssh_conn_info *);
+ 
+ void	 ssh_userauth2(struct ssh *ssh, const char *, const char *,
+-    char *, Sensitive *);
++    char *, Sensitive *, const struct ssh_conn_info *);
+ 
+ void	 pubkey_dump(struct ssh *);
+ 
+--- a/sshconnect.c
++++ b/sshconnect.c
+@@ -1665,7 +1665,7 @@
+ 		warn_nonpq_kex();
+ 		ssh->kex->non_pq_kex_warned = 1;
+ 	}
+-	ssh_userauth2(ssh, local_user, server_user, host, sensitive);
++	ssh_userauth2(ssh, local_user, server_user, host, sensitive, cinfo);
+ 	free(local_user);
+ 	free(host);
+ }
+--- a/ssh.c
++++ b/ssh.c
+@@ -1277,7 +1277,7 @@
+ 	 */
+ 	if (options.jump_host != NULL) {
+ 		char port_s[8];
+-		const char *jumpuser = options.jump_user, *sshbin = argv0;
++		const char *jumpuser = options.jump_user, *sshbin = "/usr/bin/ssh";
+ 		int port = options.port, jumpport = options.jump_port;
+ 
+ 		if (port <= 0)
+--- a/sshconnect2.c
++++ b/sshconnect2.c
+@@ -333,6 +333,8 @@
+ 	const char *active_ktype;
+ 	/* kbd-interactive */
+ 	int info_req_seen;
++	int prior_password_or_factor;
++	const struct ssh_conn_info *cinfo;
+ 	int attempt_kbdint;
+ 	/* password */
+ 	int attempt_passwd;
+@@ -422,7 +424,8 @@
+ 
+ void
+ ssh_userauth2(struct ssh *ssh, const char *local_user,
+-    const char *server_user, char *host, Sensitive *sensitive)
++    const char *server_user, char *host, Sensitive *sensitive,
++    const struct ssh_conn_info *cinfo)
+ {
+ 	Authctxt authctxt;
+ 	int r;
+@@ -443,6 +446,7 @@
+ 	authctxt.sensitive = sensitive;
+ 	authctxt.active_ktype = authctxt.oktypes = authctxt.ktypes = NULL;
+ 	authctxt.info_req_seen = 0;
++	authctxt.cinfo = cinfo;
+ 	authctxt.attempt_kbdint = 0;
+ 	authctxt.attempt_passwd = 0;
+ #if GSSAPI
+@@ -633,6 +637,9 @@
+ 	    sshpkt_get_end(ssh) != 0)
+ 		goto out;
+ 
++	/* An unaccepted public-key offer did not complete a factor. */
++	if (partial || authctxt->attempt_passwd || authctxt->attempt_kbdint)
++		authctxt->prior_password_or_factor = 1;
+ 	if (partial != 0) {
+ 		verbose("Authenticated using \"%s\" with partial success.",
+ 		    authctxt->method->name);
+@@ -2083,7 +2090,8 @@
+ 	char *display_prompt = NULL, *response = NULL;
+ 	u_char echo = 0;
+ 	u_int num_prompts, i;
+-	int r, addnl;
++	int r, addnl, first;
++	struct kbdint_target target = {0};
+ 	size_t len;
+ 
+ 	debug2_f("entering");
+@@ -2091,6 +2099,7 @@
+ 	if (authctxt == NULL)
+ 		fatal_f("no authentication context");
+ 
++	first = !authctxt->info_req_seen && !authctxt->prior_password_or_factor;
+ 	authctxt->info_req_seen = 1;
+ 
+ 	if ((r = sshpkt_get_cstring(ssh, &name, NULL)) != 0 ||
+@@ -2127,7 +2136,18 @@
+ 		    authctxt->server_user, options.host_key_alias ?
+ 		    options.host_key_alias : authctxt->host, prompt) == -1)
+ 			fatal_f("asmprintf failed");
+-		response = read_passphrase(display_prompt, echo ? RP_ECHO : 0);
++		/* Only the protocol parser can distinguish a first password
++		 * challenge from a retry, an OTP or a subsequent factor. */
++		if (first && num_prompts == 1 && !echo && !*name && !*inst &&
++		    (strcmp(prompt, "Password:") == 0 ||
++		    strcmp(prompt, "Password: ") == 0)) {
++			target.hash = authctxt->cinfo->conn_hash_hex;
++			target.host = authctxt->cinfo->remhost;
++			target.port = authctxt->cinfo->portstr;
++			target.user = authctxt->server_user;
++		}
++		response = read_kbdint_response(display_prompt,
++		    echo ? RP_ECHO : 0, &target);
+ 		if ((r = sshpkt_put_cstring(ssh, response)) != 0)
+ 			goto out;
+ 		freezero(response, strlen(response));

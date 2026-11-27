@@ -3,6 +3,7 @@
 # Copyright (c) 2026 OShell contributors
 """Publish a fully assembled local app without modifying running code in place."""
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -12,12 +13,16 @@ import uuid
 
 def publish(source: Path, target: Path, running: list[str]) -> Path:
     source, target = source.resolve(), target.absolute()
-    if not (source/'Contents/MacOS/OShell').is_file():
+    executable = 'oTerm' if source.name == 'oTerm.app' else 'OShell'
+    if executable == 'oTerm' and (target.exists() or target.is_symlink()):
+        if target.is_symlink() or plistlib.loads((target/'Contents/Info.plist').read_bytes()).get('CFBundleIdentifier') != 'app.oshell.local-terminal':
+            raise ValueError('Another application already uses the terminal destination.')
+    if not (source/'Contents/MacOS'/executable).is_file():
         raise ValueError('The staged OShell app is incomplete.')
     target.parent.mkdir(parents=True, exist_ok=True)
     helper = str(target / 'Contents/Helpers/OShell-MCP')
     if any(path.startswith(str(target) + '/') and path != helper for path in running):
-        target = target.with_name('OShell-preview-' + uuid.uuid4().hex[:8] + '.app')
+        target = target.with_name(target.stem + '-preview-' + uuid.uuid4().hex[:8] + '.app')
     # Rename entire directories; never truncate an executable mapped by another
     # process. Preserve the original on failure. Staging is on the same volume.
     # OShell-MCP is statically linked against our code/SDK and reads no bundle

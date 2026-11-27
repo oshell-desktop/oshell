@@ -59,7 +59,8 @@ extension WorkspaceController {
             if approved.disableFuturePreview {
                 var updated = configuration
                 updated.preferences.confirmMultilinePaste = false
-                guard saveConfiguration(updated) else { return }
+                if isLocalTerminalWindow && !isSecurityUnlocked { configuration = updated }
+                else if !saveConfiguration(updated) { return }
             }
         }
         guard !content.isEmpty else { return }
@@ -91,6 +92,7 @@ extension WorkspaceController {
     }
     func rebuildCommandMenu() {
         guard let commandMenu else { return }; commandMenu.removeAllItems()
+        guard !isLocalTerminalWindow else { return }
         commandMenu.addItem(withTitle: "快速命令管理器…", action: #selector(showQuickCommands), keyEquivalent: "").target = self
         commandMenu.addItem(.separator())
         for group in Set(configuration.quickCommands.map(\.group)).sorted() {

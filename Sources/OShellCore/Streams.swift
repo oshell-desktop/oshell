@@ -7,6 +7,7 @@ import Foundation
 public struct PlainTextFilter {
     private enum State { case text, escape, csi, string, stringEscape }
     private var state: State = .text
+    private var bellTerminatesString = false
     public init() {}
     public mutating func consume(_ bytes: Data) -> Data {
         var output = Data(); output.reserveCapacity(bytes.count)
@@ -14,16 +15,21 @@ public struct PlainTextFilter {
             switch state {
             case .text:
                 if byte == 27 { state = .escape }
-                else if byte == 10 || byte == 13 || byte == 9 || byte >= 32 { output.append(byte) }
+                else if byte == 10 || byte == 13 || byte == 9 || byte >= 32 && byte != 127 { output.append(byte) }
             case .escape:
                 if byte == 91 { state = .csi }
-                else if [93, 80, 94, 95].contains(byte) { state = .string }
-                else { state = .text }
-            case .csi: if (0x40...0x7e).contains(byte) { state = .text }
+                else if [93, 80, 94, 95, 88].contains(byte) { state = .string; bellTerminatesString = byte == 93 }
+                else if (0x30...0x7e).contains(byte) { state = .text }
+                // Keep consuming intermediates, e.g. ESC ( B character sets.
+            case .csi:
+                if byte == 27 { state = .escape }
+                else if (0x40...0x7e).contains(byte) { state = .text }
             case .string:
-                if byte == 7 { state = .text }
+                if byte == 7 && bellTerminatesString { state = .text }
                 else if byte == 27 { state = .stringEscape }
-            case .stringEscape: state = byte == 92 ? .text : .string
+            case .stringEscape:
+                if byte == 92 || byte == 7 && bellTerminatesString { state = .text }
+                else { state = byte == 27 ? .stringEscape : .string }
             }
         }
         return output
@@ -135,12 +141,13 @@ public final class SessionLogger {
         lock.lock()
         guard accepting else { lock.unlock(); return }
         if queuedBytes + bytes.count > 4 * 1024 * 1024 {
-            accepting = false; lock.unlock()
+            accepting = false
             queue.async { [self] in closeHandle() }
+            lock.unlock()
             DispatchQueue.main.async { [weak self] in self?.onError?("磁盘写入跟不上输出，日志记录已停止。") }
             return
         }
-        queuedBytes += bytes.count; lock.unlock()
+        queuedBytes += bytes.count
         queue.async { [self] in
             defer { lock.lock(); queuedBytes -= bytes.count; lock.unlock() }
             do { try handle?.write(contentsOf: filter.consume(bytes)) }
@@ -149,9 +156,11 @@ public final class SessionLogger {
                 DispatchQueue.main.async { [weak self] in self?.onError?("日志写入失败：\(error.localizedDescription)") }
             }
         }
+        lock.unlock()
     }
     public func stop() {
-        lock.lock(); accepting = false; lock.unlock()
+        lock.lock(); defer { lock.unlock() }
+        guard accepting else { return }; accepting = false
         queue.async { [self] in closeHandle() }
     }
     public func waitUntilFlushed() { queue.sync {} }

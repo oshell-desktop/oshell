@@ -1,5 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import AppKit
+import OShellCore
+
+final class AgentAuditRetentionSettingsView: InterfaceSurfaceView {
+    let days: NSTextField, capacity: NSTextField
+    init(policy: AgentAuditRetentionPolicy, result: String) {
+        days = NSTextField(string: String(policy.days)); capacity = NSTextField(string: String(policy.maximumBytes / 1_073_741_824))
+        super.init(frame: NSRect(x: 0, y: 0, width: 460, height: 160))
+        days.identifier = .init("mcp.retention.days"); capacity.identifier = .init("mcp.retention.capacity")
+        days.setAccessibilityLabel("保留天数，0 表示不限制"); capacity.setAccessibilityLabel("容量上限 GiB，0 表示不限制")
+        let stack = NSStackView(views: [AppUI.row([NSTextField(labelWithString: "保留期限（天）"), days]),
+            AppUI.row([NSTextField(labelWithString: "容量上限（GiB）"), capacity]), NSTextField(wrappingLabelWithString: result)])
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false; addSubview(stack)
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), stack.topAnchor.constraint(equalTo: topAnchor, constant: 8), stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8), days.widthAnchor.constraint(equalToConstant: 120), capacity.widthAnchor.constraint(equalToConstant: 120)])
+        stack.arrangedSubviews.forEach { $0.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    func value() throws -> AgentAuditRetentionPolicy {
+        guard let dayCount = Int(days.stringValue.trimmingCharacters(in: .whitespaces)),
+              let gib = Int64(capacity.stringValue.trimmingCharacters(in: .whitespaces)), (0...10240).contains(gib) else {
+            throw ModelError.invalid("请输入整数；保留期限为 0–36500 天，容量为 0–10240 GiB。")
+        }
+        return try AgentAuditRetentionPolicy(days: dayCount, maximumBytes: gib * 1_073_741_824)
+    }
+}
 
 /// Pairing credentials live only in this dialog; copying always needs a user click.
 final class AgentConnectionConfigurationView: InterfaceSurfaceView {

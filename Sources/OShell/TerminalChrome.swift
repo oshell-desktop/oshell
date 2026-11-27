@@ -10,6 +10,9 @@ enum TerminalChrome {
 /// Resolve the dynamic color during layer updates without rasterizing a bitmap
 /// the size of the view just to fill it with one color.
 class InterfaceSurfaceView: NSView {
+    var surfaceColor = NSColor.windowBackgroundColor {
+        didSet { if oldValue != surfaceColor { needsDisplay = true } }
+    }
     override var isOpaque: Bool { true }
     override var wantsUpdateLayer: Bool { true }
     override init(frame: NSRect) {
@@ -22,7 +25,7 @@ class InterfaceSurfaceView: NSView {
     }
     override func updateLayer() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            layer?.backgroundColor = surfaceColor.cgColor
         }
     }
     override func viewDidChangeEffectiveAppearance() {

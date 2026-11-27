@@ -15,6 +15,8 @@ import shutil
 import subprocess
 from release_targets import TARGETS, RELEASE_FLAVORS
 import installer_metadata
+import build_local_terminal
+import build_bastion_ssh
 import code_signing
 import release_compilation
 import release_helpers
@@ -65,6 +67,7 @@ def assemble(flavor, arches, minimum, binaries, helpers):
     for name, relative in PROGRAMS.items():
         target=contents/relative; target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(binaries[arches[0]]/name,target)
+    build_bastion_ssh.build(WORK, arches[0], minimum, contents)
     for name in ['lrz','lsz']:
         target=contents/'Helpers'/name
         shutil.copy2(helpers[arches[0]]/name,target)
@@ -72,7 +75,9 @@ def assemble(flavor, arches, minimum, binaries, helpers):
     for bundle in binaries[arches[0]].glob('*.bundle'):
         shutil.copytree(bundle,resources/bundle.name)
     info=dict(INFO,LSMinimumSystemVersion=minimum)
-    if INCLUDE_TESTS: info['OShellTestHarness'] = True
+    if INCLUDE_TESTS:
+        info['OShellTestHarness'] = True
+        for key in ('CFBundleDocumentTypes','UTExportedTypeDeclarations','NSServices'): info.pop(key, None)
     (contents/'Info.plist').write_bytes(plistlib.dumps(info))
     bridge=contents/'Helpers/OShell-FileZilla.app'
     bridge_info=plistlib.loads((ROOT/'scripts/FileZilla-Info.plist').read_bytes());bridge_info['LSMinimumSystemVersion']=minimum
@@ -97,6 +102,8 @@ def assemble(flavor, arches, minimum, binaries, helpers):
         entries.append({'path':str(path.relative_to(app)),'architectures':arches,'build':output(['vtool','-show-build',path]),'libraries':output(['otool','-L',path])})
     run(['codesign','--force','--sign','-',bridge],log='package-codesign-last.log')
     run(['python3',ROOT/'scripts/embed-sparkle.py',app,*arches],log=f'package-{flavor}-sparkle.log')
+    if not INCLUDE_TESTS:
+        build_local_terminal.build(app.parent, arches[0], minimum, embed_update=True)
     run(['python3',ROOT/'scripts/sign-app.py',app],log='package-codesign-last.log')
     run(['codesign','--verify','--deep','--strict',app])
     for path in (contents/'Frameworks/Sparkle.framework').rglob('*'):
@@ -123,6 +130,7 @@ def package(flavor, arches, minimum, app, package_format="both"):
         if payload.exists(): shutil.rmtree(payload)
         payload.mkdir()
         shutil.copytree(app,payload/'OShell.app',dirs_exist_ok=True,symlinks=True)
+        shutil.copytree(app.with_name(build_local_terminal.APP_NAME),payload/build_local_terminal.APP_NAME,symlinks=True)
         component=stage/'component.plist'
         run(['pkgbuild','--analyze','--root',payload,component],log=f'package-{flavor}-analyze.log')
         components=plistlib.loads(component.read_bytes())
@@ -149,9 +157,10 @@ def package(flavor, arches, minimum, app, package_format="both"):
     if image.exists(): shutil.rmtree(image)
     image.mkdir()
     shutil.copytree(app,image/'OShell.app',dirs_exist_ok=True,symlinks=True)
+    shutil.copytree(app.with_name(build_local_terminal.APP_NAME),image/build_local_terminal.APP_NAME,symlinks=True)
     if not (image/'Applications').is_symlink():(image/'Applications').symlink_to('/Applications')
     pkg_hint='，或使用同版本 PKG 安装' if package_format == 'both' else ''
-    (image/'安装说明.txt').write_text(f'OShell {VERSION}\n适用：macOS {minimum} 或更新版本；架构 {archlist}。\n把 OShell.app 拖入 Applications{pkg_hint}。\n各版本使用同一个应用及会话目录，只需安装适合本机的一种。\n本包使用{signing_label}，未进行 Developer ID 签名或 Apple 公证。\n构建校验不等同于最低系统的实际运行验证。\n包内 release-manifest.json 记录构建信息；SHA256SUMS.txt 校验包内文件，不包含外层 DMG 自身。\n')
+    (image/'安装说明.txt').write_text(f'OShell {VERSION}\n适用：macOS {minimum} 或更新版本；架构 {archlist}。\n把 OShell.app 和 oTerm.app 一起拖入 Applications{pkg_hint}。\n各版本使用同一个应用及会话目录，只需安装适合本机的一种。\n本包使用{signing_label}，未进行 Developer ID 签名或 Apple 公证。\n构建校验不等同于最低系统的实际运行验证。\n包内 release-manifest.json 记录构建信息；SHA256SUMS.txt 校验包内文件，不包含外层 DMG 自身。\n')
     installer_metadata.write(image, version=VERSION, build=str(INFO['CFBundleVersion']), flavor=flavor, minimum=minimum, architectures=arches, source_root=ROOT)
     dmg=OUT/(base+'.dmg')
     run(['hdiutil','create','-ov','-format','UDZO','-fs','HFS+','-volname',f'OShell {VERSION}','-srcfolder',image,dmg],log=f'package-{flavor}-dmg.log')

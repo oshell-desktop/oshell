@@ -1449,6 +1449,25 @@ final class CoreTests {
             XCTAssertThrowsError(try SessionProfile(host: host).sshArguments())
         }
     }
+    func testSSHAuthenticationMethodSelection() throws {
+        var profile = SessionProfile(host: "fixture.invalid")
+        let defaults = try profile.sshArguments()
+        XCTAssertTrue(!defaults.contains { $0.hasPrefix("PreferredAuthentications=") })
+        for kind in [SessionKind.ssh, .sftp] {
+            profile.kind = kind
+            profile.sshAuthenticationMethods = [.gssapi, .keyboardInteractive]
+            let args = try profile.sshArguments()
+            for option in ["PreferredAuthentications=gssapi-with-mic,keyboard-interactive", "GSSAPIAuthentication=yes", "KbdInteractiveAuthentication=yes", "PasswordAuthentication=no", "PubkeyAuthentication=no"] {
+                XCTAssertTrue(args.contains(option))
+            }
+            let decoded = try JSONDecoder().decode(SessionProfile.self, from: JSONEncoder().encode(profile))
+            XCTAssertEqual(decoded.sshAuthenticationMethods, profile.sshAuthenticationMethods)
+        }
+        profile.sshAuthenticationMethods = []
+        XCTAssertThrowsError(try profile.sshArguments())
+        profile.sshAuthenticationMethods = [.password, .password]
+        XCTAssertThrowsError(try profile.sshArguments())
+    }
     func testSharedSessionConflictMerge() throws {
         let a = SessionProfile(name: "same-name", host: "a.example.test"), b = SessionProfile(name: "same-name", host: "b.example.test")
         let base = Configuration(profiles: [a, b])
@@ -2478,6 +2497,7 @@ extension CoreTests {
             return
         }
         signal(SIGPIPE, SIG_IGN)
+        if CommandLine.arguments.contains("--review-checks") { try ReviewChecks.run(); return }
         if CommandLine.arguments.count == 3, CommandLine.arguments[1].hasPrefix("--crypto-fixture-") {
             let url = URL(fileURLWithPath: CommandLine.arguments[2])
             if CommandLine.arguments[1] == "--crypto-fixture-write" {
@@ -2496,6 +2516,9 @@ extension CoreTests {
             else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
             return
         }
+        if CommandLine.arguments.contains("--agent-maintenance-checks") {
+            try AgentMaintenanceChecks.run(); return
+        }
         if CommandLine.arguments.contains("--agent-usability-checks") {
             try CoreTests().testAgentQueryAndOutputUsability()
             try CoreTests().testRemoteIdentityAndEcho()
@@ -2503,8 +2526,11 @@ extension CoreTests {
             else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
             return
         }
+        if CommandLine.arguments.contains("--bastion-checks") { try BastionChecks.run(); return }
+        try BastionChecks.run()
         try FontLibraryChecks.run()
         if CommandLine.arguments.contains("--font-library-checks") { return }
+        try AgentMaintenanceChecks.run()
         let tests = CoreTests()
         try tests.testAgentTextReading()
         try tests.testAgentQueryAndOutputUsability()
@@ -2568,6 +2594,7 @@ extension CoreTests {
         tests.testZFINTrailerKeepsPromptAndBlocksRetransmission()
         try tests.testEncryptedSessionPasswordAndEndpointBinding()
         try tests.testSSHArgumentsRemainSeparateAndKeepHostVerification()
+        try tests.testSSHAuthenticationMethodSelection()
         try tests.testSharedSessionConflictMerge()
         try tests.testWebDAVAndSharingProtection()
         try tests.testStorageLocationAndSharedWrites()
@@ -2582,7 +2609,7 @@ extension CoreTests {
         tests.testInvalidZmodemHeadersRemainOrdinaryOutput()
         try tests.testLoggerFlushesEveryAcceptedChunk()
         tests.testCancellationDropsInFlightBytesAcrossEveryBoundary()
-        if failures.isEmpty { print("PASS: 74 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
+        if failures.isEmpty { print("PASS: 75 core groups, including FileZilla launch/XML/IPC, remote host/IP probing, echo framing, dynamic hostname parsing, SSH locale isolation, master rotation, archive import/export, private atomic persistence, connection options, proxy credential isolation, directory migration, keepalive, encrypted credentials and ZFIN/OO regression") }
         else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
     }
 }

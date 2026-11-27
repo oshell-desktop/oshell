@@ -133,6 +133,12 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     private func key(_ row: Row) -> String {
         switch row { case .parent: return "parent"; case .directory(let path): return "directory:" + path; case .session(let profile): return profile.id.uuidString; case .link(let link, _): return "link:" + link.id.uuidString }
     }
+    private static let bastionTitle = "堡垒机 SSH"
+    private static let protocolFilters = ["全部协议", SessionKind.ssh.title, SessionKind.sftp.title, SessionKind.ftp.title, SessionKind.local.title, bastionTitle]
+    private func protocolTitle(_ profile: SessionProfile) -> String {
+        if profile.kind == .ssh, workspace?.store.sshMode(for: profile) == .bastion { return Self.bastionTitle }
+        return profile.kind.title
+    }
     let kindFilter = NSPopUpButton()
     private var filesOnly = false
     private var fileSelection: ((SessionProfile) -> Void)?
@@ -162,7 +168,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             // Reuse the manager actions without creating or presenting a second window.
             super.init(window: nil)
             table.dataSource = self; table.delegate = self; table.allowsMultipleSelection = true
-            kindFilter.addItems(withTitles: ["全部协议", "SSH", "SFTP", "FTP", "本地"])
+            kindFilter.addItems(withTitles: Self.protocolFilters)
             reload(); return
         }
         let window = PopupWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -198,7 +204,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         searchScope.setAccessibilityLabel("会话搜索范围"); searchScope.toolTip = "范围用于关键词搜索；清空后恢复当前目录浏览。"
         searchScope.target = self; searchScope.action = #selector(changeKindFilter)
         searchScope.widthAnchor.constraint(equalToConstant: 156).isActive = true
-        kindFilter.addItems(withTitles: ["全部协议", "SSH", "SFTP", "FTP", "本地"]); kindFilter.target = self; kindFilter.action = #selector(changeKindFilter)
+        kindFilter.addItems(withTitles: Self.protocolFilters); kindFilter.target = self; kindFilter.action = #selector(changeKindFilter)
         kindFilter.setAccessibilityLabel("会话协议分类"); kindFilter.widthAnchor.constraint(equalToConstant: 112).isActive = true
         let navigation = NSStackView(views: [button("所有会话", #selector(root)), button("上一级", #selector(up)), path, NSView()]); navigation.spacing = 8
         let filters = NSStackView(views: [search, kindFilter, searchScope]); filters.spacing = 8
@@ -243,7 +249,11 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         resultStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         resultStatus.toolTip = "⌘ 单击多选，⇧ 单击连续选择，点击连接批量打开；单击 ../ 返回上级；拖到目录或 ../ 迁移；选中后按 F2 或右键重命名；会话行末尾铅笔打开属性；Esc 关闭。"
         connectButton.title = "连接"; connectButton.target = self; connectButton.action = #selector(activateSelection); connectButton.bezelStyle = .rounded
-        let bottom = NSStackView(views: [resultStatus, NSView(), connectButton, button("关闭", #selector(hide))]); bottom.spacing = 10
+        let create = NSPopUpButton(frame: .zero, pullsDown: true)
+        create.addItem(withTitle: "新建会话")
+        create.setAccessibilityLabel("新建会话")
+        if let menu = create.menu { addNewSessionItems(to: menu) }
+        let bottom = NSStackView(views: [resultStatus, NSView(), create, connectButton, button("关闭", #selector(hide))]); bottom.spacing = 10
         emptyLabel.alignment = .center; emptyLabel.maximumNumberOfLines = 2; emptyLabel.textColor = .secondaryLabelColor; emptyLabel.font = .systemFont(ofSize: 13)
         [heading, navigation, filters, scroll, bottom, emptyLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
         NSLayoutConstraint.activate([
@@ -286,6 +296,11 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         return contextMenu(for: rows.isEmpty ? -1 : 0)
     }
 
+    private func addNewSessionItems(to menu: NSMenu) {
+        for (title, action) in [("新建 SSH 会话…", #selector(newSession)), ("新建堡垒机 SSH 会话…", #selector(newBastion)), ("新建 SFTP 会话…", #selector(newSFTP)), ("新建 FTP 会话…", #selector(newFTP))] {
+            menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
+        }
+    }
     func contextMenu(for row: Int) -> NSMenu {
         // Target the row under the pointer, not an older selection. Blank-space
         // clicks must never expose destructive actions for that older selection.
@@ -349,9 +364,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         if SessionLinks.containsDirectory(currentDirectory) {
             add("添加已有会话链接…", #selector(addSavedLink), enabled: !sourceProfiles.isEmpty)
         }
-        add("新建 SSH 会话…", #selector(newSession))
-        add("新建 SFTP 会话…", #selector(newSFTP))
-        add("新建 FTP 会话…", #selector(newFTP))
+        addNewSessionItems(to: menu)
         add("新建目录…", #selector(newDirectory))
         add("会话默认属性…", #selector(showSessionDefaults))
         menu.addItem(.separator())
@@ -433,17 +446,19 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         let directoryRows = allDirectories.filter {
             searching ? ($0 != currentDirectory && inScope($0) && currentQuery.matches(normalized: directoryMetadata[$0] ?? "")) : SessionDirectory.parent($0) == currentDirectory
         }
-        let kinds: [SessionKind?] = [nil, .ssh, .sftp, .ftp, .local]
-        let kind = kinds.indices.contains(kindFilter.indexOfSelectedItem) ? kinds[kindFilter.indexOfSelectedItem] : nil
+        let selectedProtocol = kindFilter.indexOfSelectedItem > 0 ? kindFilter.titleOfSelectedItem : nil
+        func matchesProtocol(_ profile: SessionProfile) -> Bool {
+            (!filesOnly || profile.kind != .local) && (selectedProtocol == nil || selectedProtocol == protocolTitle(profile))
+        }
         let profiles = sortedProfiles.filter {
-            (!filesOnly || $0.kind != .local) && (kind == nil || $0.kind == kind)
+            matchesProtocol($0)
             && (searching ? inScope($0.group) : $0.group == currentDirectory)
             && currentQuery.matches(normalized: metadata[$0.id] ?? "")
         }
         let links: [Row] = sourceLinks.compactMap { link in
             let directory = SessionLinks.directory(for: link.folder)
             guard let profile = sourceProfiles.first(where: { $0.id == link.profileID }),
-                  (!filesOnly || profile.kind != .local), kind == nil || profile.kind == kind,
+                  matchesProtocol(profile),
                   (searching ? inScope(directory) : directory == currentDirectory),
                   currentQuery.matches(normalized: linkMetadata[link.id] ?? "") else { return nil }
             return .link(link, profile)
@@ -467,7 +482,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
         resultStatus.textColor = currentQuery.isValid ? .secondaryLabelColor : .systemRed
         emptyLabel.stringValue = searching ? "没有匹配的会话或目录\n可调整关键词、协议或搜索范围" : "当前目录没有可显示的会话或目录\n右键可以新建会话或目录"
         emptyLabel.isHidden = !profiles.isEmpty || !links.isEmpty || !directoryRows.isEmpty
-        searchScope.isEnabled = searching; kindFilter.item(at: 4)?.isEnabled = !filesOnly
+        searchScope.isEnabled = searching; kindFilter.item(withTitle: SessionKind.local.title)?.isEnabled = !filesOnly
         updateConnectButton()
     }
     func focusSearch() { window?.makeFirstResponder(search); search.selectText(nil) }
@@ -543,7 +558,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
             iconStyle = .session(profile.kind, shortcut: shortcut)
             switch tableColumn?.identifier.rawValue {
             case "name": text = profile.name
-            case "protocol": text = profile.kind.title
+            case "protocol": text = protocolTitle(profile)
             case "host": text = profile.kind == .local ? "本地终端" : profile.host
             case "user": text = profile.username
             case "port": text = profile.kind == .local ? "—" : String(profile.port)
@@ -661,6 +676,7 @@ final class SessionManager: NSWindowController, NSTableViewDataSource, NSTableVi
     }
     @objc private func hide() { cancelInlineRename(); clearFileSelection(); window?.orderOut(nil) }
     @objc private func newSession() { workspace?.createSession(kind: .ssh, directory: currentDirectory, showManager: sidebar == nil) }
+    @objc private func newBastion() { workspace?.createSession(kind: .ssh, initialSSHMode: .bastion, directory: currentDirectory, showManager: sidebar == nil) }
     @objc private func newSFTP() { workspace?.createSession(kind: .sftp, directory: currentDirectory, showManager: sidebar == nil) }
     @objc private func newFTP() { workspace?.createSession(kind: .ftp, directory: currentDirectory, showManager: sidebar == nil) }
     @objc private func addSavedLink() {

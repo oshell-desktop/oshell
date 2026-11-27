@@ -29,3 +29,11 @@ Windows / Linux 开发时至少运行 Go 兼容样本及相关测试；缺少 ma
 共享协议的单一维护源为 oshell-desktop 的 `docs/configuration-protocol-v2.md`。本仓库入口为 `docs/configuration-protocol.md`。变更共享结构时先更新规范、双端实现和互通测试；区分当前已实现行为与计划中的扩展。
 
 共同字段定义为 oshell-desktop 的 `internal/core/shared_configuration_schema.json`，`SharedConfigurationContract.swift` 由其生成，禁止手改。共享配置读 v1/v2、写 v2；发布前必须升级参与同步的两端，未知字段拒绝应用和覆盖，不能绕过校验静默丢弃。
+
+## 每次任务结束前清理构建产物
+
+- 每次涉及构建、测试或预览的任务结束前，先保存本次验证摘要，再运行 `python3 scripts/clean-local-builds.py` 检查目标，随后用 `--apply` 清理历史编译、测试应用和预览副本；不得把多个测试版本留在系统应用列表中。
+- 新建的测试或预览目录必须纳入清理脚本的明确名单，或在测试退出时可靠删除。删除应用前仅注销该副本的 Launch Services 注册，不重置系统应用数据库。
+- 保留正式应用、源码和未提交修改、独立工作区、用户配置、凭据及必要的验证摘要。没有 `dist/OShell.app` 时可验证并保留 `/Applications/OShell.app`，不要为清理而重新构建。
+- 正在运行的应用或 MCP 辅助进程依赖的文件必须保留；不得为清理终止它们。若存在无法安全删除的产物，在任务结果中说明，之后空闲时再清理。
+- 已通过且与本次修改无关的测试不重复运行。必要诊断资料可用 `--keep` 明确保留，不能借此长期保留无用测试应用。

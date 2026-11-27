@@ -2,6 +2,7 @@
 // Copyright (c) 2026 OShell contributors
 
 import AppKit
+import Darwin
 import SwiftTerm
 import OShellCore
 
@@ -189,6 +190,7 @@ final class OShellTerminal: LocalProcessTerminalView {
     }
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
+        guard owner?.onAI != nil else { return menu }
         menu.addItem(.separator())
         for (title, action) in [("MCP 控制中心", #selector(openAI))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
@@ -231,6 +233,7 @@ final class OShellTerminal: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         guard owner?.isShutdown != true else { return }
         if userInputDepth > 0 {
+            owner?.targetPrompt?.cancel()
             if let owner, AgentCoordinator.shared.consumeHuman(Array(data), pane: owner) { return }
         }
         if let owner, owner.ended {
@@ -330,6 +333,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var hostKeyChangeReported = false
     var onHostKeyChange: ((TerminalPane, SSHHostKeyChange) -> Void)?
     private var authBroker: AuthBroker?
+    var targetPrompt: BastionPrompt?
+    var targetIdentity: SSHIdentity?
+    private var initialTargetDeadline: TimeInterval?
+    var targetPromptHandler: ((BastionPrompt.Event) -> Void)?
+    var savedBastionProfile: (() -> SessionProfile?)?
+    var sendingTargetPassword = false
     private var oneTimePassword: String?
     let externalTerminalType: String?
     private(set) var sshConnectionGroup: SSHConnectionGroup?
@@ -345,6 +354,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var onState: (() -> Void)?
     var onOutput: ((TerminalPane) -> Void)?
     var onError: ((String) -> Void)?
+    var onShellExit: (() -> Void)?
     var onCloseRequested: ((TerminalPane) -> Void)?
     var onUserInput: ((TerminalPane, [UInt8]) -> Bool)?
     var onPaste: ((TerminalPane, String) -> Void)?
@@ -751,8 +761,25 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         else { _ = window.makeFirstResponder(terminal) }
         if window.firstResponder === terminal { view.scrollToVisible(view.bounds) }
     }
-    // Runtime-only working directory for Finder's service. Not shared configuration.
     var localStartDirectory: URL?
+
+    // Query the local shell itself: terminal output can report a remote host's directory.
+    var localShellDirectory: URL? {
+        guard profile.kind == .local, connectionIsActive else { return nil }
+        let pid = terminal.process.shellPid
+        guard pid > 0 else { return nil }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout.size(ofValue: info))
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        return withUnsafeBytes(of: &info.pvi_cdir.vip_path) { bytes in
+            guard bytes.first == UInt8(ascii: "/"), let end = bytes.firstIndex(of: 0),
+                  let path = String(bytes: bytes[..<end], encoding: .utf8) else { return nil }
+            var directory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &directory), directory.boolValue,
+                  access(path, X_OK) == 0 else { return nil }
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+    }
     var connectionPreparationError: Error?
     func start() {
         guard !started, !isShutdown, !ended else { return }
@@ -774,9 +801,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             if let group = sshConnectionGroup { args = try group.arguments(for: profile, clone: reusesSSHConnection) + args }
             if profile.kind == .ssh && !reusesSSHConnection {
                 let helper = ZmodemTransfer.helperDirectory.appendingPathComponent("OShellAskpass").path.replacingOccurrences(of: "%", with: "%%")
-                args.insert(contentsOf: ["-o", "PermitLocalCommand=yes", "-o", "LocalCommand=" + ConnectionValidation.quote(helper) + " --session-ready"], at: args.count - 2)
+                args.insert(contentsOf: ["-o", "PermitLocalCommand=yes", "-o", "LocalCommand=" + ConnectionValidation.quote(helper) + " --session-ready %C"], at: args.count - 2)
             }
-            let executable = profile.kind == .ssh ? "/usr/bin/ssh" : "/bin/zsh"
+            var executable = profile.kind == .ssh ? "/usr/bin/ssh" : "/bin/zsh"
             started = true; ended = false
             var environment = ProcessInfo.processInfo.environment
             environment["TERM"] = externalTerminalType ?? "xterm-256color"; environment["COLORTERM"] = "truecolor"
@@ -788,8 +815,23 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             if profile.kind == .ssh && !reusesSSHConnection {
                 let password = oneTimePassword; oneTimePassword = nil
                 let broker = try AuthBroker(profile: credentialsForConnection?() ?? profile, oneTimePassword: password, permitsSaving: sshConnectionGroup?.isExternal != true); authBroker = broker
+                let saved = savedBastionProfile?()
+                let bastion = try saved.map(SSHIdentity.resolution)
+                if let bastion, let savedBastionProfile,
+                   let client = broker.bastionClient(arguments: &args, destination: bastion, savedProfile: savedBastionProfile) {
+                    executable = client.path
+                }
+                let terminalStartNonce = UUID()
+                if let bastion, let account = BastionAccount(bastion.identity.user) {
+                    targetPrompt = BastionPrompt(user: account.user, after: terminalStartNonce)
+                }
                 broker.onSavePassword = onSaveAuthenticatedPassword
-                broker.onAuthenticated = { [weak self] in
+                broker.onAuthenticated = { [weak self, weak broker] in
+                    if let bastion, !bastion.connectionHash.isEmpty, bastion.connectionHash == broker?.authenticatedHash {
+                        broker?.terminalStartNonce = terminalStartNonce
+                        self?.targetIdentity = bastion.identity
+                        self?.initialTargetDeadline = ProcessInfo.processInfo.systemUptime + 30
+                    } else { self?.targetPrompt = nil }
                     self?.sshConnectionGroup?.authenticatedConnectionReady()
                     self?.showConnectionEstablished()
                     self?.hostKeyDiagnostic = Data()
@@ -896,6 +938,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             hostKeyDiagnostic.append(incoming)
             if hostKeyDiagnostic.count > 65_536 { hostKeyDiagnostic = Data(hostKeyDiagnostic.suffix(65_536)) }
             offerHostKeyReplacement()
+        }
+        if let deadline = initialTargetDeadline, ProcessInfo.processInfo.systemUptime > deadline { targetPrompt?.cancel(); initialTargetDeadline = nil }
+        if sessionReady, targetIdentity != nil, let event = targetPrompt?.consume(incoming) {
+            initialTargetDeadline = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.targetPromptHandler?(event) }
         }
         if let audit = agentAudit {
             audit.append(.init(kind: "output", fields: AgentCoordinator.shared.outputFields(self), bytes: agentOutputRedactor.consume(incoming)))
@@ -1081,7 +1128,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
            responder === terminal || responder.isDescendant(of: view) {
             window.makeFirstResponder(nil)
         }
-        onCloseRequested = nil; onReconnectRequested = nil; endedInput = nil; onOutput = nil; hasUnreadOutput = false
+        onShellExit = nil; onCloseRequested = nil; onReconnectRequested = nil; endedInput = nil; onOutput = nil; hasUnreadOutput = false
         promptScan?.cancel(); promptScan = nil
         hostProbeWork?.cancel(); hostProbeWork = nil; hostProbeTimeout?.cancel(); hostProbeTimeout = nil
         hostProbeToken = nil; hostProbeEcho = nil
@@ -1265,6 +1312,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let pendingEcho = hostProbeEcho?.flush() ?? Data(); hostProbeEcho = nil; display(pendingEcho)
         authBroker?.stop(); authBroker = nil
         ended = true; cancelTransfer(); display(detector.flush()); stopLogging(); refreshHeader()
+        if let onShellExit { onShellExit(); return }
         display(Data("\r\n[OShell · 连接已结束，标签仍保留，退出码 \(exitCode.map(String.init) ?? "未知")]\r\n".utf8))
         if reusesSSHConnection, exitCode != 0 {
             display(Data("[复用终端未能保持连接；若服务器拒绝多通道或共享连接失效，请重新建立会话。不会回退到密码重试。]\r\n".utf8))

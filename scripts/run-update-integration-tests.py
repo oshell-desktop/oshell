@@ -28,8 +28,20 @@ for mode in args.modes:
     info_path.write_bytes(plistlib.dumps(info));run(['codesign','--force','--sign','-',live])
     old_digest=hash_file(info_path)
     run(['ditto',live,new]);after=dict(info,CFBundleVersion=str(new_build),OShellUpdateTestAfter=True,OShellUpdateTestRoot=folder)
+    if mode == 'install':
+        terminal = root/'next/oTerm.app'
+        run(['ditto', ROOT/'dist'/terminal.name, terminal])
+        terminal_plist = terminal/'Contents/Info.plist'
+        terminal_info = plistlib.loads(terminal_plist.read_bytes())
+        terminal_info.update(CFBundleVersion=str(new_build), CFBundleIdentifier=bundle_id+'.terminal', OShellHostBundleIdentifier=bundle_id)
+        terminal_plist.write_bytes(plistlib.dumps(terminal_info))
+        run(['codesign', '--force', '--sign', '-', terminal])
+        embedded = new/'Contents/Resources/LocalTerminal.zip'
+        run(['ditto', '-c', '-k', '--keepParent', terminal, embedded])
+        after.update(OShellLocalTerminalArchiveSHA256=hash_file(embedded), OShellLocalTerminalBundleIdentifier=bundle_id+'.terminal')
     (new/'Contents/Info.plist').write_bytes(plistlib.dumps(after));run(['codesign','--force','--sign','-',new])
     image=root/'image';image.mkdir();run(['ditto',new,image/'OShell.app']);(image/'Applications').symlink_to('/Applications')
+    if mode == 'install': run(['ditto', terminal, image/terminal.name])
     archive=web/'update.dmg';run(['hdiutil','create','-quiet','-format','UDZO','-fs','HFS+','-volname','OShell Update Test','-srcfolder',image,archive])
     signature=run([SIGN,'--ed-key-file',key,'-p',archive])
     if mode=='bad-archive':
@@ -65,7 +77,10 @@ for mode in args.modes:
             while not (root/'relaunch.json').exists() and time.time()<deadline:time.sleep(.2)
             result['relaunched']= (root/'relaunch.json').exists()
             result['newVersionInstalled']=plistlib.loads(info_path.read_bytes())['CFBundleVersion']==str(new_build)
-            passed=result.get('cancelKeptSession') and result.get('secondConfirmationAccepted') and result['relaunched'] and result['newVersionInstalled'] and result.get('downloadedBytes',0)>0
+            installed = live.with_name(terminal.name)
+            result['optionalTerminalInstalled'] = (installed/'Contents/Info.plist').is_file() and hash_file(installed/'Contents/Info.plist') == hash_file(terminal_plist)
+            if result['optionalTerminalInstalled']: run(['codesign','--verify','--deep','--strict',installed])
+            passed=result['optionalTerminalInstalled'] and result.get('cancelKeptSession') and result.get('secondConfirmationAccepted') and result['relaunched'] and result['newVersionInstalled'] and result.get('downloadedBytes',0)>0
         else:
             result['originalAppUnchanged']=hash_file(info_path)==old_digest
             expected='no-update' if mode in ['no-update','static-no-update'] else ('cancelled' if mode=='cancel' else 'rejected')
@@ -77,7 +92,8 @@ for mode in args.modes:
         if process and process.poll() is None:process.kill();process.wait()
         server.shutdown();server.server_close()
         # Only clean domains uniquely created by this test, never app.oshell.mac.
-        subprocess.run(['defaults','delete',bundle_id],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        for domain in (bundle_id,bundle_id+'.terminal-appearance'):
+            subprocess.run(['defaults','delete',domain],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         cache=pathlib.Path.home()/'Library/Caches'/bundle_id
         if cache.exists():shutil.rmtree(cache)
 report={'passed':all(r['passed'] for r in results),'cases':results}

@@ -30,6 +30,7 @@ final class MemoryCycleProfile {
     private var request: ZOCLaunchRequest!
     private var fullscreenScreenSize: NSSize?
     private var switchLatencies = [Double]()
+    private var soak: MemorySoakProbe?, soakResults = [[String: Any]]()
     private let cycles = max(1, min(3, Int(ProcessInfo.processInfo.environment["OSHELL_MEMORY_ROUNDS"] ?? "3") ?? 3))
     private let count = max(1, min(16, Int(ProcessInfo.processInfo.environment["OSHELL_MEMORY_SESSION_COUNT"] ?? "16") ?? 16))
     init(_ controller: WorkspaceController, root: URL) { self.controller = controller; self.root = root }
@@ -188,14 +189,16 @@ final class MemoryCycleProfile {
                 }) {
                     self.checks["round\(self.round)ConnectionsUnchanged"] = pids == panes.map { $0.terminal.process.shellPid } && panes.allSatisfy { $0.sessionReady }
                     self.checks["round\(self.round)HistoryPreserved"] = panes.allSatisfy { String(decoding: $0.terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains("MEMORY_OUTPUT_COMPLETE") }
-                    self.exerciseDisplayTransitions {
+                    self.activeSoak {
+                      self.exerciseDisplayTransitions {
                         self.idleSample(0) {
                             for (index, pane) in panes.enumerated() { pane.sendManaged(Array("check_\(self.round)_\(index + self.count)\r".utf8)) }
                             self.wait("round\(self.round)PostIdleInput", until: {
                                 panes.enumerated().allSatisfy { index, pane in String(decoding: pane.terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains("REPLY_check_\(self.round)_\(index + self.count)") }
                             }) {
                                 self.checks["round\(self.round)PostIdleConnectionsUnchanged"] = pids == panes.map { $0.terminal.process.shellPid } && panes.allSatisfy { $0.sessionReady }
-                                self.checks["round\(self.round)PostIdleHistoryPreserved"] = panes.allSatisfy { String(decoding: $0.terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains("MEMORY_OUTPUT_COMPLETE") }
+                                let marker = self.soakResults.isEmpty ? "MEMORY_OUTPUT_COMPLETE" : "SOAK "
+                                self.checks["round\(self.round)PostIdleRecentHistoryPreserved"] = panes.allSatisfy { String(decoding: $0.terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains(marker) }
                                 self.visitTabs(0, phase: "restored") {
                                     if self.controller.configuration.preferences.metal {
                                         self.checks["round\(self.round)AllTabsRendered"] = panes.allSatisfy { $0.terminal.metalRendererStatus.presentedFrameCount > 0 }
@@ -207,10 +210,25 @@ final class MemoryCycleProfile {
                                 }
                             }
                         }
+                      }
                     }
                 }
             }
         }
+    }
+    private func activeSoak(_ complete: @escaping () -> Void) {
+        let duration = Int(ProcessInfo.processInfo.environment["OSHELL_MEMORY_ACTIVE_SECONDS"] ?? "0") ?? 0
+        guard duration > 0 else { complete(); return }
+        soak = MemorySoakProbe(controller, round: round, duration: min(3600, duration), sample: { [weak self] elapsed in
+            guard let self else { return }; self.sample("active_\(self.round)_\(elapsed)s")
+        }, complete: { [weak self] results, metrics in
+            guard let self else { return }
+            for (name, passed) in results { self.checks["round\(self.round)Soak-" + name] = passed }
+            self.soakResults.append(metrics); self.soak = nil
+            self.sample("active_complete_\(self.round)")
+            complete()
+        })
+        soak?.start()
     }
     private func exerciseDisplayTransitions(_ complete: @escaping () -> Void) {
         let cycles = Int(ProcessInfo.processInfo.environment["OSHELL_MEMORY_GEOMETRY_CYCLES"] ?? "0") ?? 0
@@ -316,7 +334,7 @@ final class MemoryCycleProfile {
         if ProcessInfo.processInfo.environment["OSHELL_MEMORY_BACKGROUND_TABS"] == "1" {
             checks["round\(round)LogsPreserved"] = (0..<count).allSatisfy { index in
                 let text = (try? String(contentsOf: root.appendingPathComponent("terminal-\(round)-\(index).log"), encoding: .utf8)) ?? ""
-                return text.contains("BG_LOG_\(round)") && text.contains("REPLY_check_\(round)_\(index)") && text.contains("REPLY_check_\(round)_\(index + count)")
+                return text.contains("MEMORY_OUTPUT_COMPLETE") && text.contains("BG_LOG_\(round)") && text.contains("REPLY_check_\(round)_\(index)") && text.contains("REPLY_check_\(round)_\(index + count)")
             }
         }
         if remaining > 1 { later(0.5) { self.closedSample(remaining - 1) }; return }
@@ -364,9 +382,10 @@ final class MemoryCycleProfile {
         try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]).write(to: root.appendingPathComponent("phase.json"))
     }
     private func finish() {
+        soak = nil
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 } && round == cycles, "checks": checks, "samples": samples, "sessionsPerRound": count,
                                   "metal": controller.configuration.preferences.metal, "scrollback": controller.configuration.preferences.scrollback,
-                                  "switchLatencyMilliseconds": switchLatencies]
+                                  "switchLatencyMilliseconds": switchLatencies, "activeSoak": soakResults]
         try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: root.appendingPathComponent("result.json"))
         controller.shutdown(); Self.active = nil; NSApp.terminate(nil)
     }

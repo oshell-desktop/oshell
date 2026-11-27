@@ -11,8 +11,28 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     private let profiles: [SessionProfile]
     private let alert = PopupAlert()
     private let pages = NSTabView()
+    private let authentication: SSHAuthenticationSettingsView
+    private let newBastionAuthentication: SSHAuthenticationSettingsView?
+    var selectedAuthentication: SSHAuthenticationSettingsView {
+        if selectedSSHMode == .bastion, let newBastionAuthentication { return newBastionAuthentication }
+        return authentication
+    }
     private let name = NSTextField(), directory = SessionDirectoryPicker(), host = NSTextField(), port = NSTextField(), user = NSTextField(), key = NSTextField()
     private let password = PasswordEntryView(identifier: "session.password"), remember = NSButton(checkboxWithTitle: "保存密码", target: nil, action: nil)
+    private let targetPassword = PasswordEntryView(identifier: "session.targetPassword")
+    private let clearTarget = NSButton(checkboxWithTitle: "清除已保存密码", target: nil, action: nil)
+    private let targetAccount = NSTextField()
+    private let asset = NSTextField(labelWithString: "")
+    private var selectedKind: SessionKind {
+        SessionKind(rawValue: protocolKind.selectedItem?.representedObject as? String ?? "") ?? .ssh
+    }
+    var selectedSSHMode: SSHSessionMode {
+        protocolKind.selectedItem?.identifier == .init("session.bastion") ? .bastion : .terminal
+    }
+    private var connectionGrid: NSGridView?
+    private var targetDraftIdentity = [String]()
+    private var passwordAccount: String?
+    private(set) var targetChange: TargetPasswordChange?
     private let passwordProtection = NSPopUpButton()
     private let proxyPicker = NSPopUpButton()
     private let proxyRouteNote = NSTextField(wrappingLabelWithString: "")
@@ -34,9 +54,11 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     private let remoteDirectory = NSTextField()
     private var allPages = [NSTabViewItem]()
     private var lastKind: SessionKind = .ssh
-    init(_ existing: SessionProfile?, profiles: [SessionProfile], directories: [String], initialDirectory: String, kind: SessionKind = .ssh, defaults: SessionDefaults = SessionDefaults(), proxies: [ProxyProfile] = [], manageProxies: (() -> [ProxyProfile])? = nil) {
+    init(_ existing: SessionProfile?, profiles: [SessionProfile], directories: [String], initialDirectory: String, kind: SessionKind = .ssh, localMode: SSHSessionMode? = nil, defaults: SessionDefaults = SessionDefaults(), proxies: [ProxyProfile] = [], manageProxies: (() -> [ProxyProfile])? = nil) {
         proxyCatalog = proxies; self.manageProxies = manageProxies
         original = existing; profile = existing ?? defaults.makeProfile(kind: kind, directory: initialDirectory); self.profiles = profiles; self.defaults = defaults
+        authentication = SSHAuthenticationSettingsView(methods: profile.sshAuthenticationMethods)
+        newBastionAuthentication = existing == nil ? SSHAuthenticationSettingsView(methods: [.keyboardInteractive]) : nil
         lastKind = profile.kind
         super.init()
         alert.messageText = existing == nil ? "新建会话" : "会话属性"
@@ -64,11 +86,33 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         }
         let passwordStorage = NSStackView(views: [remember, passwordProtection]); passwordStorage.spacing = 8
         legacy.state = profile.legacySSH ? .on : .off
-        protocolKind.addItems(withTitles: ["SSH", "SFTP", "FTP"])
-        protocolKind.selectItem(at: [.ssh, .sftp, .ftp].firstIndex(of: profile.kind) ?? 0)
+        for (title, kind) in [("SSH 终端", SessionKind.ssh), ("SFTP", .sftp), ("FTP", .ftp), ("堡垒机 SSH", .ssh)] {
+            protocolKind.addItem(withTitle: title)
+            protocolKind.lastItem?.representedObject = kind.rawValue
+        }
+        protocolKind.lastItem?.identifier = .init("session.bastion")
+        let mode = existing.map { SSHSessionMode.resolved(for: $0, override: localMode) } ?? localMode ?? .terminal
+        if profile.kind == .ssh { protocolKind.selectItem(withTitle: mode == .bastion ? "堡垒机 SSH" : "SSH 终端") }
+        else { protocolKind.selectItem(withTitle: profile.kind.title) }
         protocolKind.target = self; protocolKind.action = #selector(protocolChanged)
         remoteDirectory.stringValue = profile.initialDirectory
-        addPage("连接", rows: [("协议", protocolKind), ("名称", name), ("目录", directory), ("主机", host), ("端口", port), ("用户名", user), ("私钥", key), ("密码", password), ("密码保存", passwordStorage), ("文件初始目录", remoteDirectory), ("兼容性", legacy)], note: "本机自动加密的密文和随机密钥均由 OShell 保存在数据目录，复制整个目录可能同时带走密钥。主密码模式保护更强。已保存密码不回显；留空并勾选保存密码时沿用，修改主机或账号后也会沿用。填写新值可替换，取消勾选可清除。")
+        targetAccount.identifier = .init("session.targetAccount")
+        targetAccount.placeholderString = "快速登录字符串中的目标账号"
+        NotificationCenter.default.addObserver(self, selector: #selector(targetAccountChanged), name: NSControl.textDidChangeNotification, object: targetAccount)
+        let accountRow = NSStackView(views: [targetAccount, asset])
+        let targetEntry = NSStackView(views: [targetPassword, clearTarget])
+        targetPassword.placeholderString = "留空沿用，输入新值替换"
+        clearTarget.target = self; clearTarget.action = #selector(targetPasswordChanged)
+        for field in [targetPassword.secureField as NSTextField, targetPassword.visibleField] {
+            NotificationCenter.default.addObserver(self, selector: #selector(targetPasswordChanged), name: NSControl.textDidChangeNotification, object: field)
+        }
+        for field in [user, host, port] {
+            NotificationCenter.default.addObserver(self, selector: #selector(updateTargetFields), name: NSControl.textDidChangeNotification, object: field)
+        }
+        addPage("连接", rows: [("协议", protocolKind), ("名称", name), ("目录", directory), ("主机", host), ("端口", port), ("用户名", user), ("私钥", key), ("密码", password), ("密码保存", passwordStorage), ("服务器登录账号", accountRow), ("服务器登录密码", targetEntry), ("文件初始目录", remoteDirectory), ("兼容性", legacy)], note: "本机自动加密的密文和随机密钥均由 OShell 保存在数据目录，复制整个目录可能同时带走密钥。主密码模式保护更强。已保存密码不回显；留空并勾选保存密码时沿用，修改主机或账号后也会沿用。填写新值可替换，取消勾选可清除。")
+        let authViews = NSStackView(views: [authentication, newBastionAuthentication].compactMap { $0 })
+        authViews.orientation = .vertical
+        addPage("身份验证", rows: [("SSH 认证", authViews)], note: "自定义时，只尝试勾选的方法，越靠上越先尝试。Keyboard Interactive 可逐轮输入密码或验证码。GSSAPI 使用当前用户的 Kerberos 票据。")
         proxyRouteNote.maximumNumberOfLines = 3; proxyRouteNote.lineBreakMode = .byTruncatingMiddle
         proxyPicker.identifier = .init("session.sharedProxy")
         proxyPicker.target = self; proxyPicker.action = #selector(proxyChanged)
@@ -114,6 +158,7 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     private func button(_ text: String, _ action: Selector) -> NSButton { let b = NSButton(title: text, target: self, action: action); b.bezelStyle = .rounded; return b }
     private func addPage(_ title: String, rows: [(String, NSView)], note: String? = nil) {
         let view = NSView(), grid = NSGridView(views: rows.map { [NSTextField(labelWithString: $0.0), $0.1] })
+        if title == "连接" { connectionGrid = grid }
         grid.column(at: 0).xPlacement = .trailing; grid.column(at: 0).width = 140; grid.column(at: 1).xPlacement = .fill; grid.rowSpacing = 12; grid.columnSpacing = 14
         for (_, control) in rows {
             control.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -127,8 +172,39 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         }
         let item = NSTabViewItem(identifier: title); item.label = title; item.view = view; pages.addTabViewItem(item)
     }
+    @objc private func targetAccountChanged() {
+        guard selectedSSHMode == .bastion, let draft = BastionLoginDraft(user.stringValue) else { return }
+        user.stringValue = draft.prefix + targetAccount.stringValue
+        updateTargetFields()
+    }
+    @objc private func targetPasswordChanged() {
+        passwordAccount = BastionAccount(user.stringValue)?.user
+        updateTargetFields()
+    }
+    @objc private func updateTargetFields() {
+        let bastion = selectedSSHMode == .bastion
+        let draft = bastion ? BastionLoginDraft(user.stringValue) : nil
+        let identity = [lastKind.rawValue, selectedSSHMode.rawValue, host.stringValue, port.stringValue, draft?.prefix ?? ""]
+        // Completing an empty account must retain a password already typed for this asset.
+        if identity != targetDraftIdentity || (passwordAccount != nil && passwordAccount != draft?.user) {
+            targetPassword.clear(); clearTarget.state = .off; passwordAccount = nil
+            targetDraftIdentity = identity
+        }
+        guard let grid = connectionGrid else { return }
+        (grid.cell(atColumnIndex: 0, rowIndex: 5).contentView as? NSTextField)?.stringValue = bastion ? "快速登录字符串" : "用户名"
+        (grid.cell(atColumnIndex: 0, rowIndex: 7).contentView as? NSTextField)?.stringValue = bastion ? "堡垒机登录密码" : "密码"
+        grid.row(at: 9).isHidden = !bastion
+        grid.row(at: 10).isHidden = !bastion
+        grid.rowSpacing = bastion ? 6 : 12
+        targetAccount.isEnabled = draft != nil
+        let account = draft?.user ?? ""
+        if targetAccount.stringValue != account { targetAccount.stringValue = account }
+        asset.stringValue = draft.map { "资产：" + $0.asset } ?? ""
+        targetPassword.secureField.isEnabled = clearTarget.state != .on
+        targetPassword.visibleField.isEnabled = clearTarget.state != .on
+    }
     @objc func protocolChanged() {
-        let kind: SessionKind = [.ssh, .sftp, .ftp][protocolKind.indexOfSelectedItem]
+        let kind = selectedKind
         if kind != lastKind {
             if original == nil {
                 let before = defaults.makeProfile(kind: lastKind, directory: ""), next = defaults.makeProfile(kind: kind, directory: "")
@@ -141,13 +217,17 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
             }
         }
         lastKind = kind
+        authentication.isHidden = selectedAuthentication !== authentication
+        newBastionAuthentication?.isHidden = selectedSSHMode != .bastion
+        updateTargetFields()
         key.isEnabled = kind.usesSSH; legacy.isEnabled = kind.usesSSH
         titleMode.isEnabled = kind == .ssh
         host.placeholderString = kind == .ftp ? "FTP 主机地址" : "主机地址或 SSH 配置别名"
         user.placeholderString = kind == .ftp ? "例如 anonymous" : "留空使用 SSH 默认用户"
+        if selectedSSHMode == .bastion { user.placeholderString = "堡垒机账号#编码#资产#SSH#服务器登录账号" }
         for item in pages.tabViewItems { pages.removeTabViewItem(item) }
         for item in allPages {
-            if kind == .ftp && ["代理", "隧道", "保持活动"].contains(item.label) { continue }
+            if kind == .ftp && ["身份验证", "代理", "隧道", "保持活动"].contains(item.label) { continue }
             if kind == .sftp && item.label == "隧道" { continue }
             pages.addTabViewItem(item)
         }
@@ -189,9 +269,9 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         keepAliveChanged()
     }
     func run() -> SessionProfile? {
-        defer { password.clear() }
+        defer { password.clear(); targetPassword.clear() }
         while alert.runModal() == .alertFirstButtonReturn {
-            profile.kind = [.ssh, .sftp, .ftp][protocolKind.indexOfSelectedItem]
+            profile.kind = selectedKind
             profile.initialDirectory = remoteDirectory.stringValue
             profile.name = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             profile.host = host.stringValue.trimmingCharacters(in: .whitespacesAndNewlines); profile.port = Int(port.stringValue) ?? 0
@@ -200,6 +280,7 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
             if chosenProxy != "legacy" {
                 profile.proxyID = chosenProxy.flatMap(UUID.init(uuidString:)); profile.proxy = ProxySettings(); profile.jumpHost = ""
             }
+            profile.sshAuthenticationMethods = profile.kind.usesSSH ? selectedAuthentication.methods : nil
             profile.legacySSH = legacy.state == .on
             profile.keepAlive.enabled = alive.state == .on; profile.keepAlive.interval = Int(interval.stringValue) ?? 0; profile.keepAlive.maxMissed = Int(missed.stringValue) ?? 0
             profile.keepAlive.tcp = tcp.state == .on; profile.keepAlive.idleEnabled = profile.kind == .ssh && idle.state == .on
@@ -210,6 +291,9 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
             }
             do {
                 profile.group = directory.selectedDirectory
+                if selectedSSHMode == .bastion, BastionAccount(profile.username) == nil {
+                    throw ModelError.invalid("请填写完整的快速登录字符串：堡垒机账号#编码#资产#SSH#服务器登录账号。")
+                }
                 try profile.validate()
                 if let id = profile.proxyID { _ = try ProxyCatalog.route(id, in: proxyCatalog) }
                 let known = profiles + profiles.filter { $0.proxy.encryptedPassword != nil }.map { $0.proxy.credentialProfile }
@@ -234,6 +318,13 @@ final class SessionEditor: NSObject, NSTableViewDataSource, NSTableViewDelegate 
                     guard let encrypted = try protect(password.stringValue, destination: profile, old: original, selection: passwordProtection, explicitIdentity: profile.kind == .ftp) else { continue }
                     profile.encryptedPassword = encrypted
                 } else { profile.encryptedPassword = nil }
+                if selectedSSHMode == .bastion {
+                    if clearTarget.state == .on { targetChange = .clear }
+                    else if !targetPassword.stringValue.isEmpty {
+                        try ConfigurationStore.validateTargetSecret(targetPassword.stringValue)
+                        targetChange = .replace(targetPassword.stringValue)
+                    }
+                }
                 return profile
             } catch { Dialogs.message(error.localizedDescription) }
         }

@@ -31,7 +31,7 @@ extension WorkspaceController {
             var copy = try result.get()
             copy.name = SessionDuplication.name(for: source, among: configuration.profiles)
             var value = configuration; value.profiles.append(copy)
-            guard saveConfiguration(value) else { return nil }
+            guard saveConfiguration(value, modeUpdates: copy.kind == .ssh ? [copy.id: store.sshMode(for: source)] : [:]) else { return nil }
             copySessionTitleChoices(from: [source], to: [copy]); return copy
         } catch {
             if encrypted { PasswordVault.shared.lock() }

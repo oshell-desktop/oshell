@@ -51,6 +51,7 @@ mkdir -p "$file_bridge/Contents/MacOS"
 cp "$binary_dir/OShell-FileZilla" "$file_bridge/Contents/MacOS/OShell-FileZilla"
 cp "$project_root/scripts/FileZilla-Info.plist" "$file_bridge/Contents/Info.plist"
 cp "$binary_dir/OShellProxy" "$app_dir/Contents/Helpers/OShellProxy"
+python3 "$project_root/scripts/build_bastion_ssh.py" "$build_dir" "$(uname -m)" 15.0 "$app_dir/Contents" > "$build_dir/bastion-ssh.log" 2>&1
 cp "$binary_dir/OShellAskpass" "$app_dir/Contents/Helpers/OShellAskpass"
 cp "$binary_dir/OShell-MCP" "$app_dir/Contents/Helpers/OShell-MCP"
 cp "$helper_source/src/lrz" "$helper_source/src/lsz" "$app_dir/Contents/Helpers/"
@@ -68,15 +69,18 @@ cp "$project_root/Vendor/lrzsz-0.12.20.tar.gz" "$app_dir/Contents/Resources/"
 cp "$project_root/scripts/Info.plist" "$app_dir/Contents/Info.plist"
 if [ "$OSHELL_TEST_HARNESS" = 1 ]; then
     /usr/libexec/PlistBuddy -c 'Add OShellTestHarness bool true' "$app_dir/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c 'Delete CFBundleDocumentTypes' "$app_dir/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c 'Delete UTExportedTypeDeclarations' "$app_dir/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c 'Delete NSServices' "$app_dir/Contents/Info.plist"
 fi
 swift "$project_root/scripts/icon.swift" "$build_dir/OShell.iconset"
 iconutil -c icns "$build_dir/OShell.iconset" -o "$app_dir/Contents/Resources/OShell.icns"
 # Drop debug maps and local linker names from shipped executables. Keep external
 # symbols and runtime metadata; never apply this to bundled third-party frameworks.
-for executable in "$app_dir/Contents/MacOS/OShell" "$app_dir/Contents/MacOS/OShell-ZOC" "$file_bridge/Contents/MacOS/OShell-FileZilla" "$app_dir/Contents/Helpers/OShellProxy" "$app_dir/Contents/Helpers/OShellAskpass" "$app_dir/Contents/Helpers/OShell-MCP" "$app_dir/Contents/Helpers/lrz" "$app_dir/Contents/Helpers/lsz"; do
+for executable in "$app_dir/Contents/MacOS/OShell" "$app_dir/Contents/MacOS/OShell-ZOC" "$file_bridge/Contents/MacOS/OShell-FileZilla" "$app_dir/Contents/Helpers/OShellProxy" "$app_dir/Contents/Helpers/OShellAskpass" "$app_dir/Contents/Helpers/OShell-MCP" "$app_dir/Contents/Helpers/lrz" "$app_dir/Contents/Helpers/lsz" "$app_dir/Contents/Helpers/OShell-SSH"; do
     xcrun strip -S -x "$executable"
 done
+codesign --force --sign - "$app_dir/Contents/Helpers/OShell-SSH"
 codesign --force --sign - "$app_dir/Contents/Helpers/lrz"
 codesign --force --sign - "$app_dir/Contents/Helpers/lsz"
 codesign --force --sign - "$app_dir/Contents/Helpers/OShellAskpass"
@@ -85,7 +89,13 @@ codesign --force --sign - "$app_dir/Contents/Helpers/OShell-MCP"
 codesign --force --sign - "$app_dir/Contents/MacOS/OShell-ZOC"
 codesign --force --sign - "$file_bridge"
 python3 "$project_root/scripts/embed-sparkle.py" "$app_dir" "$(uname -m)"
+if [ "$OSHELL_TEST_HARNESS" = 0 ]; then
+    python3 "$project_root/scripts/build_local_terminal.py" "$staging_dir" "$(uname -m)" 15.0 --host "$app_dir" --embed-update
+fi
 python3 "$project_root/scripts/sign-app.py" "$app_dir"
 python3 "$project_root/scripts/check-public-source.py" --app "$app_dir"
 published_app="$(python3 "$project_root/scripts/install-local-app.py" "$app_dir" "$destination_app")"
 echo "Built: $published_app"
+if [ "$OSHELL_TEST_HARNESS" = 0 ]; then
+    python3 "$project_root/scripts/install-local-app.py" "$staging_dir/oTerm.app" "$project_root/dist/oTerm.app"
+fi

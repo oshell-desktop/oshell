@@ -9,6 +9,22 @@ public enum SessionKind: String, Codable, CaseIterable {
     public var usesSSH: Bool { self == .ssh || self == .sftp }
     public var isFileSession: Bool { self == .sftp || self == .ftp }
 }
+public enum SSHAuthenticationMethod: String, CaseIterable, Codable {
+    case password
+    case publicKey = "publickey"
+    case keyboardInteractive = "keyboard-interactive"
+    case gssapi = "gssapi-with-mic"
+
+    var openSSHOption: String {
+        switch self {
+        case .password: return "PasswordAuthentication"
+        case .publicKey: return "PubkeyAuthentication"
+        case .keyboardInteractive: return "KbdInteractiveAuthentication"
+        case .gssapi: return "GSSAPIAuthentication"
+        }
+    }
+}
+
 public struct SessionProfile: Codable, Equatable, Identifiable {
     public var id: UUID
     public var name: String
@@ -23,9 +39,11 @@ public struct SessionProfile: Codable, Equatable, Identifiable {
     public var tunnels: [TunnelRule] = []
     public var proxy = ProxySettings()
     public var proxyID: UUID?
+    public var runtimeSSHMode: SSHSessionMode?
     /// Resolved once per connection; credentials stay in the in-memory broker, never SSH argv.
     public var runtimeProxyRoute: [ProxySettings] = []
     public var keepAlive = KeepAliveSettings()
+    public var sshAuthenticationMethods: [SSHAuthenticationMethod]?
     public var legacySSH = false
     public var titleMode: HostTitleMode = .shellIntegration
     /// Compatibility for callers using the former opt-in switch.
@@ -41,7 +59,7 @@ public struct SessionProfile: Codable, Equatable, Identifiable {
         self.port = port; self.username = username; self.identityFile = identityFile; self.jumpHost = jumpHost
         self.encryptedPassword = nil
     }
-    private enum CodingKeys: String, CodingKey { case id, name, group, kind, host, port, username, identityFile, jumpHost, encryptedPassword, tunnels, proxy, proxyID, keepAlive, legacySSH, titleMode, quickConnect, initialDirectory }
+    private enum CodingKeys: String, CodingKey { case id, name, group, kind, host, port, username, identityFile, jumpHost, encryptedPassword, tunnels, proxy, proxyID, keepAlive, legacySSH, sshAuthenticationMethods, titleMode, quickConnect, initialDirectory }
     private enum LegacyCodingKeys: String, CodingKey { case activeHostProbe }
     public init(from decoder: Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
@@ -60,6 +78,8 @@ public struct SessionProfile: Codable, Equatable, Identifiable {
         } else { proxy = try fields.decodeIfPresent(ProxySettings.self, forKey: .proxy) ?? ProxySettings() }
         keepAlive = try fields.decodeIfPresent(KeepAliveSettings.self, forKey: .keepAlive) ?? KeepAliveSettings()
         legacySSH = try fields.decodeIfPresent(Bool.self, forKey: .legacySSH) ?? false
+        sshAuthenticationMethods = try fields.decodeIfPresent([SSHAuthenticationMethod].self, forKey: .sshAuthenticationMethods)
+        try validateAuthenticationMethods()
         let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
         titleMode = try fields.decodeIfPresent(HostTitleMode.self, forKey: .titleMode)
             ?? ((try legacy.decodeIfPresent(Bool.self, forKey: .activeHostProbe) ?? false) ? .activeProbe : .shellIntegration)
@@ -78,11 +98,19 @@ public struct SessionProfile: Codable, Equatable, Identifiable {
         // Older clients reject this discriminator instead of silently ignoring proxyID and connecting directly.
         if proxyID != nil { try c.encode(ProxyReferenceMarker(id: proxy.id), forKey: .proxy) }
         else { try c.encode(proxy, forKey: .proxy) }
+        try validateAuthenticationMethods()
+        try c.encodeIfPresent(sshAuthenticationMethods, forKey: .sshAuthenticationMethods)
         try c.encode(keepAlive, forKey: .keepAlive); try c.encode(legacySSH, forKey: .legacySSH)
         try c.encode(titleMode, forKey: .titleMode); try c.encode(quickConnect, forKey: .quickConnect); try c.encode(initialDirectory, forKey: .initialDirectory)
     }
     public static var local: SessionProfile { .init(name: "本地终端", group: "本机", kind: .local) }
+    private func validateAuthenticationMethods() throws {
+        guard let methods = sshAuthenticationMethods else { return }
+        guard kind.usesSSH, !methods.isEmpty else { throw ModelError.invalid("SSH / SFTP 会话至少需要启用一种身份验证方法。") }
+        guard Set(methods).count == methods.count else { throw ModelError.invalid("SSH 身份验证方法不能重复。") }
+    }
     public func validate() throws {
+        try validateAuthenticationMethods()
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ModelError.invalid("请填写会话名称。") }
         if kind == .local { return }
         try RemotePath.validate(initialDirectory)
@@ -109,6 +137,13 @@ public struct SessionProfile: Codable, Equatable, Identifiable {
         try validate()
         var args = ["-tt", "-p", String(port), "-o", "ServerAliveInterval=\(keepAlive.enabled ? keepAlive.interval : 0)", "-o", "ServerAliveCountMax=\(keepAlive.maxMissed)", "-o", "TCPKeepAlive=\(keepAlive.tcp ? "yes" : "no")",
                     "-o", "StrictHostKeyChecking=ask", "-o", "ConnectTimeout=15"]
+        if let methods = sshAuthenticationMethods {
+            args += ["-o", "PreferredAuthentications=" + methods.map(\.rawValue).joined(separator: ",")]
+            for method in SSHAuthenticationMethod.allCases {
+                let enabled = methods.contains(method) ? "yes" : "no"
+                args += ["-o", "\(method.openSSHOption)=\(enabled)"]
+            }
+        }
         if !username.isEmpty { args += ["-l", username] }
         if !identityFile.isEmpty { args += ["-i", NSString(string: identityFile).expandingTildeInPath] }
         if !jumpHost.isEmpty && runtimeProxyRoute.isEmpty { args += ["-J", jumpHost] }
@@ -332,6 +367,7 @@ public final class ConfigurationStore {
     public var requiresMasterProtection: Bool
     private var observed = false
     private var digest: Data?
+    private var sshModes = [String: SSHSessionMode]()
     private var baseline: Configuration?
     public init(directory: URL, masterPassword: String? = nil, requiresMasterProtection: Bool = false) {
         url = directory.appendingPathComponent("configuration.json"); self.masterPassword = masterPassword; self.requiresMasterProtection = requiresMasterProtection
@@ -348,6 +384,7 @@ public final class ConfigurationStore {
         let data = try readData()
         if observed && digest != nil && data == nil { throw ModelError.invalid("数据文件已被移动或删除，已停止创建空配置。") }
         let config = try data.map(decode) ?? Configuration(profiles: [])
+        sshModes = try localSessionMetadata(data)._localSSHSessionModes ?? [:]
         if !observed { digest = fingerprint(data); baseline = config; observed = true }
         return config
     }
@@ -380,6 +417,7 @@ public final class ConfigurationStore {
         guard let data else { throw ModelError.invalid("共享数据文件暂不可用，保留当前会话，请等待同步或恢复文件。") }
         let config = try decode(data)
         try validating(config)
+        sshModes = try localSessionMetadata(data)._localSSHSessionModes ?? [:]
         digest = fingerprint(data); baseline = config; observed = true
         return config
     }
@@ -389,7 +427,30 @@ public final class ConfigurationStore {
     }
     public func save(_ config: Configuration) throws { try write(config, expected: digest) }
     public func saveResolved(_ config: Configuration, expected: Data) throws { try write(config, expected: expected) }
-    private func write(_ config: Configuration, expected: Data?) throws {
+    public func sshMode(for profile: SessionProfile) -> SSHSessionMode {
+        SSHSessionMode.resolved(for: profile, override: sshModes[profile.id.uuidString])
+    }
+    public func targetRevision(_ id: UUID) throws -> UUID? {
+        try localSessionMetadata(readData())._localTargetPasswordRevisions?[id.uuidString]
+    }
+    func targetRevision(forBastion profile: SessionProfile) throws -> UUID? {
+        let metadata = try localSessionMetadata(readData())
+        let id = profile.id.uuidString
+        guard SSHSessionMode.resolved(for: profile, override: metadata._localSSHSessionModes?[id]) == .bastion else { return nil }
+        return metadata._localTargetPasswordRevisions?[id]
+    }
+    public struct TargetEdit {
+        public let id: UUID
+        public let expectedRevision: UUID?
+        public let change: TargetPasswordChange
+        public init(id: UUID, expectedRevision: UUID?, change: TargetPasswordChange) {
+            self.id = id; self.expectedRevision = expectedRevision; self.change = change
+        }
+    }
+    public func save(_ config: Configuration, targetEdit: TargetEdit?, modeUpdates: [UUID: SSHSessionMode] = [:]) throws {
+        try write(config, expected: digest, targetEdit: targetEdit, modeUpdates: modeUpdates)
+    }
+    private func write(_ config: Configuration, expected: Data?, targetEdit: TargetEdit? = nil, modeUpdates: [UUID: SSHSessionMode] = [:]) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data: Data
@@ -407,8 +468,52 @@ public final class ConfigurationStore {
                     }
                     throw ModelError.invalid("共享配置已改变或暂不可用，未覆盖现有数据。")
                 }
-                try PrivateFile.write(data, to: actual)
-                digest = fingerprint(data); baseline = config; observed = true; encryptedStorage = SharedVault.isEncrypted(data)
+                let metadata = try localSessionMetadata(current)
+                let sshIDs = Set(config.profiles.filter { $0.kind == .ssh }.map { $0.id.uuidString })
+                var modes = (metadata._localSSHSessionModes ?? [:]).filter { sshIDs.contains($0.key) }
+                for (id, mode) in modeUpdates where sshIDs.contains(id.uuidString) {
+                    modes[id.uuidString] = mode
+                }
+                let previous = metadata._localTargetPasswordRevisions ?? [:]
+                var index = previous.filter { entry in
+                    guard let profile = config.profiles.first(where: { $0.id.uuidString == entry.key }),
+                          profile.kind == .ssh, BastionAccount(profile.username) != nil else { return false }
+                    guard let old = baseline?.profiles.first(where: { $0.id == profile.id }) else { return true }
+                    return old.host == profile.host && old.port == profile.port && old.username == profile.username
+                }
+                var staged: UUID?
+                var committed = false
+                defer {
+                    if !committed, let staged { try? FileManager.default.removeItem(at: targetFile(staged)) }
+                }
+                if let edit = targetEdit {
+                    let id = edit.id.uuidString
+                    guard previous[id] == edit.expectedRevision,
+                          let profile = config.profiles.first(where: { $0.id == edit.id }) else {
+                        throw ModelError.invalid("目标密码已在其他窗口修改，请重新打开会话属性。")
+                    }
+                    guard SSHSessionMode.resolved(for: profile, override: modes[id]) == .bastion else {
+                        throw ModelError.invalid("仅堡垒机 SSH 会话可修改服务器登录密码。")
+                    }
+                    switch edit.change {
+                    case .replace(let secret):
+                        let revision = try stageTarget(secret, profile: profile, identity: SSHIdentity.resolve(profile))
+                        staged = revision; index[id] = revision
+                    case .clear: index[id] = nil
+                    }
+                }
+                var local = data
+                if !index.isEmpty || !modes.isEmpty {
+                    guard var object = try JSONSerialization.jsonObject(with: data) as? [String:Any] else { throw ModelError.invalid("本机配置格式无效。") }
+                    if !index.isEmpty { object["_localTargetPasswordRevisions"] = index.mapValues(\.uuidString) }
+                    if !modes.isEmpty { object["_localSSHSessionModes"] = modes.mapValues(\.rawValue) }
+                    local = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+                }
+                try PrivateFile.write(local, to: actual)
+                committed = true
+                sshModes = modes
+                digest = fingerprint(local); baseline = config; observed = true; encryptedStorage = SharedVault.isEncrypted(data)
+                for revision in Set(previous.values).subtracting(index.values) { try? FileManager.default.removeItem(at: targetFile(revision)) }
             }
         }
         if let result { try result.get(); return }

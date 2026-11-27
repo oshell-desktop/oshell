@@ -8,6 +8,8 @@
 	<string>OShell</string>
 	<key>CFBundleIdentifier</key>
 	<string>app.oshell.mac</string>
+	<key>OShellLocalTerminalBundleIdentifier</key>
+	<string>app.oshell.local-terminal</string>
 	<key>CFBundleExecutable</key>
 	<string>OShell</string>
 	<key>CFBundleIconFile</key>
@@ -51,8 +53,41 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>OShell 窗口启动入口</string>
+			<key>CFBundleTypeRole</key><string>Viewer</string>
+			<key>LSHandlerRank</key><string>Owner</string>
+			<key>LSItemContentTypes</key><array><string>app.oshell.window-launcher</string></array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key><string>app.oshell.window-launcher</string>
+			<key>UTTypeDescription</key><string>OShell 窗口启动入口</string>
+			<key>UTTypeConformsTo</key><array><string>public.data</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict><key>public.filename-extension</key><string>oshellwindow</string></dict>
+		</dict>
+	</array>
 	<key>NSServices</key>
 	<array>
+		<dict>
+			<key>NSMenuItem</key><dict><key>default</key><string>打开 oTerm</string></dict>
+			<key>NSMessage</key><string>openOShellWindow</string>
+			<key>NSUserData</key><string>local-terminal</string>
+			<key>NSPortName</key><string>OShell</string>
+			<key>NSRequiredContext</key><dict/>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key><dict><key>default</key><string>打开 OShell 会话工作区</string></dict>
+			<key>NSMessage</key><string>openOShellWindow</string>
+			<key>NSUserData</key><string>workspace</string>
+			<key>NSPortName</key><string>OShell</string>
+			<key>NSRequiredContext</key><dict/>
+		</dict>
 		<dict>
 			<key>NSMenuItem</key>
 			<dict>
@@ -70,7 +105,7 @@
 			<key>NSRequiredContext</key>
 			<dict/>
 			<key>NSServiceDescription</key>
-			<string>在所选目录新建 OShell 本地终端标签</string>
+			<string>在所选目录新建 oTerm标签</string>
 		</dict>
 	</array>
 </dict>

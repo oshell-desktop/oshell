@@ -55,6 +55,7 @@ enum UpdateFeatureTest {
             checks["checkMenuExists"] = items.contains { $0.action == #selector(WorkspaceController.checkForUpdates) }
             checks["settingsMenuExists"] = items.contains { $0.action == #selector(WorkspaceController.showUpdatePreferences) }
             let view = UpdateSettingsView(preferences: workspace.configuration.preferences)
+            checks["optionalTerminalDefaultOff"] = view.installTerminal.state == .off && !LocalTerminalUpdate.enabled
             checks["automaticChecksDefaultOff"] = view.automatic.state == .off
             view.repository.stringValue = "http://github.com/example/project"
             checks["invalidSourceRejected"] = (try? view.values(updating: workspace.configuration.preferences)) == nil
@@ -77,13 +78,16 @@ enum UpdateFeatureTest {
             timer = Timer(timeInterval: 0.03, repeats: true) { _ in
                 guard !edited, let root = NSApp.modalWindow?.contentView else { return }
                 guard let field = views(root).first(where: { $0.identifier?.rawValue == "updates.repository" }) as? NSTextField else { return }
+                guard let choice = views(root).first(where: { $0.identifier?.rawValue == "updates.installLocalTerminal" }) as? NSButton else { return }
+                choice.state = .on
                 field.stringValue = "example/project"; edited = true
                 views(root).compactMap { $0 as? NSButton }.first { $0.title == "应用" }?.performClick(nil)
             }
             RunLoop.main.add(timer, forMode: .modalPanel); workspace.showUpdatePreferences(); timer.invalidate()
+            checks["optionalTerminalChoicePersisted"] = LocalTerminalUpdate.enabled && UpdateSettingsView(preferences: workspace.configuration.preferences).installTerminal.state == .on
             checks["settingsPersisted"] = try workspace.store.load().preferences.updateRepository == "example/project"
             checks["oldFeedOverrideCleared"] = CFPreferencesCopyAppValue("SUFeedURL" as CFString, defaultsDomain) == nil
-            checks["checksUseStaticPages"] = try UpdateSource("example/project").staticMetadataURL.absoluteString == "https://example.github.io/project/updates/latest.json"
+            checks["checksUseStaticPages"] = try UpdateSource("example/project").staticMetadataURL.absoluteString == "https://example.github.io/project/updates/macos15.json"
             checks["configuredButtonIsAvailable"] = workspace.updateButton.isEnabled
             checks["configuredManualUpdaterStarts"] = workspace.appUpdater.started && !workspace.appUpdater.isBusy
             workspace.newLocal(); let pane = workspace.selectedTab!.activePane, pid = pane.terminal.process.shellPid

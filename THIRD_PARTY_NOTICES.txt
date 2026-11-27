@@ -93,6 +93,8 @@ OShell arrangement scrolling: the macOS terminal wheel handler is overridable so
 
 SwiftTerm display buffer: expose the read-only displayBuffer accessor so host-side repeated word selection uses the same buffer as SwiftTerm's native mouse handlers.
 
+SwiftTerm macOS character selection: use glyph-midpoint insertion boundaries for non-BiDi rows, including the boundary after the final column; preserve the mouse-down anchor and apply the mouse-up position before copying. Wide glyphs stay whole. Word/row selection, BiDi mapping, link lookup and remote mouse cell coordinates retain their existing policies.
+
 SwiftTerm proportional fonts: digit-based cell metrics and shared glyph/cluster fitting across CoreGraphics, Metal and block cursors preserve the terminal grid while reducing excess letter spacing.
 
 SwiftTerm package manifest and macOS API paths target macOS 15.0; pre-15 availability fallbacks and OShell's legacy-system rendering exclusions are removed.
@@ -1044,3 +1046,5 @@ Same license text as reproduced above.
 
 Inactive terminal views can release their Metal display surfaces after GPU work finishes, keeping compiled pipelines and terminal state. Restoring a visible surface reuses the renderer and invalidates its row draw cache.
 Metal text shaping keeps one copy of glyph positions and string indices per CoreText run; decoration and cell-bound calculations iterate those arrays lazily. The existing 2048-entry cache limit is unchanged.
+
+OShell-SSH uses OpenSSH Portable 10.6p2 with an OShell askpass extension and statically linked LibreSSL 4.4.1 libcrypto. The original notices are included in OpenSSH-LICENSE.txt and LibreSSL-LICENSE.txt in the OShell application resources.

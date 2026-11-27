@@ -5,12 +5,13 @@ import AppKit
 import OShellCore
 
 enum Dialogs {
-    static func session(_ existing: SessionProfile? = nil, profiles: [SessionProfile] = [], directories: [String] = [], initialDirectory: String = "服务器", kind: SessionKind = .ssh, defaults: SessionDefaults = SessionDefaults(), proxies: [ProxyProfile] = [], manageProxies: (() -> [ProxyProfile])? = nil, titleSelection: ((UUID, SessionTitleDisplayMode) -> Void)? = nil) -> SessionProfile? {
-        let editor = SessionEditor(existing, profiles: profiles, directories: directories, initialDirectory: initialDirectory, kind: kind, defaults: defaults, proxies: proxies, manageProxies: manageProxies)
+    static func session(_ existing: SessionProfile? = nil, profiles: [SessionProfile] = [], directories: [String] = [], initialDirectory: String = "服务器", kind: SessionKind = .ssh, defaults: SessionDefaults = SessionDefaults(), proxies: [ProxyProfile] = [], manageProxies: (() -> [ProxyProfile])? = nil, localMode: SSHSessionMode? = nil, localSelection: ((SSHSessionMode, TargetPasswordChange?) -> Void)? = nil, titleSelection: ((UUID, SessionTitleDisplayMode) -> Void)? = nil) -> SessionProfile? {
+        let editor = SessionEditor(existing, profiles: profiles, directories: directories, initialDirectory: initialDirectory, kind: kind, localMode: localMode, defaults: defaults, proxies: proxies, manageProxies: manageProxies)
         guard let result = editor.run() else { return nil }
+        if result.kind == .ssh { localSelection?(editor.selectedSSHMode, editor.targetChange) }
         titleSelection?(result.id, editor.selectedTitleMode); return result
     }
-    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, imagePasteView: ImagePasteSettingsControl? = nil, fileManagementView: FileManagementSettingsView? = nil, clockView: TerminalClockSettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil, sidebarVisible: Bool = SessionSidebarPreferences.visible, sidebarSelection: ((Bool) -> Void)? = nil, windowSizeView: WindowSizeSettingsControl? = nil, quickHistoryView: QuickSendHistorySettingsControl? = nil) -> Preferences? {
+    static func preferences(_ current: Preferences, appearanceSelected: Bool = false, updatesSelected: Bool = false, storageSelected: Bool = false, storageView: StorageSettingsView? = nil, securityView: SecuritySettingsView? = nil, titleView: SessionTitleSettingsView? = nil, imagePasteView: ImagePasteSettingsControl? = nil, fileManagementView: FileManagementSettingsView? = nil, clockView: TerminalClockSettingsView? = nil, selectionView: ((NSButton, NSView) -> TerminalSelectionSettingsView)? = nil, localShortcutSelection: ((ShortcutOverride?) -> Void)? = nil, sidebarVisible: Bool = SessionSidebarPreferences.visible, sidebarSelection: ((Bool) -> Void)? = nil, windowSizeView: WindowSizeSettingsControl? = nil, quickHistoryView: QuickSendHistorySettingsControl? = nil, updateSettingsView: UpdateSettingsView? = nil) -> Preferences? {
         let font = NSPopUpButton()
         TerminalFontCatalog.populate(font, selected: current.fontName)
         let size = NSPopUpButton(); [11, 12, 13, 14, 15, 16, 18, 20, 24, 26].forEach { size.addItem(withTitle: String($0)) }
@@ -44,7 +45,7 @@ enum Dialogs {
         let basic = GeneralSettingsView(font: font, size: size, history: history, gpu: gpu, sidebar: sidebar, input: [zmodem, rightPaste, previewPaste] + (imagePasteView.map { [$0] } ?? []))
         let general = NSTabViewItem(identifier: "general"); general.label = "常规"; general.view = basic; tabs.addTabViewItem(general)
         let colors = NSTabViewItem(identifier: "appearance"); colors.label = "主题与配色"; colors.view = appearanceView; tabs.addTabViewItem(colors)
-        let updatesView = UpdateSettingsView(preferences: current)
+        let updatesView = updateSettingsView ?? UpdateSettingsView(preferences: current)
         let updates = NSTabViewItem(identifier: "updates"); updates.label = "更新"; updates.view = updatesView; tabs.addTabViewItem(updates)
         let shortcuts = NSTabViewItem(identifier: "shortcuts"); shortcuts.label = "快捷键"; shortcuts.view = shortcutView; tabs.addTabViewItem(shortcuts)
         if let storageView {
@@ -99,8 +100,8 @@ enum Dialogs {
     static func message(_ text: String) {
         let alert = PopupAlert(); alert.messageText = "OShell"; alert.informativeText = text; alert.runModal()
     }
-    static func confirm(_ title: String, text: String, action: String) -> Bool {
-        let alert = PopupAlert(); alert.messageText = title; alert.informativeText = text
+    static func confirm(_ title: String, text: String, action: String, terminalOperation: Bool = false) -> Bool {
+        let alert = terminalOperation ? PopupAlert.terminalOperation() : PopupAlert(); alert.messageText = title; alert.informativeText = text
         alert.addButton(withTitle: action); alert.addButton(withTitle: "取消")
         return alert.runModal() == .alertFirstButtonReturn
     }

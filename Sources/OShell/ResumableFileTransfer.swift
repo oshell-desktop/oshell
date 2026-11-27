@@ -17,7 +17,7 @@ final class ResumableFileTransfer {
     struct RemoteStamp: Codable, Equatable {
         let size: UInt64, modified: Date
         init(_ entry: RemoteFileEntry) throws {
-            guard !entry.directory, !entry.symbolicLink, !entry.unknownType,
+            guard !entry.directory, !entry.symbolicLink, !entry.unknownType, entry.sizeKnown,
                   let permissions = entry.permissions, permissions & 0xf000 == 0x8000, let modified = entry.modified else {
                 throw ModelError.invalid("续传仅支持可读取大小和修改时间的 SFTP 普通文件。")
             }
@@ -127,7 +127,7 @@ final class ResumableFileTransfer {
         return info
     }
     static func openLocal(_ url: URL, flags: Int32) throws -> FileHandle {
-        let fd = Darwin.open(url.path, flags | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        let fd = Darwin.open(url.path, flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { throw ModelError.invalid("无法安全打开文件（文件可能不存在、已存在或为符号链接）：\(url.lastPathComponent)") }
         do { _ = try info(fd); return FileHandle(fileDescriptor: fd, closeOnDealloc: true) }
         catch { Darwin.close(fd); throw error }

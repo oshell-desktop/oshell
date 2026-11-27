@@ -12,9 +12,13 @@ public struct SSHIdentity: Codable, Equatable {
     public let port: Int
     public init(host: String, user: String, port: Int) { self.host = host; self.user = user; self.port = port }
     public static func resolve(_ profile: SessionProfile) throws -> SSHIdentity {
+        try resolution(profile).identity
+    }
+    /// %C is expanded by OpenSSH from its actual destination parameters.
+    public static func resolution(_ profile: SessionProfile) throws -> (identity: SSHIdentity, connectionHash: String) {
         let task = Process(), output = Pipe()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        task.arguments = ["-G"] + (try profile.sshArguments())
+        task.arguments = ["-G", "-o", "ControlPath=/oshell-check/%C"] + (try profile.sshArguments())
         task.standardOutput = output; task.standardError = FileHandle.nullDevice
         try task.run()
         let data = output.fileHandleForReading.readDataToEndOfFile(); task.waitUntilExit()
@@ -24,8 +28,9 @@ public struct SSHIdentity: Codable, Equatable {
             let parts = line.split(separator: " ", maxSplits: 1)
             if parts.count == 2 { fields[String(parts[0])] = String(parts[1]) }
         }
-        return SSHIdentity(host: fields["hostname"] ?? profile.host, user: fields["user"] ?? profile.username,
-                           port: Int(fields["port"] ?? "") ?? profile.port)
+        let hash = fields["controlpath"].flatMap { $0.hasPrefix("/oshell-check/") ? String($0.dropFirst("/oshell-check/".count)) : nil } ?? ""
+        return (SSHIdentity(host: fields["hostname"] ?? profile.host, user: fields["user"] ?? profile.username,
+                            port: Int(fields["port"] ?? "") ?? profile.port), hash)
     }
 }
 
@@ -97,12 +102,19 @@ public enum SessionCipher {
 public struct SavedPasswordPolicy {
     private let identity: SSHIdentity
     private var password: String?
-    public init(identity: SSHIdentity, password: String) { self.identity = identity; self.password = password }
+    private let bastion: Bool
+    public init(identity: SSHIdentity, password: String, mode: SSHSessionMode? = nil) {
+        self.identity = identity; self.password = password
+        bastion = mode.map { $0 == .bastion } ?? (BastionAccount(identity.user) != nil)
+    }
     public mutating func reply(prompt: String, hint: String) -> String? {
         guard hint != "confirm", hint != "none", let password else { return nil }
         let host = identity.host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         let expected = "\(identity.user)@\(host)"
         let clean = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        // System askpass omits the challenge size, echo flags, title and MFA state.
+        // A wrapped prompt alone cannot authorize automatic bastion authentication.
+        if bastion, clean != "\(expected)'s password:" { return nil }
         guard clean == "\(expected)'s password:" || clean == "(\(expected)) Password:" || clean == "(\(expected)) password:" else { return nil }
         self.password = nil // A failed saved password is never repeatedly retried.
         return password

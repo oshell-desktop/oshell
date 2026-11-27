@@ -8,6 +8,7 @@ import OShellCore
 struct RemoteFileEntry {
     let name: String
     let size: UInt64
+    let sizeKnown: Bool
     let modified: Date?
     let directory: Bool
     let symbolicLink: Bool
@@ -16,9 +17,10 @@ struct RemoteFileEntry {
     let owner: String?
     let group: String?
     var permissionsText: String { permissions.map(RemoteFilePermissions.display) ?? "—" }
-    init(name: String, size: UInt64, modified: Date?, directory: Bool, symbolicLink: Bool, unknownType: Bool = false, permissions: UInt32? = nil, owner: String? = nil, group: String? = nil) {
+    init(name: String, size: UInt64, modified: Date?, directory: Bool, symbolicLink: Bool, unknownType: Bool = false, permissions: UInt32? = nil, owner: String? = nil, group: String? = nil, sizeKnown: Bool = true) {
         self.name = name; self.size = size; self.modified = modified; self.directory = directory; self.symbolicLink = symbolicLink; self.unknownType = unknownType
         self.permissions = permissions; self.owner = owner; self.group = group
+        self.sizeKnown = sizeKnown
     }
 }
 protocol RemoteFileBackend: AnyObject {
@@ -195,7 +197,7 @@ struct SFTPPacket {
         }
         return RemoteFileEntry(name: name, size: size, modified: date, directory: mode & 0xf000 == 0x4000, symbolicLink: mode & 0xf000 == 0xa000, unknownType: flags & 4 == 0,
             permissions: flags & 4 != 0 ? mode : nil,
-            owner: matchingListing?.owner ?? uid.map { String($0) }, group: matchingListing?.group ?? gid.map { String($0) })
+            owner: matchingListing?.owner ?? uid.map { String($0) }, group: matchingListing?.group ?? gid.map { String($0) }, sizeKnown: flags & 1 != 0)
     }
 }
 final class SFTPBackend: ResumableFileBackend {
@@ -270,11 +272,13 @@ final class SFTPBackend: ResumableFileBackend {
     }
     func list(_ path: String) throws -> [RemoteFileEntry] {
         let handle = try handle(11, path: path); defer { try? close(handle) }; var entries = [RemoteFileEntry]()
+        var receivedCount = 0
         while true {
             do {
                 var response = try request(12) { $0.bytes(handle) }
                 guard response.0 == 104 else { throw ModelError.invalid("SFTP 目录响应无效。") }
-                let count = try response.1.read32(); guard count <= 20000, entries.count + Int(count) <= 100000 else { throw ModelError.invalid("目录项目过多，请进入子目录操作。") }
+                let count = try response.1.read32(); guard count <= 20000, receivedCount + Int(count) <= 100000 else { throw ModelError.invalid("目录项目过多，请进入子目录操作。") }
+                receivedCount += Int(count)
                 guard count > 0 else { break }
                 for _ in 0..<count {
                     let name = try response.1.readString(); let longName = try response.1.readString(); let entry = try response.1.attributes(name: name, longName: longName)
@@ -461,8 +465,8 @@ final class SFTPBackend: ResumableFileBackend {
             return
         }
         // EXCL protects existing remote files, including races after listing.
+        let file = try ResumableFileTransfer.openLocal(local, flags: O_RDONLY); defer { try? file.close() }
         let handle = try handle(3, path: remote, flags: 2 | 8 | 32); var closed = false; defer { if !closed { try? close(handle) } }
-        let file = try FileHandle(forReadingFrom: local); defer { try? file.close() }
         var offset: UInt64 = 0
         while let bytes = try file.read(upToCount: 32768), !bytes.isEmpty {
             try rateLimiter.paced(bytes) { chunk in
@@ -501,11 +505,13 @@ final class SFTPBackend: ResumableFileBackend {
                 let chunkSize = rateLimiter.readChunkSize
                 var response = try request(5) { $0.bytes(handle); $0.u64(offset); $0.u32(UInt32(chunkSize)) }
                 guard response.0 == 103 else { throw ModelError.invalid("SFTP 文件数据无效。") }
-                let bytes = try response.1.readBytes(); guard !bytes.isEmpty else { throw ModelError.invalid("SFTP 返回空数据块。") }
+                let bytes = try response.1.readBytes()
+                guard !bytes.isEmpty, bytes.count <= chunkSize else { throw ModelError.invalid("SFTP 返回空数据块或超过请求的长度。") }
                 try rateLimiter.paced(bytes) { chunk in try file.write(contentsOf:chunk); offset += UInt64(chunk.count); progress(offset,info.size) }
             } catch let error as SFTPStatus where error.code == 1 { break }
         }
         try close(handle); closed = true
+        guard !info.sizeKnown || offset == info.size else { throw ModelError.invalid("远程文件长度在下载期间发生变化，未保存不完整文件。") }
         try file.close(); complete = true
     }
     func cancel() { rateLimiter.cancel(); process.cancel(); lease?.release(); DispatchQueue.main.async { [broker] in broker?.stop() } }

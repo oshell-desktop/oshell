@@ -61,7 +61,10 @@ extension WorkspaceController {
         quickSendHeight?.constant = quickSendBar.isHidden ? 0 : 36
     }
 
-    @objc func toggleFocusFullscreen() { requestFocusFullscreen(!focusFullscreenRequested) }
+    @objc func toggleFocusFullscreen() {
+        if isLocalTerminalWindow { window?.toggleFullScreen(nil) }
+        else { requestFocusFullscreen(!focusFullscreenRequested) }
+    }
     func requestFocusFullscreen(_ enabled: Bool) {
         guard isSecurityUnlocked, window?.attachedSheet == nil, NSApp.modalWindow == nil else { return }
         focusFullscreenRequested = enabled

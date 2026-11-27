@@ -13,6 +13,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from release_targets import TARGETS, RELEASE_FLAVORS
 import installer_metadata
+import build_local_terminal
 import code_signing
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +39,32 @@ def verify_deployment(relative, deployment, minimum):
         assert all(value == expected for value in versions), (str(relative), deployment, minimum)
 
 def verify_app(candidate, staged, target, expected):
+    launcher = candidate.with_name(build_local_terminal.APP_NAME)
+    launcher_contents = launcher/'Contents'
+    launcher_info = plistlib.loads((launcher_contents/'Info.plist').read_bytes())
+    assert launcher_info['CFBundleName'] == launcher_info['CFBundleDisplayName'] == 'oTerm'
+    assert launcher_info['CFBundleExecutable'] == build_local_terminal.EXECUTABLE
+    assert launcher_info['CFBundleIdentifier'] == build_local_terminal.IDENTIFIER
+    assert launcher_info['OShellHostBundleIdentifier'] == expected['CFBundleIdentifier']
+    assert launcher_info['OShellOwnsLocalWindows'] is True
+    assert expected['OShellLocalTerminalBundleIdentifier'] == launcher_info['CFBundleIdentifier']
+    assert (launcher_contents/'Frameworks/Sparkle.framework/Sparkle').is_file()
+    for key in ('CFBundleVersion', 'CFBundleShortVersionString'):
+        assert launcher_info[key] == expected[key]
+    assert launcher_info['LSMinimumSystemVersion'] == target.minimum
+    executable = launcher_contents/'MacOS'/build_local_terminal.EXECUTABLE
+    assert set(run(['lipo', '-archs', executable]).split()) == set(target.architectures)
+    verify_deployment(Path('MacOS')/executable.name, re.findall(r'^\s*minos\s+([\d.]+)', run(['vtool', '-show-build', executable]), re.M), target.minimum)
+    for mode in ('local-terminal', 'workspace', 'focus-workspace'):
+        assert (launcher_contents/'Resources'/(mode+'.oshellwindow')).read_text().strip() == mode
+    for resource in [executable, launcher_contents/'Resources'/launcher_info['CFBundleIconFile']]:
+        assert digest(resource) == digest(staged.parent/launcher.name/resource.relative_to(launcher))
+    run(['codesign', '--verify', '--strict', launcher])
     info = plistlib.loads((candidate/'Contents/Info.plist').read_bytes())
+    archive = candidate/'Contents/Resources/LocalTerminal.zip'
+    assert digest(archive) == info['OShellLocalTerminalArchiveSHA256']
+    assert code_signing.metadata(launcher_info) == code_signing.metadata(info)
+    if launcher_info.get(code_signing.MARKER): code_signing.verify(launcher)
     assert not info.get('OShellTestHarness'), 'Release payload contains developer test hooks'
     for key in ['CFBundleShortVersionString', 'CFBundleVersion']:
         assert info[key] == expected[key], (key, 'stale app metadata')
@@ -47,7 +73,7 @@ def verify_app(candidate, staged, target, expected):
     assert bridge['LSMinimumSystemVersion'] == target.minimum
     for resource in ['OShell-LICENSE.txt', 'OShell.icns', 'oshell-integration.sh', 'THIRD_PARTY_NOTICES.txt', 'ColorSchemes-LICENSE.txt', 'Sparkle-LICENSE.txt']:
         assert digest(candidate/'Contents/Resources'/resource) == digest(staged/'Contents/Resources'/resource)
-    for relative in ['MacOS/OShell', 'MacOS/OShell-ZOC', 'Helpers/OShell-MCP', 'Helpers/OShellAskpass', 'Helpers/OShellProxy', 'Helpers/lrz', 'Helpers/lsz', 'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla']:
+    for relative in ['MacOS/OShell', 'MacOS/OShell-ZOC', 'Helpers/OShell-MCP', 'Helpers/OShellAskpass', 'Helpers/OShell-SSH', 'Helpers/OShellProxy', 'Helpers/lrz', 'Helpers/lsz', 'Helpers/OShell-FileZilla.app/Contents/MacOS/OShell-FileZilla']:
         item = candidate/'Contents'/relative
         assert set(run(['lipo', '-archs', item]).split()) == set(target.architectures), (relative, 'wrong architecture')
         assert digest(item) == digest(staged/'Contents'/relative), (relative, 'stale payload')

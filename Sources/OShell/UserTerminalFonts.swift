@@ -52,6 +52,10 @@ enum UserTerminalFonts {
         register()
         guard generation != previous else { return }
         NotificationCenter.default.post(name: changed, object: scheduleSync)
+        if !OShellAppPair.ownsLocalWindows {
+            DistributedNotificationCenter.default().postNotificationName(changed, object: LocalTerminalTheme.domain,
+                                                                        userInfo: nil, deliverImmediately: true)
+        }
     }
     static func importFiles(_ urls: [URL]) throws {
         let staged = try stageFiles(urls)

@@ -32,7 +32,9 @@ struct GlobalProxySettings: Codable, Equatable {
 extension WorkspaceController {
     func resolvedConnectionProfile(_ profile: SessionProfile) throws -> SessionProfile {
         guard profile.kind.usesSSH else { return profile }
-        return try GlobalProxySettings.load().resolve(profile, configuration: configuration)
+        var resolved = try GlobalProxySettings.load().resolve(profile, configuration: configuration)
+        if profile.kind == .ssh { resolved.runtimeSSHMode = store.sshMode(for: profile) }
+        return resolved
     }
     func configureGlobalProxyButton() {
         globalProxyButton.bezelStyle = .texturedRounded; globalProxyButton.setButtonType(.pushOnPushOff)

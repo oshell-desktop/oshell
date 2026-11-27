@@ -94,6 +94,10 @@ enum ShortcutRuntime {
                     let allowed = binding.flatMap { shortcuts.action(for: $0) == nil ? $0 : nil }
                     item.keyEquivalent = allowed?.key?.equivalent ?? ""; item.keyEquivalentModifierMask = allowed?.nativeModifiers ?? []
                 }
+                if item.action == #selector(AppDelegate.newLocalTerminalWindow) {
+                    let binding = KeyboardShortcut(45, KeyboardShortcut.command | KeyboardShortcut.option)
+                    item.keyEquivalent = shortcuts.action(for: binding) == nil ? "n" : ""
+                }
                 if item.action == #selector(WorkspaceController.toggleDeepFocus) {
                     let binding = WorkspaceController.deepFocusShortcut
                     item.keyEquivalent = shortcuts.action(for: binding) == nil ? "f" : ""

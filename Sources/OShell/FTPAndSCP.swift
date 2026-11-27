@@ -59,6 +59,7 @@ final class FTPBackend: RemoteFileBackend {
     static func parseMLSD(_ data: Data) throws -> [RemoteFileEntry] {
         guard let text = String(data: data, encoding: .utf8) else { throw ModelError.invalid("FTP 文件名不是 UTF-8。") }
         var entries = [RemoteFileEntry]()
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(secondsFromGMT: 0); formatter.dateFormat = "yyyyMMddHHmmss"
         for line in text.components(separatedBy: "\n") where !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let line = line.hasSuffix("\r") ? String(line.dropLast()) : line
             guard let space = line.firstIndex(of: " ") else { throw ModelError.invalid("FTP 目录格式无效。") }
@@ -69,7 +70,6 @@ final class FTPBackend: RemoteFileBackend {
             }
             let kind = facts["type"]?.lowercased() ?? ""
             if kind == "cdir" || kind == "pdir" || !RemotePath.safeName(name) { continue }
-            let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(secondsFromGMT: 0); formatter.dateFormat = "yyyyMMddHHmmss"
             entries.append(RemoteFileEntry(name: name, size: UInt64(facts["size"] ?? "") ?? 0, modified: facts["modify"].flatMap { formatter.date(from: String($0.prefix(14))) }, directory: kind == "dir", symbolicLink: kind.contains("slink"),
                 permissions: RemoteFilePermissions.octal(facts["unix.mode"]).map { $0 | (kind == "dir" ? 0x4000 : kind.contains("slink") ? 0xa000 : 0x8000) },
                 owner: ["unix.ownername", "unix.owner", "unix.uid"].compactMap { facts[$0] }.first { !$0.isEmpty },

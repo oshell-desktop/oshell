@@ -35,7 +35,7 @@ class DevelopmentToolsTests(unittest.TestCase):
         self.assertTrue((framework/'Versions/Current').is_symlink())
         for path in keep: self.assertEqual(path.read_text(), 'fixture')
     def test_cleanup_keeps_app_sources_keys_and_dependency_environment(self):
-        keep = [self.file(p) for p in ['dist/OShell.app/Contents/MacOS/OShell','Sources/example.swift','.release-private/key','work/test-tools/bin/python','validation/.gitkeep','validation/latest-checks.json']]
+        keep = [self.file(p) for p in ['dist/OShell.app/Contents/MacOS/OShell','dist/oTerm.app/Contents/MacOS/oTerm','Sources/example.swift','.release-private/key','work/test-tools/bin/python','validation/.gitkeep','validation/latest-checks.json']]
         self.file('work/size-review/probe.dSYM/Contents/Resources/DWARF/probe')
         self.file('work/build/swift/object.o'); self.file('work/release/legacy/OShell.app/binary'); self.file('validation/old.log')
         paths = CLEAN.candidates(self.root)
@@ -52,6 +52,36 @@ class DevelopmentToolsTests(unittest.TestCase):
         self.assertIn(self.root/'work/migration-old-source', paths)
         self.assertIn(self.root/'work/migration-live-check', paths)
         self.assertFalse(any(p == legacy or p in legacy.parents for p in paths))
+    def test_cleanup_includes_ui_previews_but_preserves_unknown_folders(self):
+        for name in ['window-zoom-preview', 'quick-connect-preview', 'personal-preview']:
+            self.file('work/'+name+'/fixture')
+        paths = CLEAN.candidates(self.root)
+        for name in ['window-zoom-preview', 'quick-connect-preview']:
+            self.assertIn(self.root/'work'/name, paths)
+        self.assertNotIn(self.root/'work/personal-preview', paths)
+    def test_retired_checkout_keeps_source_and_cleans_only_compiler_output(self):
+        source = self.file('work/upgrade-bridge/Sources/fixture.swift')
+        self.file('work/upgrade-bridge/.git')
+        self.file('work/upgrade-bridge/work/build-tests/object.o')
+        paths = CLEAN.candidates(self.root)
+        self.assertIn(self.root/'work/upgrade-bridge/work/build-tests', paths)
+        self.assertFalse(any(p == source or p in source.parents for p in paths))
+    def test_retained_app_falls_back_only_when_dist_is_absent(self):
+        app = self.root/'installed/OShell.app'
+        plist = app/'Contents/Info.plist'; plist.parent.mkdir(parents=True)
+        plist.write_bytes(plistlib.dumps({'CFBundleIdentifier':'app.oshell.mac'}))
+        self.assertEqual(CLEAN.retained_app(self.root, app)[0], app)
+        local = self.root/'dist/OShell.app/Contents/Info.plist'
+        local.parent.mkdir(parents=True)
+        local.write_bytes(plistlib.dumps({'CFBundleIdentifier':'app.oshell.mac', 'OShellTestHarness':True}))
+        with self.assertRaisesRegex(RuntimeError, 'production'):
+            CLEAN.retained_app(self.root, app)
+    def test_unregister_discovery_is_limited_to_oshell_without_symlink_traversal(self):
+        app = self.retained_app('running-app-old')/'OShell.app'
+        other = self.file('work/test-app/Other.app/Contents/Info.plist')
+        other.write_bytes(plistlib.dumps({'CFBundleIdentifier':'org.other.app'}))
+        (self.root/'work/test-app/alias.app').symlink_to(app, target_is_directory=True)
+        self.assertEqual(list(CLEAN.generated_apps([self.root/'work'])), [app])
     def retained_app(self, name):
         app = self.root/'work'/name/'OShell.app'
         (app/'Contents').mkdir(parents=True)
@@ -105,7 +135,7 @@ class DevelopmentToolsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'in use'):
             CLEAN.validate_targets(self.root, [self.root/'work/test-app'], [], [exe])
     def test_cleanup_rejects_app_and_project_root(self):
-        for p in [self.root, self.root/'dist', self.root/'dist/OShell.app']:
+        for p in [self.root, self.root/'dist', self.root/'dist/OShell.app', self.root/'dist/oTerm.app']:
             with self.assertRaises(RuntimeError): CLEAN.validate_targets(self.root, [p], [], [])
     def test_symlink_targets_are_not_traversed(self):
         outside = self.root/'outside'; outside.mkdir(); (outside/'keep').write_text('keep')

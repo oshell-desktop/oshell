@@ -2,6 +2,7 @@
 // Copyright (c) 2026 OShell contributors
 
 import AppKit
+import Darwin
 import OShellCore
 
 /// End-to-end tests against disposable loopback SFTP/SCP/FTP servers.
@@ -53,6 +54,22 @@ enum FileFeatureTest {
                         try backend.mkdir(directory + "/empty"); try backend.remove(directory + "/empty", directory: true)
                         checks[name + "DeleteEmptyDirectory"] = try !backend.list(directory).contains { $0.name == "empty" }
                     }
+                    for name in ["truncated.bin", "oversized-block.bin"] {
+                        let destination = local.appendingPathComponent(name)
+                        do { try sftp.download("/" + name, to: destination) { _, _ in }; checks["sftpRejects-" + name] = false }
+                        catch { checks["sftpRejects-" + name] = !FileManager.default.fileExists(atPath: destination.path) }
+                    }
+                    let unknownSize = local.appendingPathComponent("unknown-size.bin")
+                    try sftp.download("/unknown-size.bin", to: unknownSize) { _, _ in }
+                    checks["sftpUnknownSizeStillDownloads"] = try Data(contentsOf: unknownSize) == Data((0..<131072).map { UInt8($0 % 256) })
+                    let fifo = local.appendingPathComponent("source.fifo")
+                    guard mkfifo(fifo.path, 0o600) == 0 else { throw ModelError.invalid("Cannot create synthetic upload FIFO") }
+                    let fifoStart = ProcessInfo.processInfo.systemUptime
+                    do { try sftp.upload(fifo, to: "/rejected-fifo") { _, _ in }; checks["sftpRejectsFIFOWithoutBlocking"] = false }
+                    catch { checks["sftpRejectsFIFOWithoutBlocking"] = ProcessInfo.processInfo.systemUptime - fifoStart < 2 }
+                    checks["sftpInvalidSourceDoesNotCreateRemoteFile"] = try !sftp.list("/").contains { $0.name == "rejected-fifo" }
+                    do { _ = try ResumableFileTransfer.openLocal(fifo, flags: O_RDONLY); checks["resumeRejectsFIFO"] = false }
+                    catch { checks["resumeRejectsFIFO"] = true }
                     for (name, backend) in [("sftp", sftp as RemoteFileBackend), ("ftp", ftpBackend as RemoteFileBackend)] {
                         let small = local.appendingPathComponent(name+"-rate.bin"); try payload.prefix(65536).write(to:small)
                         backend.setTransferRateLimit(65536)

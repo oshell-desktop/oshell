@@ -9,6 +9,28 @@ import os
 
 /// Keep tab navigation out of the PTY, including while xterm owns keyboard focus.
 final class WorkspaceWindow: NSWindow {
+    private var consumesTitlebarMouseUp = false
+
+    /// The transparent native title bar must behave the same over its label
+    /// and its empty background. Keep buttons and the content area native.
+    func isTitlebarZoomEvent(_ event: NSEvent) -> Bool {
+        guard event.type == .leftMouseDown, event.clickCount == 2,
+              event.windowNumber == windowNumber,
+              event.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty,
+              styleMask.contains(.titled), styleMask.contains(.resizable),
+              !styleMask.contains(.fullScreen), !styleMask.contains(.fullSizeContentView),
+              attachedSheet == nil, NSApp.modalWindow == nil else { return false }
+        let point = event.locationInWindow
+        let localFrame = NSRect(origin: .zero, size: frame.size)
+        let content = contentRect(forFrameRect: localFrame)
+        guard point.x >= 0, point.x < localFrame.width,
+              point.y >= content.maxY, point.y < localFrame.maxY else { return false }
+        return ![NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].contains { type in
+            guard let button = standardWindowButton(type), !button.isHidden else { return false }
+            return button.convert(button.bounds, to: nil).insetBy(dx: -2, dy: -2).contains(point)
+        }
+    }
+
     override func toggleFullScreen(_ sender: Any?) {
         // The green-button path must prepare before AppKit snapshots the window
         // frame, just like the dedicated focus action does before calling here.
@@ -49,13 +71,13 @@ final class WorkspaceWindow: NSWindow {
             pane.searchPanel.hide(); return true
         }
         let shortcut = KeyboardShortcut(event: event)
-        guard workspace.isSecurityUnlocked, shortcut.isValid else { return false }
+        guard workspace.canUseTerminalWindow, shortcut.isValid else { return false }
         let configured = SessionSidebarPreferences.shortcuts(workspace.configuration.preferences.keyboardShortcuts).action(for: shortcut)
         if workspace.handleLocalShellShortcut(event, configured: configured) { return true }
-        if configured == nil, shortcut == AgentShortcut.binding {
+        if !workspace.isLocalTerminalWindow, configured == nil, shortcut == AgentShortcut.binding {
             if !event.isARepeat { workspace.toggleAIAssistant() }; return true
         }
-        if shortcut == WorkspaceController.deepFocusShortcut, configured == nil {
+        if !workspace.isLocalTerminalWindow, shortcut == WorkspaceController.deepFocusShortcut, configured == nil {
             if !event.isARepeat { workspace.toggleDeepFocus() }
             return true
         }
@@ -74,6 +96,18 @@ final class WorkspaceWindow: NSWindow {
         navigate(event) || super.performKeyEquivalent(with: event)
     }
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseUp, consumesTitlebarMouseUp {
+            consumesTitlebarMouseUp = false
+            return
+        }
+        if event.type == .leftMouseDown {
+            consumesTitlebarMouseUp = false
+            if isTitlebarZoomEvent(event) {
+                consumesTitlebarMouseUp = true
+                performZoom(nil)
+                return
+            }
+        }
         #if canImport(os)
         let began = Self.traceInputLatency && event.type == .keyDown ? ProcessInfo.processInfo.systemUptime : nil
         defer {
@@ -96,7 +130,7 @@ extension WorkspaceController {
     /// Called by the active window after modal/security checks. Kept separate so
     /// session preservation can also be exercised without desktop activation.
     @discardableResult func handleLocalShellShortcut(_ event: NSEvent, configured: ShortcutAction?) -> Bool {
-        guard isSecurityUnlocked, configured == nil, event.type == .keyDown,
+        guard canUseTerminalWindow, configured == nil, event.type == .keyDown,
               KeyboardShortcut(event: event) == TerminalPane.localShellShortcut,
               window?.firstResponder is OShellTerminal else { return false }
         if !event.isARepeat { newLocal() }

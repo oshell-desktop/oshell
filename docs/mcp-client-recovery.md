@@ -25,6 +25,8 @@ python3 scripts/test-codex-mcp-recovery.py --codex /path/to/codex
 
 ## 自动恢复应该由哪一层负责
 
+OShell 控制中心现提供“连接恢复指引”，按所选客户端显示本机通道状态。空闲 Socket 释放与真正的客户端 `Transport closed` 不混为一谈；界面不能证明客户端内部管道健康。该功能只提供指引，不新增守护进程、不调用全局重载接口，也不重放命令。
+
 - OShell 主程序的 Socket 暂时不可用：保留 STDIO 辅助程序，由现有 Bridge 有界重连；沿用原有授权要求。
 - OShell-MCP 辅助程序退出，Codex 持有的 STDIO 已关闭：由持有连接的 Codex 后端丢弃旧客户端、重新启动辅助程序并重新握手。OShell 无法向已关闭的管道发送恢复通知。
 - 不能用独立启动的另一个 MCP 客户端查询成功，来宣称原生连接已经恢复。

@@ -51,6 +51,8 @@ binary_dir="$(swift build --scratch-path work/build/swift -c release --show-bin-
 "$binary_dir/OShellCoreChecks"
 ```
 
+定向安全与性能回归：`python3 scripts/test-core-review.py --all` 在自动清理的临时目录编译实际核心源码，覆盖重叠敏感输入、分块控制序列、并发审计封口、导出源替换、特殊文件和空配置保护，再运行完整核心检查。`python3 scripts/test-redaction-performance.py` 使用合成输出测量脱敏器，可用 `--source` 指向修改前源码做同负载对照；结果只代表该环节。测试应用构建后运行 `python3 scripts/test-file-launch-safety.py`，确认站点启动器拒绝 FIFO、目录、空 XML 和符号链接；文件网络回归另覆盖提前 EOF、超长 SFTP 数据块、未知文件大小和 FIFO 上传拒绝。
+
 需要本机 SSH / FTP / WebDAV 测试服务的场景使用对应脚本：
 
 ```sh
@@ -75,7 +77,13 @@ work/test-tools/bin/python scripts/run-webdav-tests.py
 
 设置六宫格使用 `python3 scripts/run-ui-tests.py readme-settings` 生成，输出为 `validation/readme-settings-grid.png`，核对后更新 `docs/images/settings-overview.png`。只采集设置页内容，示例配置不保存；终端预览使用独立绘图上下文，避免截图中文字发生偏移。
 
+## 终端拖选验证
+
+终端拖选边界定向验证：测试构建后运行 `python3 scripts/run-ui-tests.py terminal-drag-selection terminal-selection`。前者用合成鼠标事件覆盖按下锚点、合并拖动事件、松开时最终位置、正反向、行尾、中文宽字符、组合字符、Emoji、跨行、Shift 和远端鼠标路由；在两种字号下核对实际选中文本。后者覆盖已有单词选择、自动复制与输出暂停行为。测试不连接真实 SSH。
+
 ## 清理构建历史
+
+每次构建、测试或预览任务结束前必须执行清理。新增预览目录应加入清理名单；先把验证结论汇总到 `validation/latest-checks.json`，不为清理重复运行已通过的测试。缺少 `dist/OShell.app` 时，脚本改为验证并保留 `/Applications/OShell.app`，无需重新构建。删除测试应用前仅注销对应路径的 Launch Services 注册，避免遗留在应用搜索中；注销失败会记入清理报告。
 
 ```sh
 python3 scripts/clean-local-builds.py
