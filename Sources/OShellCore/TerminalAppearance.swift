@@ -13,6 +13,7 @@ public struct TerminalAppearance: Codable, Equatable {
 
     public init(from decoder: Decoder) throws {
         self.init()
+        try SharedConfigurationProtocol.validateFieldNames(from: decoder, definition: "terminalAppearance")
         let values = try decoder.container(keyedBy: CodingKeys.self)
         top = try values.decodeIfPresent(Int.self, forKey: .top) ?? top
         bottom = try values.decodeIfPresent(Int.self, forKey: .bottom) ?? bottom

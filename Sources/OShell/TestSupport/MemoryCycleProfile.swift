@@ -113,7 +113,14 @@ final class MemoryCycleProfile {
     private func openRound() {
         round += 1
         sample("opening_\(round)")
-        for _ in 0..<count { controller.openExternal(request); probes.append(Probe(controller.selectedTab!.activePane)) }
+        for _ in 0..<count {
+            if AppTestHarness.background {
+                do {
+                    try controller.openMemoryFixtureWithoutActivation(request)
+                } catch { checks["backgroundConnectionSetup"] = false; finish(); return }
+            } else { controller.openExternal(request) }
+            probes.append(Probe(controller.selectedTab!.activePane))
+        }
         controller.inputPanes.forEach { configureSurfaceForTesting($0.terminal) }
         if ProcessInfo.processInfo.environment["OSHELL_MEMORY_BACKGROUND_TABS"] == "1" {
             for (index, pane) in controller.inputPanes.enumerated() {
@@ -157,7 +164,7 @@ final class MemoryCycleProfile {
         }
     }
     private func visitTabs(_ index: Int, phase: String = "initial", complete: @escaping () -> Void) {
-        guard index < controller.tabs.count else { complete(); return }
+        guard !AppTestHarness.background, index < controller.tabs.count else { complete(); return }
         let tab = controller.tabs[index], terminal = tab.activePane.terminal
         let previousFrames = terminal.metalRendererStatus.presentedFrameCount
         controller.select(tab); configureSurfaceForTesting(terminal); terminal.drawMetalFrameNow()
@@ -175,7 +182,7 @@ final class MemoryCycleProfile {
         later(5) {
             self.sample("background_\(self.round)")
             if ProcessInfo.processInfo.environment["OSHELL_MEMORY_EXPECT_RELEASE"] == "1" {
-                self.checks["round\(self.round)OnlyVisibleSurfaceRetained"] = self.controller.inputPanes.filter { $0.terminal.subviews.contains { $0 is MTKView } }.count == 1
+                self.checks["round\(self.round)OnlySelectedSurfaceRetained"] = self.controller.inputPanes.filter { $0.terminal.subviews.contains { $0 is MTKView } }.count == 1
                 self.checks["round\(self.round)ReclaimsWithLiveConnections"] = self.controller.idleMemoryReclaimer.completedPasses > 0
             }
             let panes = self.controller.inputPanes
@@ -200,7 +207,7 @@ final class MemoryCycleProfile {
                                 let marker = self.soakResults.isEmpty ? "MEMORY_OUTPUT_COMPLETE" : "SOAK "
                                 self.checks["round\(self.round)PostIdleRecentHistoryPreserved"] = panes.allSatisfy { String(decoding: $0.terminal.getTerminal().getBufferAsData(), as: UTF8.self).contains(marker) }
                                 self.visitTabs(0, phase: "restored") {
-                                    if self.controller.configuration.preferences.metal {
+                                    if !AppTestHarness.background && self.controller.configuration.preferences.metal {
                                         self.checks["round\(self.round)AllTabsRendered"] = panes.allSatisfy { $0.terminal.metalRendererStatus.presentedFrameCount > 0 }
                                     }
                                     self.sample("restored_\(self.round)")
@@ -385,7 +392,7 @@ final class MemoryCycleProfile {
         soak = nil
         let report: [String: Any] = ["passed": checks.values.allSatisfy { $0 } && round == cycles, "checks": checks, "samples": samples, "sessionsPerRound": count,
                                   "metal": controller.configuration.preferences.metal, "scrollback": controller.configuration.preferences.scrollback,
-                                  "switchLatencyMilliseconds": switchLatencies, "activeSoak": soakResults]
+                                  "switchLatencyMilliseconds": switchLatencies, "activeSoak": soakResults, "backgroundOnly": AppTestHarness.background]
         try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: root.appendingPathComponent("result.json"))
         controller.shutdown(); Self.active = nil; NSApp.terminate(nil)
     }

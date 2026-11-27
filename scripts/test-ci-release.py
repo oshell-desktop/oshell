@@ -91,7 +91,10 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('scripts/requirements-release.txt', prepare)
         self.assertIn('scripts/test-update-pages.py', prepare)
         self.assertNotIn('OSHELL_UPDATE_SIGNING_KEY', prepare)
-        self.assertNotIn('if:', prepare)
+        dependencies, tests = prepare.split('      - name: Test update signing tools', 1)
+        self.assertNotIn('if:', dependencies)
+        self.assertIn('if: ${{ !inputs.skip_tests }}', tests)
+        self.assertNotIn('needs.metadata.outputs.publish', tests)
 
     def test_compatibility_secrets_are_scoped_before_publication(self):
         _, jobs = self.workflow_jobs('release.yml')
@@ -588,6 +591,10 @@ class ReleaseTests(unittest.TestCase):
         app = root/'app/OShell.app'; resources = app/'Contents/Resources'; resources.mkdir(parents=True)
         (resources/'OShell-LICENSE.txt').write_text('license fixture')
         (app/'Contents/Info.plist').write_bytes(plistlib.dumps(dict(CFBundleShortVersionString=PACK.VERSION, CFBundleVersion=PACK.INFO['CFBundleVersion'], LSMinimumSystemVersion='15.0')))
+        companion = app.with_name('oTerm.app')
+        (companion/'Contents/MacOS').mkdir(parents=True)
+        (companion/'Contents/Info.plist').write_bytes((app/'Contents/Info.plist').read_bytes())
+        (companion/'Contents/MacOS/oTerm').write_bytes(b'companion fixture')
         work, out = root/'work', root/'out'; (work/'arm64').mkdir(parents=True); out.mkdir()
         calls = []
         def fake_run(args, **kwargs):
@@ -600,6 +607,12 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(any(call[:2] == ['hdiutil', 'verify'] for call in calls))
         self.assertTrue((work/'arm64/image/SHA256SUMS.txt').is_file())
         self.assertTrue((work/'arm64/image/release-manifest.json').is_file())
+        image = work/'arm64/image'
+        self.assertEqual((image/'oTerm.app/Contents/MacOS/oTerm').read_bytes(), b'companion fixture')
+        manifest = installer_metadata.verify(image, version=PACK.VERSION, build=str(PACK.INFO['CFBundleVersion']),
+                                             flavor='arm64', minimum='15.0', architectures=['arm64'])
+        self.assertIn('oTerm.app/Contents/MacOS/oTerm', manifest['files'])
+        self.assertIn('oTerm.app/Contents/Info.plist', manifest['files'])
 
 if __name__ == '__main__':
     unittest.main()

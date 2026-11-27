@@ -61,20 +61,22 @@ final class MemorySoakProbe {
             let tab = workspace.tabs[switchIndex % workspace.tabs.count], terminal = tab.activePane.terminal
             let before = terminal.metalRendererStatus.presentedFrameCount
             workspace.select(tab)
-            if workspace.configuration.preferences.metal { pendingFrame = (terminal, before, now) }
+            if !AppTestHarness.background && workspace.configuration.preferences.metal { pendingFrame = (terminal, before, now) }
             switchIndex += 1; nextSwitch += 2
         }
         if elapsed >= nextInput, pendingEcho == nil, pendingFrame == nil, let pane = workspace.selectedTab?.activePane {
             inputIndex += 1
             let token = "check_\(round)_\(100000 + inputIndex)"
             pendingEcho = (pane, "REPLY_" + token, now)
-            window.makeFirstResponder(pane.terminal)
+            if !AppTestHarness.background { window.makeFirstResponder(pane.terminal) }
             let before = ProcessInfo.processInfo.systemUptime
-            for character in token + "\r" {
+            if AppTestHarness.background { pane.sendManaged(Array((token + "\r").utf8)) }
+            else { for character in token + "\r" {
                 let text = String(character)
                 if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: now,
                     windowNumber: window.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text,
                     isARepeat: false, keyCode: character == "\r" ? 36 : 0) { window.sendEvent(event) }
+            }
             }
             dispatches.append((ProcessInfo.processInfo.systemUptime - before) * 1000)
             nextInput += 5
@@ -87,9 +89,15 @@ final class MemorySoakProbe {
             guard !values.isEmpty else { return 0 }
             let sorted = values.sorted(); return sorted[min(sorted.count - 1, Int(Double(sorted.count) * fraction))]
         }
-        checks["continuousVisibleFocusedWindow"] = visibilityMisses == 0
+        if !AppTestHarness.background {
+            checks["continuousVisibleFocusedWindow"] = visibilityMisses == 0
+        } else {
+            checks["noWindowShownOrActivated"] = !NSApp.isActive && workspace.window?.isVisible != true
+        }
         checks["allInputEchoesReturned"] = checks["allInputEchoesReturned"] != false && pendingEcho == nil && echoes.count == inputIndex && inputIndex > 0
-        checks["allSwitchesPresented"] = !workspace.configuration.preferences.metal || checks["allSwitchesPresented"] != false && pendingFrame == nil && frames.count == workspace.inputPanes.count
+        if !AppTestHarness.background {
+            checks["allSwitchesPresented"] = !workspace.configuration.preferences.metal || checks["allSwitchesPresented"] != false && pendingFrame == nil && frames.count == workspace.inputPanes.count
+        }
         checks["mainQueueP99Below100ms"] = percentile(gaps, 0.99) < 100
         checks["mainQueueMaximumBelow500ms"] = (gaps.max() ?? 0) < 500
         checks["inputDispatchP99Below50ms"] = percentile(dispatches, 0.99) < 50
@@ -99,7 +107,8 @@ final class MemorySoakProbe {
             "mainQueueSamples": gaps.count, "mainQueueP99Ms": percentile(gaps, 0.99), "mainQueueMaxMs": gaps.max() ?? 0,
             "inputSamples": echoes.count, "inputDispatchP99Ms": percentile(dispatches, 0.99), "echoP95Ms": percentile(echoes, 0.95),
             "echoMaxMs": echoes.max() ?? 0, "switchSamples": switches.count, "switchP95Ms": percentile(switches, 0.95),
-            "switchMaxMs": switches.max() ?? 0, "visibilityMisses": visibilityMisses, "layoutChanges": layoutIndex]
+            "inputRoute": AppTestHarness.background ? "managed PTY input" : "native window key events",
+            "tabSwitches": switchIndex, "switchMaxMs": switches.max() ?? 0, "visibilityMisses": visibilityMisses, "layoutChanges": layoutIndex]
         pendingEcho = nil; pendingFrame = nil
         complete(checks, result)
     }

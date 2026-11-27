@@ -87,3 +87,9 @@ OShell 的 WebDAV 地址支持显式 HTTP 与 HTTPS；该地址及传输选项�
 - 全局代理前置仅改变本机运行时路线；v2 字段合同、凭据绑定和共享编码不变，运行时路线不进入同步文件。
 - Desktop `28571b3a41d15777f79ae77f2658755d0abebaee` 未修改；Go 兼容样本及真实 Swift → Go → Swift / Go → Swift → Go 验证通过，包含代理、凭据、多节点同步、冲突与无变化不重写。
 - Swift 核心源码 SHA-256：`c2be58577161f764756d2e739560748820352538abd7c81ce3b25c73f400b12c`。
+
+## 外观字段边界回归
+
+`python3 scripts/test-core-review.py --appearance` 检查原始未知字段拒绝、未加密本机文件的初次加载与重载/保存保护、字符串完整匹配，以及既有配色行为。未知字段不能先被 Codable 丢弃再校验；字体名、标签色、ID 和颜色的末尾换行不能因正则 `$` 的平台差异被接受。
+
+`python3 scripts/test-appearance-interop.py --desktop-source /path/to/matching/oshell-desktop` 在临时副本中执行规定的 Go 兼容样本和真实 Swift ↔ Go 同步验收，并附加外观边界用例。覆盖稀疏默认值、Unicode/长度边界、未知字段、错误类型及 LF/CR/CRLF；合法数据还经过双方实际模型的往返，校验整个文档不变。临时 Swift helper 同时检查直接 Codable 入口和协议入口，测试未运行时不能以跳过视为通过。脚本不修改指定的 Desktop 工作区，源码合同必须与当前 Swift 合同一致；本次对应 Desktop `f7a0e69d679d7ccc256c8e3d97ecc06aef197311`。

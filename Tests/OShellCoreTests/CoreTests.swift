@@ -701,6 +701,71 @@ final class CoreTests {
         XCTAssertThrowsError(try SharedConfigurationProtocol.canonicalAppearanceData(Data(#"{"other":true}"#.utf8)))
     }
 
+    func testAppearanceUnknownFieldsPreserveStoredData() throws {
+        for unknown: Any in [true, NSNull(), ["nested": "synthetic-value"]] {
+            let data = try JSONSerialization.data(withJSONObject: ["left": 17, "synthetic-private-key": unknown])
+            XCTAssertThrowsError(try JSONDecoder().decode(TerminalAppearance.self, from: data))
+            do { _ = try JSONDecoder().decode(TerminalAppearance.self, from: data) }
+            catch {
+                XCTAssertTrue(!error.localizedDescription.contains("synthetic-private-key"))
+                XCTAssertTrue(!error.localizedDescription.contains("synthetic-value"))
+            }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("appearance-validation-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ConfigurationStore(directory: root)
+        var initial = try store.load()
+        var appearance = TerminalAppearance(); appearance.left = 17
+        initial.preferences.terminalAppearance = appearance
+        try store.save(initial)
+        var object = try JSONSerialization.jsonObject(with: Data(contentsOf: store.url)) as! [String: Any]
+        var preferences = object["preferences"] as! [String: Any]
+        var fields = preferences["terminalAppearance"] as! [String: Any]
+        fields["futureField"] = ["synthetic-value": true]
+        preferences["terminalAppearance"] = fields; object["preferences"] = preferences
+        let newerData = try JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
+        try newerData.write(to: store.url)
+        XCTAssertThrowsError(try ConfigurationStore(directory: root).load())
+        XCTAssertThrowsError(try store.reloadIfChanged { _ in })
+        initial.preferences.fontSize = 14
+        XCTAssertThrowsError(try store.save(initial))
+        XCTAssertEqual(try Data(contentsOf: store.url), newerData)
+    }
+
+    func testAppearanceStringValidationMatchesCompleteInput() throws {
+        for suffix in ["\n", "\r", "\r\n"] {
+            for (key, value) in [("asianFont", "Fixture CJK"), ("tabColor", "#123456"), ("tabColor", "")] {
+                let input = try JSONSerialization.data(withJSONObject: [key: value + suffix])
+                XCTAssertThrowsError(try SharedConfigurationProtocol.canonicalAppearanceData(input))
+                XCTAssertThrowsError(try JSONDecoder().decode(TerminalAppearance.self, from: input))
+                var appearance = TerminalAppearance()
+                if key == "asianFont" { appearance.asianFont = value + suffix } else { appearance.tabColor = value + suffix }
+                var preferences = Preferences(); preferences.terminalAppearance = appearance
+                XCTAssertThrowsError(try JSONEncoder().encode(preferences))
+            }
+        }
+        for font in ["", "字体🙂", "e\u{301}", String(repeating: "字", count: 128)] {
+            let input = try JSONSerialization.data(withJSONObject: ["asianFont": font, "tabColor": ""])
+            let normalized = try SharedConfigurationProtocol.canonicalAppearanceData(input)
+            let appearance = try JSONDecoder().decode(TerminalAppearance.self, from: normalized)
+            XCTAssertEqual(appearance.asianFont, font)
+            XCTAssertEqual(try SharedConfigurationProtocol.canonicalAppearanceData(normalized), normalized)
+        }
+        // The shared matcher also protects existing ID and palette fields.
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Configuration())) as! [String: Any]
+        var profiles = object["profiles"] as! [[String: Any]]
+        profiles[0]["id"] = (profiles[0]["id"] as! String) + "\n"
+        object["profiles"] = profiles
+        XCTAssertThrowsError(try SharedConfigurationProtocol.canonicalData(JSONSerialization.data(withJSONObject: object)))
+        object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Configuration(profiles: []))) as! [String: Any]
+        var preferences = object["preferences"] as! [String: Any]
+        var palette = try JSONSerialization.jsonObject(with: JSONEncoder().encode(TerminalColorScheme.presets[0].editableCopy())) as! [String: Any]
+        palette["boldForeground"] = "#ABCDEF\n"
+        preferences["customColorSchemes"] = [palette]; object["preferences"] = preferences
+        XCTAssertThrowsError(try SharedConfigurationProtocol.canonicalData(JSONSerialization.data(withJSONObject: object)))
+    }
+
     func testColorSchemesAndMigration() throws {
         XCTAssertEqual(TerminalColorScheme.presets.count, 9)
         XCTAssertEqual(Set(TerminalColorScheme.presets.map(\.id)).count, 9)
@@ -2579,6 +2644,17 @@ extension CoreTests {
             else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
             return
         }
+        if CommandLine.arguments.contains("--appearance-checks") {
+            let tests = CoreTests()
+            try tests.testPortableTerminalAppearance()
+            try tests.testAppearanceUnknownFieldsPreserveStoredData()
+            try tests.testAppearanceStringValidationMatchesCompleteInput()
+            try tests.testColorSchemesAndMigration()
+            try tests.testColorSchemeImport()
+            if failures.isEmpty { print("PASS: appearance defaults, unknown-field preservation, complete-string validation and palette regressions") }
+            else { failures.forEach { print("FAIL: \($0)") }; exit(1) }
+            return
+        }
         if CommandLine.arguments.contains("--bastion-checks") { try BastionChecks.run(); return }
         try BastionChecks.run()
         try FontLibraryChecks.run()
@@ -2598,6 +2674,8 @@ extension CoreTests {
         try tests.testThirdPartySessionImports()
         try tests.testXshellMasterPasswordMigration()
         try tests.testPortableTerminalAppearance()
+        try tests.testAppearanceUnknownFieldsPreserveStoredData()
+        try tests.testAppearanceStringValidationMatchesCompleteInput()
         try tests.testColorSchemesAndMigration()
         try tests.testColorSchemeImport()
         try tests.testLiveIdleSettingsMerge()

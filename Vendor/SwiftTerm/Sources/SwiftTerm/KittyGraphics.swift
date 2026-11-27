@@ -124,6 +124,8 @@ enum KittyGraphicsPayload {
 }
 
 struct KittyGraphicsImage {
+    // Stable across access/LRU updates; changes even for equal-size replacements.
+    let contentID = UUID()
     let payload: KittyGraphicsPayload
     let byteSize: Int
     var lastAccessTick: UInt64
@@ -135,6 +137,7 @@ struct KittyGraphicsPending {
 }
 
 final class KittyGraphicsState {
+    var imageRevision: UInt64 = 0
     var imagesById: [UInt32: KittyGraphicsImage] = [:]
     var imageNumbers: [UInt32: UInt32] = [:]
     var nextImageId: UInt32 = 1
@@ -1745,6 +1748,7 @@ extension Terminal {
         if let existing = kittyGraphicsState.imagesById[imageId] {
             kittyGraphicsState.totalImageBytes = max(0, kittyGraphicsState.totalImageBytes - existing.byteSize)
         }
+        kittyGraphicsState.imageRevision &+= 1
         kittyGraphicsState.imagesById[imageId] = KittyGraphicsImage(payload: payload,
                                                                    byteSize: byteSize,
                                                                    lastAccessTick: lastAccessTick)

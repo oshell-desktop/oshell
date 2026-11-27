@@ -853,6 +853,17 @@ final class WorkspaceController: NSWindowController, NSWindowDelegate, NSMenuIte
             if !profile.kind.isFileSession { reuse = false }
         }
     }
+    #if OSHELL_TEST_HARNESS
+    /// Real external-session lifecycle in an isolated test, without showing a window.
+    func openMemoryFixtureWithoutActivation(_ request: ZOCLaunchRequest) throws {
+        precondition(AppTestHarness.background)
+        var profile = try request.profile()
+        profile.sshAuthenticationMethods = [.password]
+        let group = try SSHConnectionGroup(profile: profile, external: true)
+        presentConnection(makePane(profile, oneTimePassword: request.password,
+            terminalType: request.terminalType, connectionGroup: group), reusingIdlePane: false)
+    }
+    #endif
     func openExternal(_ request: ZOCLaunchRequest) {
         guard isSecurityUnlocked else { return }
         do {

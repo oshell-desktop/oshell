@@ -11,6 +11,21 @@ public enum SharedConfigurationProtocol {
     public static func canonicalData(_ data: Data) throws -> Data {try canonical(data,rootType:"configuration")}
     public static func canonicalAppearanceData(_ data: Data) throws -> Data { try canonical(data, rootType: "terminalAppearance") }
     public static func canonicalArchiveData(_ data:Data)throws->Data {try canonical(data,rootType:"archive")}
+    private struct FieldKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+    // Typed CodingKeys hide unknown fields. Inspect the original keys before
+    // local Codable decoding can discard data that a later save would erase.
+    static func validateFieldNames(from decoder: Decoder, definition: String) throws {
+        let values = try decoder.container(keyedBy: FieldKey.self)
+        guard let fields = definitions[definition] else { throw failure(definition) }
+        guard values.allKeys.allSatisfy({ fields[$0.stringValue] != nil }) else {
+            throw failure(definition + ".[unknown]")
+        }
+    }
     private static func canonical(_ data:Data,rootType:String)throws->Data {
         guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw failure("configuration") }
         migrate(&root)
@@ -47,7 +62,12 @@ public enum SharedConfigurationProtocol {
             return try array.map {try normalize($0,rule:item,path:path+"[]")}
         case "string":
             guard let string=value as? String else {throw failure(path)}
-            if let pattern=rule["pattern"] as? String, string.range(of:pattern,options:.regularExpression)==nil {throw failure(path)}
+            if let pattern = rule["pattern"] as? String {
+                // ICU's $ can match before a final line terminator. Require the
+                // whole input, matching the anchored Go/RE2 contract patterns.
+                guard let match = string.range(of: pattern, options: .regularExpression),
+                      match == string.startIndex..<string.endIndex else { throw failure(path) }
+            }
         case "boolean":
             guard let number=value as? NSNumber, CFGetTypeID(number)==CFBooleanGetTypeID() else {throw failure(path)}
         case "integer", "number":

@@ -79,6 +79,9 @@ final class AgentResourceTest {
         }
     }
     private func finish(_ error: String? = nil) {
+        if AppTestHarness.background {
+            checks["noWindowsShownOrActivated"] = !NSApp.isActive && NSApp.windows.allSatisfy { !$0.isVisible }
+        }
         let result: [String: Any] = ["passed": checks.values.allSatisfy { $0 } && error == nil, "checks": checks, "measurements": measurements, "error": error ?? ""]
         try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: report)
         workspace.shutdown(); Self.retained = nil; NSApp.terminate(nil)

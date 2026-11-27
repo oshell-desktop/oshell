@@ -80,6 +80,11 @@ OShell persistent Metal row caches retain GPU buffers without a duplicate copy o
 
 OShell Metal draw requests honor synchronized output even when triggered outside the feed/display debounce path. The terminal's existing end-of-frame and timeout notifications resume display updates.
 
+OShell Kitty image caches use immutable content identities and image-state revisions
+to refresh replaced images without copying image data on cache hits. Encoded images
+are decoded through ImageIO and normalized with CoreGraphics before direct Metal
+texture upload, with orientation, alpha, dimension and allocation checks.
+
 Nerd Fonts Symbols Only v3.4.0 (unmodified SymbolsNerdFontMono-Regular.ttf).
 https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.4.0
 Nerd Fonts: Copyright (c) 2014 Ryan L McIntyre, MIT. Individual icon sets

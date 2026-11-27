@@ -278,6 +278,13 @@ final class AuthBroker {
     }
 
     private func promptForSSH(_ request: AuthRequest, saveIdentity: SSHIdentity?, completion: @escaping (AuthResponse) -> Void) {
+        #if OSHELL_TEST_HARNESS
+        if AppTestHarness.background && CommandLine.arguments.contains("--memory-cycles") {
+            // An unexpected prompt fails the isolated soak instead of taking focus.
+            FileHandle.standardError.write(Data("Memory soak: unexpected SSH authentication prompt\n".utf8))
+            completion(AuthResponse(success: false)); return
+        }
+        #endif
         if let manualPrompt { manualPrompt(request, completion); return }
         let alert = PopupAlert.terminalOperation(); alert.messageText = "SSH 身份验证"; alert.informativeText = profile.name + "\n" + request.prompt
         if request.keyboardInteractiveHash == nil && (request.hint == "confirm" || request.prompt.contains("(yes/no")) {

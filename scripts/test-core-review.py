@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--all', action='store_true', help='also run the complete core checks')
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--appearance', action='store_true', help='run appearance/codec regressions only')
+    selection.add_argument('--all', action='store_true', help='also run the complete core checks')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='oshell-core-review-') as directory:
         work = Path(directory)
@@ -27,7 +29,7 @@ def main():
                                *map(str, sorted((ROOT/'Tests/OShellCoreTests').glob('*.swift'))),
                                '-o', str(binary)], check=True, cwd=ROOT)
         env = dict(os.environ, OSHELL_DATA_DIR=str(work/'data'))
-        subprocess.run([str(binary), '--review-checks'], check=True, cwd=ROOT, env=env, timeout=120)
+        subprocess.run([str(binary), '--appearance-checks' if args.appearance else '--review-checks'], check=True, cwd=ROOT, env=env, timeout=120)
         if args.all:
             subprocess.run([str(binary)], check=True, cwd=ROOT, env=env, timeout=600)
 

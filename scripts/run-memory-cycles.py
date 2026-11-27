@@ -8,7 +8,7 @@ Use --sessions 1 --lines 0 for connection overhead, or defaults for 48 sessions
 with scrollback. --visible requires an unlocked desktop and presented Metal
 frames; --fullscreen additionally exercises the system fullscreen window.
 """
-import argparse, ctypes, json, os, pathlib, plistlib, re, secrets, signal, socket, subprocess, sys, tempfile, threading, time, uuid
+import argparse, ctypes, hashlib, json, os, pathlib, plistlib, re, secrets, signal, socket, subprocess, sys, tempfile, threading, time, uuid
 import paramiko
 project = pathlib.Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
@@ -17,8 +17,10 @@ parser.add_argument('--rounds', type=int, choices=range(1,4), default=3)
 parser.add_argument('--sessions', type=int, choices=range(1,17), default=16)
 parser.add_argument('--lines', type=int, default=3200)
 parser.add_argument('--visible', action='store_true')
+parser.add_argument('--background-only', action='store_true', help='Keep the full app hidden; validate PTY/UI lifecycle, not onscreen rendering')
 parser.add_argument('--fullscreen', action='store_true')
 parser.add_argument('--capture-vm', action='store_true', help='Capture vmmap summaries before, during and after a >120 MiB peak')
+parser.add_argument('--capture-leaks', action='store_true', help='Scan the isolated process after the first/final close, without allocation contents')
 parser.add_argument('--idle-seconds', type=int, default=0, help='Keep fixed SSH tabs idle this many seconds per round (requires --background-tabs)')
 parser.add_argument('--active-seconds', type=int, default=0, help='Continuous output, input, tab/tile switching and resize per round (0...3600)')
 parser.add_argument('--lines-per-second', type=int, default=50, help='Synthetic output rate per SSH session during active soak (1...500)')
@@ -32,7 +34,8 @@ parser.add_argument('--switch-count', type=int, choices=range(1,101), default=20
 args = parser.parse_args()
 if not 0 <= args.active_seconds <= 3600 or args.active_seconds and not args.background_tabs: parser.error('--active-seconds requires --background-tabs and must be 0...3600')
 if not 1 <= args.lines_per_second <= 500: parser.error('--lines-per-second must be 1...500')
-if args.active_seconds and not args.visible: parser.error('--active-seconds requires --visible so a non-rendering run cannot pass')
+if args.background_only and (args.visible or args.fullscreen or args.minimize or args.geometry_cycles or args.editor or os.environ.get('OSHELL_MEMORY_PANEL') == '1'): parser.error('--background-only cannot use visible window operations')
+if args.active_seconds and not (args.visible or args.background_only): parser.error('--active-seconds requires --visible or explicit --background-only')
 if args.display_index is not None and (args.display_index < 0 or not (args.fullscreen or args.geometry_cycles)): parser.error('--display-index requires --fullscreen or --geometry-cycles and a nonnegative index')
 if args.geometry_cycles and (args.fullscreen or args.minimize or not args.background_tabs or os.environ.get('OSHELL_MEMORY_SOFTWARE') == '1'): parser.error('--geometry-cycles requires Metal background tabs, starting in a normal window without --minimize')
 if args.minimize and (args.fullscreen or not args.background_tabs): parser.error('--minimize requires --background-tabs without --fullscreen')
@@ -54,7 +57,7 @@ libproc = ctypes.CDLL('/usr/lib/libproc.dylib')
 with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as directory:
     root = pathlib.Path(directory).resolve(); key = paramiko.RSAKey.generate(2048); password = secrets.token_hex(20)
     listener = socket.socket(); listener.bind(('127.0.0.1', 0)); listener.listen(32); port = listener.getsockname()[1]
-    facts = dict(authenticated=0, activeTransports=0, shells=0, connections=0, rejectedAuthentications=0, streamedLines=0); lock = threading.Lock()
+    facts = dict(authenticated=0, activeTransports=0, shells=0, connections=0, rejectedAuthentications=0, streamedLines=0, noneRequests=0, keyRequests=0); lock = threading.Lock()
     payload = ''.join(f'\x1b[3{i%7+1}m{i:04d} 主机内存测试 error warning '+ 'x'*100+'\x1b[0m\r\n' for i in range(args.lines)).encode() + b'MEMORY_OUTPUT_COMPLETE\r\n'
     if args.idle_seconds: payload += b'\x1b[2 q' if args.steady_cursor else b'\x1b[1 q'
     def session(channel, round_number):
@@ -97,6 +100,12 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
         except (EOFError, OSError): pass
         finally: channel.close()
     class Server(paramiko.ServerInterface):
+        def check_auth_none(self, user):
+            with lock: facts['noneRequests'] += 1
+            return paramiko.AUTH_FAILED
+        def check_auth_publickey(self, user, key):
+            with lock: facts['keyRequests'] += 1
+            return paramiko.AUTH_FAILED
         def get_allowed_auths(self, user): return 'password'
         def check_auth_password(self, user, value):
             if user != 'test' or value != password:
@@ -132,6 +141,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
     (root/'fixture.json').write_text(json.dumps(dict(port=port,password=password))); (root/'fixture.json').chmod(0o600)
     (root/'known_hosts').write_text(f'[127.0.0.1]:{port} {key.get_name()} {key.get_base64()}\n')
     env=os.environ.copy(); env.update(OSHELL_DATA_DIR=str(root/'config'),ZDOTDIR=str(root/'config'),OSHELL_MEMORY_CYCLE_ROOT=str(root),OSHELL_MEMORY_SESSION_COUNT=str(args.sessions),OSHELL_MEMORY_ROUNDS=str(args.rounds))
+    if args.background_only: env['OSHELL_BACKGROUND_TEST']='1'
     if args.fullscreen: env['OSHELL_MEMORY_FULLSCREEN']='1'
     if args.geometry_cycles:
         env['OSHELL_MEMORY_GEOMETRY_CYCLES']=str(args.geometry_cycles)
@@ -144,7 +154,7 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
     if args.idle_seconds: env['OSHELL_MEMORY_IDLE_SECONDS']=str(args.idle_seconds)
     if args.active_seconds: env['OSHELL_MEMORY_ACTIVE_SECONDS']=str(args.active_seconds)
     app=None; target=None
-    captures=[]; captured=set()
+    captures=[]; captured=set(); leak_jobs=[]
     bundle='app.oshell.memory-cycles.'+uuid.uuid4().hex
     try:
         source=pathlib.Path(os.environ.get('OSHELL_MEMORY_BINARY',str(project/'work/test-app/OShell.app/Contents/MacOS/OShell'))).resolve().parents[2]
@@ -156,11 +166,13 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
         info.pop('SUDefaultsDomain',None);info_path.write_bytes(plistlib.dumps(info))
         subprocess.run(['codesign','--force','--sign','-',str(clone)],check=True,capture_output=True)
         binary=str(clone/'Contents/MacOS/OShell')
+        binary_hash=hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()
         timeline=[];phase='startup';last_phase_read=0.0
         with (project/'validation'/f'{label}.log').open('wb') as log:
             command=['open','-n','-W','--stdout',str(project/'validation'/f'{label}.log'),'--stderr',str(project/'validation'/f'{label}.log')]
+            if args.background_only: command.insert(1, '-g')
             for name,value in env.items():
-                if name.startswith('OSHELL_MEMORY_') or name in ('OSHELL_DATA_DIR','ZDOTDIR'):
+                if name.startswith('OSHELL_MEMORY_') or name in ('OSHELL_DATA_DIR','ZDOTDIR','OSHELL_BACKGROUND_TEST'):
                     command += ['--env',name+'='+value]
             command += [str(clone),'--args','--memory-cycles']
             app=subprocess.Popen(command,stdout=log,stderr=log)
@@ -185,6 +197,12 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
                 usage=ProcessUsage()
                 if target is not None and libproc.proc_pid_rusage(target,2,ctypes.byref(usage))==0 and usage.footprint>0:
                     timeline.append([round(now-started,3),usage.rss,usage.footprint,phase])
+                    if args.capture_leaks and phase in {f'closed_1',f'closed_{args.rounds}'} and 'leaks-'+phase not in captured:
+                        captured.add('leaks-'+phase)
+                        path=project/'validation'/f'{label}-{phase}.leaks.txt'
+                        with path.open('w') as output:
+                            job=subprocess.Popen(['leaks','--forkCorpse','--noContent',str(target)],stdout=output,stderr=subprocess.STDOUT)
+                        captures.append(job); leak_jobs.append((phase,job,path))
                     capture = phase if args.geometry_cycles and phase.endswith('_immediate') else ('baseline' if phase=='startup' and now-started>1.2 else ('idle' if phase.endswith('_30s') else ('settled' if phase==f'closed_{args.rounds}' else ('peak' if usage.footprint>120*1048576 else None))))
                     if args.capture_vm and capture and capture not in captured:
                         captured.add(capture)
@@ -193,6 +211,20 @@ with tempfile.TemporaryDirectory(prefix='oshell-memory-cycles-', dir='/tmp') as 
                             captures.append(subprocess.Popen(['vmmap','-summary',str(target)],stdout=output,stderr=subprocess.STDOUT))
                 time.sleep(1 if phase.startswith('idle_') else .05)
         result=json.loads((root/'result.json').read_text()); time.sleep(1)
+        result['pid']=target
+        result['testBinarySHA256']=binary_hash
+        result['leaks']=[]
+        for capture_phase,job,path in leak_jobs:
+            try: job.wait(timeout=30)
+            except subprocess.TimeoutExpired: job.terminate(); job.wait(timeout=5)
+            output=path.read_text()
+            match=re.search(r'(\d+) leaks for (\d+) total leaked bytes',output)
+            result['leaks'].append(dict(phase=capture_phase,exitCode=job.returncode,
+                count=int(match[1]) if match else None,bytes=int(match[2]) if match else None,report=path.name))
+        if args.capture_leaks:
+            result['checks']['leakScansCompleted']=bool(result['leaks']) and all(s['count'] is not None for s in result['leaks'])
+            if result['checks']['leakScansCompleted']:
+                result['checks']['leakScansNoGrowth']=result['leaks'][-1]['bytes'] <= result['leaks'][0]['bytes']
         result['server']=facts; result['checks']['allAuthenticated']=facts['authenticated']==args.sessions*args.rounds
         result['checks']['allTransportsClosed']=facts['activeTransports']==0
         result['highFrequency']=timeline; result['outputLinesPerSession']=args.lines; result['idleSecondsPerRound']=args.idle_seconds; result['rounds']=args.rounds

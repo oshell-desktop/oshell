@@ -189,3 +189,13 @@ Metal 行缓存检查：`python3 scripts/test-metal-row-cache.py --expect-trim -
 专注模式静置重绘检查：测试版构建后运行 `python3 scripts/run-ui-tests.py focus-repaint`。使用临时本地 PTY 和仅响应 SIGWINCH 的备用屏幕程序，切换专注全屏、全心专注及退出，不发送交互输入；核对程序收到的行列数、最终 drawable 像素尺寸及新帧呈现。同步输出检查在 BSU 与 ESU 之间主动请求 Metal 绘制，要求不提交半帧，且 ESU 和既有超时均可恢复呈现。此项需要前台可见窗口；合成程序通过不代表特定版本的远程 OpenCode 已完成视觉验收。
 
 全局代理前置回归：`run-ui-tests.py global-proxy proxy-catalog` 验证全局开关、原配置不变及每跳凭据归属；核心检查覆盖五种协议的 25 种组合、重叠前缀、逆序/回绕、8 级限制及旧跳板字段。`work/file-tests-venv/bin/python scripts/run-proxy-chain-tests.py` 使用实际核心解析器组合全局与会话链，再通过正式 OShellProxy 执行本机 SOCKS4/4A/5、HTTP CONNECT、SSH 密码/私钥混合链。相同 UUID，或无保存密码且除 UUID 外完全相同的连接/认证定义，视为同一跳；同地址不同账号或凭据不会自动合并。测试不连接真实服务器。
+
+后台长时间运行检查：测试版构建后运行 `python3 scripts/run-memory-cycles.py soak-background --background-only --background-tabs --rounds 3 --sessions 4 --lines 3200 --active-seconds 600 --idle-seconds 30 --capture-leaks`。需要 Paramiko；可使用已有测试虚拟环境。脚本用独立配置、本机合成 SSH 服务和临时应用执行三轮持续输出、PTY 回显、标签/平铺切换、尺寸变化与关闭回收。`--background-only` 不显示窗口、不激活应用，意外认证提示会失败退出；报告明确区分 PTY 输入与原生键盘派发，不把隐藏窗口当作呈现验证。`--capture-leaks` 仅扫描该隔离进程，记录首次与末次关闭后的泄漏数和字节数；没有增长与零泄漏是不同结论。
+
+离屏 GPU 长测：`python3 scripts/test-metal-soak.py --seconds-per-round 600 --rounds 3 --fps 5 --capture-leaks --output validation/metal-soak.json`。临时编译实际 SwiftTerm、着色器和生产编码顺序，真实提交 Metal 命令并读取渲染像素；覆盖 1×/2×、尺寸变化、两种缓冲模式、Unicode、图片、备用屏幕及渲染器重建。记录 GPU/整帧耗时、内存、弱引用释放和系统泄漏扫描，默认限速以减少对前台工作的影响。该测试不覆盖 WindowServer 呈现、原生全屏切换或满负载 GPU 吞吐，不能替代相应前台验收。
+
+图片缓存回归：`python3 scripts/test-metal-image-cache.py --output validation/metal-image-cache.json`。验证同 ID、同尺寸、前 64 字节相同的不同图片仍更新纹理和行缓存，覆盖图片方向、半透明像素、PNG 与损坏数据；附带 4 MiB 图片的 1000 次真实缓存命中计时。`--renderer-source` 可指定修复前的渲染器作对照，会省略新解码辅助函数的专属检查。
+
+归档资源检查可无前台窗口运行：`python3 scripts/run-ui-tests.py agent-resources --background-only --timeout 240`。它使用合成的 128 MiB 认证归档，完成三次流式扫描，以及反复选择、取消和关闭回放窗口，验证读取器、定时器、任务和会话弱引用的释放。
+
+GPU 未完成命令检查：`python3 scripts/test-metal-soak.py --inflight-only --output validation/metal-inflight.json`。用 `MTLSharedEvent` 保持三帧命令未完成，在清理缓存和释放渲染器后再放行；与串行基准像素比较，覆盖两种缓冲模式及 1×/2×，检查命令引用的纹理和缓冲区不会提前释放或复用。这同样是离屏验证。

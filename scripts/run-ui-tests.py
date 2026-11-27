@@ -138,7 +138,8 @@ def require_unlocked_desktop():
         return False
     if locked(tree): raise RuntimeError('Desktop is locked; native fullscreen regression requires an unlocked desktop. No test app was launched.')
 
-def run_case(source, case, timeout, agent_suite='protocol'):
+def run_case(source, case, timeout, agent_suite='protocol', background_only=False):
+    if background_only and case != 'agent-resources': raise ValueError('Background-only is supported for agent-resources')
     info = plistlib.loads((source/'Contents/Info.plist').read_bytes())
     if info.get('OShellTestHarness') is not True:
         raise RuntimeError('Build the test app first: bash scripts/build.sh --tests')
@@ -190,6 +191,7 @@ def run_case(source, case, timeout, agent_suite='protocol'):
         args = ['open', '-n', '-W', '--env', 'OSHELL_DATA_DIR='+str(data), '--env', 'ZDOTDIR='+str(data), '--env', 'OSHELL_TEST_FONT_ROOT='+str(ROOT/'Vendor'),
                 '--env', CASES[case]+'='+str(destination), '--stdout', str(log), '--stderr', str(log),
                 str(app), '--args', '--'+case+'-test']
+        if background_only: args[1:1] = ['-g', '--env', 'OSHELL_BACKGROUND_TEST=1']
         if case in ('launch-local', 'launch-workspace'):
             mode = 'local-terminal' if case == 'launch-local' else 'workspace'
             launcher = base/'Rename freely.oshellwindow'
@@ -257,6 +259,7 @@ def main():
     parser.add_argument('cases', nargs='*', choices=sorted(CASES))
     parser.add_argument('--group', choices=sorted(GROUPS))
     parser.add_argument('--list', action='store_true')
+    parser.add_argument('--background-only', action='store_true', help='Keep agent-resources windows hidden')
     parser.add_argument('--app', type=Path, default=ROOT/'work/test-app/OShell.app')
     parser.add_argument('--timeout', type=int, default=120)
     parser.add_argument('--agent-suite', choices=['protocol', 'reading'], default='protocol')
@@ -265,6 +268,6 @@ def main():
         print('\n'.join(sorted(CASES))); return
     selected = list(dict.fromkeys((GROUPS[args.group] if args.group else []) + args.cases))
     if not selected: parser.error('choose cases or --group; use --list to see available cases')
-    for case in selected: run_case(args.app.resolve(), case, args.timeout, args.agent_suite)
+    for case in selected: run_case(args.app.resolve(), case, args.timeout, args.agent_suite, args.background_only)
 
 if __name__ == '__main__': main()

@@ -4,6 +4,7 @@ import Foundation
 import os
 #endif
 import CoreText
+import ImageIO
 import Metal
 import MetalKit
 #if os(macOS)
@@ -124,14 +125,6 @@ struct DrawData {
     var cursorGlyphVerticesColor: [GlyphVertex]
 }
 
-struct KittyImageSignature: Hashable {
-    let kind: UInt8
-    let width: Int
-    let height: Int
-    let byteCount: Int
-    let headHash: UInt32
-}
-
 struct ClipRect {
     let minX: Float
     let minY: Float
@@ -160,6 +153,8 @@ struct CustomGlyphBitmap {
 }
 
 struct KittyCacheStamp: Hashable {
+    let state: ObjectIdentifier
+    let imageRevision: UInt64
     let imagesCount: Int
     let placementsCount: Int
     let nextImageId: UInt32
@@ -200,7 +195,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private let cellTextGrayPipeline: MTLRenderPipelineState
     private let cellColorPipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
-    private let textureLoader: MTKTextureLoader
     private let bufferPool: BufferPool
     private let shaperCache = ShaperCache(maxEntries: 2048)
     private let grayscaleAtlas: GlyphAtlas
@@ -210,7 +204,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private var scaledFontCache: [GlyphKey: CTFont] = [:]
     private var customGlyphCache: [CustomGlyphKey: CustomGlyphEntry] = [:]
     private let imageTextureCache = NSMapTable<AnyObject, MTLTexture>(keyOptions: .weakMemory, valueOptions: .strongMemory)
-    private var kittyTextureCache: [UInt32: (signature: KittyImageSignature, texture: MTLTexture)] = [:]
+    private var kittyTextureCache: [UInt32: (contentID: UUID, texture: MTLTexture)] = [:]
     private var rowCache: [Int: RowCacheEntry] = [:]
     private var cacheBufferingMode: MetalBufferingMode?
     private var cacheSignature: CacheSignature?
@@ -261,7 +255,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         self.device = device
         self.view = view
         view.device = device
-        self.textureLoader = MTKTextureLoader(device: device)
         self.bufferPool = BufferPool(device: device)
         guard let commandQueue = device.makeCommandQueue() else {
             throw MetalError.commandQueueUnavailable
@@ -733,7 +726,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             cacheBufferingMode = bufferingMode
         }
         let kittyState = terminalView.terminal.kittyGraphicsState
-        let kittyStamp = KittyCacheStamp(imagesCount: kittyState.imagesById.count,
+        let kittyStamp = KittyCacheStamp(state: ObjectIdentifier(kittyState),
+                                         imageRevision: kittyState.imageRevision,
+                                         imagesCount: kittyState.imagesById.count,
                                          placementsCount: kittyState.placementsByKey.count,
                                          nextImageId: kittyState.nextImageId,
                                          nextPlacementId: kittyState.nextPlacementId)
@@ -2468,15 +2463,15 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
         var texture: MTLTexture?
         if let cgImage = cgImage(from: image.image) {
-            texture = try? textureLoader.newTexture(cgImage: cgImage, options: textureOptions())
+            texture = textureFromCGImage(cgImage)
         }
         #if os(macOS)
         if texture == nil, let data = image.image.tiffRepresentation {
-            texture = try? textureLoader.newTexture(data: data, options: textureOptions())
+            texture = textureFromEncodedImage(data)
         }
         #else
         if texture == nil, let data = image.image.pngData() {
-            texture = try? textureLoader.newTexture(data: data, options: textureOptions())
+            texture = textureFromEncodedImage(data)
         }
         #endif
         if let texture {
@@ -2498,19 +2493,18 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
               let kittyImage = terminalView.terminal.kittyGraphicsState.imagesById[imageId] else {
             return nil
         }
-        let signature = kittySignature(for: kittyImage.payload)
-        if let cached = kittyTextureCache[imageId], cached.signature == signature {
+        if let cached = kittyTextureCache[imageId], cached.contentID == kittyImage.contentID {
             return cached.texture
         }
         let texture: MTLTexture?
         switch kittyImage.payload {
         case .png(let data):
-            texture = try? textureLoader.newTexture(data: data, options: textureOptions())
+            texture = textureFromEncodedImage(data)
         case .rgba(let bytes, let width, let height):
             texture = textureFromRGBA(bytes: bytes, width: width, height: height)
         }
         if let texture {
-            kittyTextureCache[imageId] = (signature, texture)
+            kittyTextureCache[imageId] = (kittyImage.contentID, texture)
         } else {
 #if DEBUG
             if !kittyTextureFailures.contains(imageId) {
@@ -2520,30 +2514,6 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #endif
         }
         return texture
-    }
-
-    private func kittySignature(for payload: KittyGraphicsPayload) -> KittyImageSignature {
-        switch payload {
-        case .png(let data):
-            let headHash = hashBytes(data, limit: 64)
-            return KittyImageSignature(kind: 1, width: 0, height: 0, byteCount: data.count, headHash: headHash)
-        case .rgba(let bytes, let width, let height):
-            let headHash = hashBytes(Data(bytes), limit: 64)
-            return KittyImageSignature(kind: 2, width: width, height: height, byteCount: bytes.count, headHash: headHash)
-        }
-    }
-
-    private func hashBytes(_ data: Data, limit: Int) -> UInt32 {
-        let count = min(limit, data.count)
-        if count == 0 {
-            return 0
-        }
-        var hash: UInt32 = 2166136261
-        for byte in data.prefix(count) {
-            hash ^= UInt32(byte)
-            hash &*= 16777619
-        }
-        return hash
     }
 
     private func textureFromRGBA(bytes: [UInt8], width: Int, height: Int) -> MTLTexture? {
@@ -2577,11 +2547,34 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         #endif
     }
 
-    private func textureOptions() -> [MTKTextureLoader.Option: Any] {
-        return [
-            .SRGB: false,
-            .origin: MTKTextureLoader.Origin.bottomLeft
-        ]
+    private func textureFromEncodedImage(_ data: Data) -> MTLTexture? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return textureFromCGImage(image)
+    }
+
+    private func textureFromCGImage(_ image: CGImage) -> MTLTexture? {
+        let width = image.width, height = image.height
+        let maximum = GlyphAtlas.maxTextureDimension(of: device)
+        let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
+        guard width > 0, height > 0, width <= maximum, height <= maximum,
+              !overflow, pixels <= 400 * 1024 * 1024 / 4 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: pixels * 4)
+        let drawn = bytes.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(data: raw.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            // Match the existing premultiplied RGBA shader and bottom-left
+            // texture origin, including high-bit-depth AppKit image stripes.
+            context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: 1, y: -1)
+            context.setBlendMode(.copy); context.interpolationQuality = .none
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return nil }
+        // Convert AppKit stripe formats directly instead of serializing TIFF
+        // after a rejected MetalKit decode, which can retain ImageIO helpers.
+        return textureFromRGBA(bytes: bytes, width: width, height: height)
     }
 
     private func imageDraw(texture: MTLTexture,
