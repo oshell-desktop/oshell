@@ -13,6 +13,14 @@ python3 scripts/test-sync-interop.py --native-source /path/to/OShell
 
 发布时记录两个项目的提交号、规范修订号及字段合同 SHA-256。共享配置读 v1/v2、写 v2；未知字段拒绝应用和回写。字段合同源为 oshell-desktop 的 `internal/core/shared_configuration_schema.json`，Swift 文件通过 `scripts/sync-configuration-contract.py` 生成；禁止手工维护两套定义。所有参与同一同步目标的节点都要升级后再启用新版同步。已有未提交的其他功能修改不属于协议文档变更。
 
+## 2026-11-27 认证顺序与终端外观互通验收
+
+本轮以 Mac `b72fc2797f1d6f7636b08ef83d2b11e7a4e4a517` 为合并基线，对照 Desktop `f7a0e69d679d7ccc256c8e3d97ecc06aef197311`。生成合同的 SHA-256 为 `47ad292255a2f94ab8acb561c589ff0aa2845994e699c6ff73b45c49e9b52163`。[本轮 Desktop 字段合同](https://github.com/oshell-desktop/oshell-desktop/blob/f7a0e69d679d7ccc256c8e3d97ecc06aef197311/internal/core/shared_configuration_schema.json)
+
+macOS 上使用两端真实核心和合成凭据验证了配置与会话归档往返。认证方法保留顺序，未指定时省略。共享偏好保留扩展外观和显式粗体前景色。本轮 Mac 实现覆盖模型与编解码，背景图文件、路径以及堡垒机目标密码仍保存在本机。
+
+目录和回环 WebDAV 均验证了无修改时不重写，以及 Swift 和 Go 同时修改一条会话的认证列表时保留冲突、阻止覆盖。Desktop 的 GSSAPI 选项可往返，单独选用时会报告平台能力限制。
+
 ## 0.2.75 发布验证基线
 
 - OShell：`v0.2.75`，协议实现提交 `0aa1a047fc4aa251f36290cb306d86d05de2ddd5`。

@@ -663,6 +663,44 @@ final class CoreTests {
         data["quickSendScope"] = 999
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONSerialization.data(withJSONObject: data)).quickSendScope, .current)
     }
+    func testPortableTerminalAppearance() throws {
+        var preferences = Preferences()
+        let original = try JSONSerialization.jsonObject(with: JSONEncoder().encode(preferences)) as? [String: Any]
+        XCTAssertNil(original?["terminalAppearance"])
+        var appearance = TerminalAppearance()
+        appearance.left = 17
+        appearance.characterSpacing = -3
+        appearance.cursorShape = "bar"
+        appearance.asianFont = "Fixture CJK"
+        appearance.tabColor = "#8967B5"
+        preferences.terminalAppearance = appearance
+        var scheme = TerminalColorScheme.presets[0].editableCopy()
+        scheme.boldForeground = "#ABCDEF"
+        preferences.customColorSchemes = [scheme]
+        let saved = try JSONEncoder().encode(preferences)
+        let restored = try JSONDecoder().decode(Preferences.self, from: saved)
+        XCTAssertEqual(restored.terminalAppearance, appearance)
+        XCTAssertEqual(restored.customColorSchemes, [scheme])
+        let defaults = try SharedConfigurationProtocol.canonicalAppearanceData(Data("{}".utf8))
+        XCTAssertEqual(try JSONDecoder().decode(TerminalAppearance.self, from: defaults), TerminalAppearance())
+        let partial = try JSONDecoder().decode(Preferences.self, from: Data(#"{"terminalAppearance":{"left":17}}"#.utf8))
+        var expected = TerminalAppearance()
+        expected.left = 17
+        XCTAssertEqual(partial.terminalAppearance, expected)
+        let preset = TerminalColorScheme.presets[0]
+        let ordinary = try JSONSerialization.jsonObject(with: JSONEncoder().encode(preset)) as? [String: Any]
+        XCTAssertNil(ordinary?["boldForeground"])
+        var explicit = preset
+        explicit.boldForeground = preset.foreground
+        let copy = explicit.editableCopy()
+        explicit.boldForeground = "#+12345"
+        XCTAssertThrowsError(try explicit.validate())
+        XCTAssertEqual(try JSONDecoder().decode(TerminalColorScheme.self, from: JSONEncoder().encode(copy)).boldForeground, preset.foreground)
+        appearance.lineSpacing = -6
+        XCTAssertThrowsError(try appearance.validate())
+        XCTAssertThrowsError(try SharedConfigurationProtocol.canonicalAppearanceData(Data(#"{"other":true}"#.utf8)))
+    }
+
     func testColorSchemesAndMigration() throws {
         XCTAssertEqual(TerminalColorScheme.presets.count, 9)
         XCTAssertEqual(Set(TerminalColorScheme.presets.map(\.id)).count, 9)
@@ -1462,6 +1500,21 @@ final class CoreTests {
             }
             let decoded = try JSONDecoder().decode(SessionProfile.self, from: JSONEncoder().encode(profile))
             XCTAssertEqual(decoded.sshAuthenticationMethods, profile.sshAuthenticationMethods)
+        }
+        profile.sshAuthenticationMethods = nil
+        profile.runtimeSSHMode = .bastion
+        profile.runtimeProxyRoute = [ProxySettings()]
+        var fields = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
+        for key in ["sshAuthenticationMethods", "runtimeSSHMode", "runtimeProxyRoute"] { XCTAssertNil(fields[key]) }
+        fields["sshAuthenticationMethods"] = NSNull()
+        let automatic = try JSONDecoder().decode(SessionProfile.self, from: JSONSerialization.data(withJSONObject: fields))
+        XCTAssertNil(automatic.sshAuthenticationMethods)
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(automatic)) as? [String: Any]
+        XCTAssertNil(encoded?["sshAuthenticationMethods"])
+        for kind in ["ftp", "local"] {
+            fields["kind"] = kind
+            fields["sshAuthenticationMethods"] = ["password"]
+            XCTAssertThrowsError(try JSONDecoder().decode(SessionProfile.self, from: JSONSerialization.data(withJSONObject: fields)))
         }
         profile.sshAuthenticationMethods = []
         XCTAssertThrowsError(try profile.sshArguments())
@@ -2544,6 +2597,7 @@ extension CoreTests {
         try tests.testKeyboardShortcuts()
         try tests.testThirdPartySessionImports()
         try tests.testXshellMasterPasswordMigration()
+        try tests.testPortableTerminalAppearance()
         try tests.testColorSchemesAndMigration()
         try tests.testColorSchemeImport()
         try tests.testLiveIdleSettingsMerge()

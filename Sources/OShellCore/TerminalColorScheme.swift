@@ -13,6 +13,7 @@ public struct TerminalColorScheme: Codable, Equatable, Identifiable {
     public var name: String
     public var background: String
     public var foreground: String
+    public var boldForeground: String?
     public var cursor: String
     public var cursorText: String
     public var autoCursor = false
@@ -24,16 +25,21 @@ public struct TerminalColorScheme: Codable, Equatable, Identifiable {
         self.cursor = cursor ?? foreground; cursorText = background
         self.selection = selection; self.selectionText = selectionText ?? foreground; self.ansi = ansi
     }
-    private enum CodingKeys: String, CodingKey {case id,name,background,foreground,cursor,cursorText,autoCursor,selection,selectionText,ansi}
+    private enum CodingKeys: String, CodingKey {case id,name,background,foreground,boldForeground,cursor,cursorText,autoCursor,selection,selectionText,ansi}
     public init(from decoder:Decoder)throws {
         let c=try decoder.container(keyedBy:CodingKeys.self)
         id=try c.decode(String.self,forKey:.id);name=try c.decode(String.self,forKey:.name)
         background=try c.decode(String.self,forKey:.background);foreground=try c.decode(String.self,forKey:.foreground)
+        boldForeground = try c.decodeIfPresent(String.self, forKey: .boldForeground)
         cursor=try c.decode(String.self,forKey:.cursor);cursorText=try c.decode(String.self,forKey:.cursorText)
         selection=try c.decode(String.self,forKey:.selection);selectionText=try c.decode(String.self,forKey:.selectionText)
         ansi=try c.decode([String].self,forKey:.ansi);autoCursor=try c.decodeIfPresent(Bool.self,forKey:.autoCursor) ?? false
     }
-    public static func isHex(_ value: String) -> Bool { value.count == 7 && value.first == "#" && UInt32(value.dropFirst(), radix: 16) != nil }
+    public static func isHex(_ value: String) -> Bool {
+        value.utf8.count == 7 && value.first == "#" && value.utf8.dropFirst().allSatisfy {
+            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+        }
+    }
     public var isDark: Bool {
         guard let value = UInt32(background.dropFirst(), radix: 16) else { return true }
         let red = Double((value >> 16) & 255)
@@ -44,6 +50,7 @@ public struct TerminalColorScheme: Codable, Equatable, Identifiable {
     public func validate() throws {
         guard !id.isEmpty, id.utf8.count <= 128, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               name.count <= 80, !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains), ansi.count == 16,
+              boldForeground.map(Self.isHex) ?? true,
               ([background, foreground, cursor, cursorText, selection, selectionText] + ansi).allSatisfy(Self.isHex) else {
             throw ModelError.invalid("配色方案需要有效名称、6 个基础颜色及 16 个 ANSI 颜色（#RRGGBB）。")
         }
@@ -92,6 +99,9 @@ public struct TerminalColorScheme: Codable, Equatable, Identifiable {
             let bg = try hex("background"), fg = try hex("text")
             var scheme = TerminalColorScheme(id: "custom-" + UUID().uuidString, name: name, background: bg, foreground: fg,
                                              selection: "#405A78", selectionText: "#FFFFFF", ansi: try (keys + keys.map { $0 + "(bold)" }).map(hex))
+            if fields["text(bold)"] != nil {
+                scheme.boldForeground = try hex("text(bold)")
+            }
             if !scheme.isDark { scheme.selection = "#C7D8EC"; scheme.selectionText = "#20252A" }
             try scheme.validate(); result.append(scheme)
         }

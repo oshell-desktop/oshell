@@ -192,6 +192,7 @@ public enum ModelError: LocalizedError {
     public var errorDescription: String? { if case .invalid(let text) = self { return text }; return nil }
 }
 public struct Preferences: Codable {
+    public var terminalAppearance: TerminalAppearance?
     public var fontName: String = ""
     public var fontSize: Double = 13
     public static let scrollbackRange = 500...100_000
@@ -238,10 +239,11 @@ public struct Preferences: Codable {
     public var keyboardShortcuts = KeyboardShortcuts()
     public var highlightSetID: UUID? = HighlightSet.standardID
     public init() {}
-    private enum CodingKeys: String, CodingKey { case preferColorEmoji, ambiguousCharactersAreWide, terminalClockEnabled, terminalClockPosition, terminalClockFontName, terminalClockFontSize, terminalClockColor, terminalClockOpacity, keyboardShortcuts, fontName, fontSize, scrollback, darkTheme, metal, autoZmodem, copyOnSelect, copyTrimLeadingWhitespace, copyTrimTrailingWhitespace, rightClickPaste, confirmMultilinePaste, updateRepository, automaticUpdateChecks, masterWarningAcknowledged, quickSendBarVisible, quickSendScope, highlightSetID, interfaceTheme, colorSchemeID, customColorSchemes }
+    private enum CodingKeys: String, CodingKey { case preferColorEmoji, ambiguousCharactersAreWide, terminalClockEnabled, terminalClockPosition, terminalClockFontName, terminalClockFontSize, terminalClockColor, terminalClockOpacity, keyboardShortcuts, fontName, fontSize, scrollback, darkTheme, metal, autoZmodem, copyOnSelect, copyTrimLeadingWhitespace, copyTrimTrailingWhitespace, rightClickPaste, confirmMultilinePaste, updateRepository, automaticUpdateChecks, masterWarningAcknowledged, quickSendBarVisible, quickSendScope, highlightSetID, interfaceTheme, colorSchemeID, customColorSchemes, terminalAppearance }
     public init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        terminalAppearance = try values.decodeIfPresent(TerminalAppearance.self, forKey: .terminalAppearance)
         fontName = try values.decodeIfPresent(String.self, forKey: .fontName) ?? ""
         fontSize = try values.decodeIfPresent(Double.self, forKey: .fontSize) ?? 13
         scrollback = try values.decodeIfPresent(Int.self, forKey: .scrollback) ?? 3000
@@ -285,6 +287,8 @@ public struct Preferences: Codable {
         try values.encode(terminalClockColor, forKey: .terminalClockColor)
         try values.encode(terminalClockOpacity, forKey: .terminalClockOpacity)
         try values.encode(keyboardShortcuts, forKey: .keyboardShortcuts)
+        try terminalAppearance?.validate()
+        try values.encodeIfPresent(terminalAppearance, forKey: .terminalAppearance)
         try values.encode(fontName, forKey: .fontName); try values.encode(fontSize, forKey: .fontSize)
         try values.encode(scrollback, forKey: .scrollback); try values.encode(darkTheme, forKey: .darkTheme)
         try values.encode(metal, forKey: .metal); try values.encode(autoZmodem, forKey: .autoZmodem)

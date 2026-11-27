@@ -9,6 +9,7 @@ public enum SharedConfigurationProtocol {
     private static let definitions = (try! JSONSerialization.jsonObject(with: contractData) as! [String: Any])["definitions"] as! [String: [String: [String: Any]]]
     private static func failure(_ path: String) -> Error { ModelError.invalid("共享配置协议字段不支持或类型无效：\(path)；请升级所有节点后重试，未覆盖数据") }
     public static func canonicalData(_ data: Data) throws -> Data {try canonical(data,rootType:"configuration")}
+    public static func canonicalAppearanceData(_ data: Data) throws -> Data { try canonical(data, rootType: "terminalAppearance") }
     public static func canonicalArchiveData(_ data:Data)throws->Data {try canonical(data,rootType:"archive")}
     private static func canonical(_ data:Data,rootType:String)throws->Data {
         guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw failure("configuration") }
